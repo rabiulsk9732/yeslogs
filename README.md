@@ -127,6 +127,47 @@ journalctl -u natflow-collector -f
 `install.sh` copies the binary, config (only if absent), migration and the unit
 file to `/opt/natflow-dataplane` and `/etc/systemd/system`.
 
+## Production operations
+
+Helper scripts live in `scripts/` and `deploy/`:
+
+| File                        | Purpose                                                        |
+| --------------------------- | ------------------------------------------------------------- |
+| `scripts/benchmark.sh`      | Run the benchgen load ladder (1k→20k pps) against a collector  |
+| `scripts/healthcheck.sh`    | Check systemd service + metrics endpoint + today's CH rows     |
+| `scripts/backup-daily.sh`   | Write a daily summary snapshot of `flow_logs` (cron-friendly)  |
+| `deploy/logrotate/natflow`  | logrotate rules for `/var/log/natflow/*.log`                   |
+| `deploy/ufw-example.sh`     | Restrict the UDP ports to a single exporter IP (safe by default) |
+
+### Production checklist
+
+```bash
+# 1. install + enable the service (see "Install as a systemd service")
+sudo ./scripts/install.sh
+sudo systemctl enable --now natflow-collector
+
+# 2. log rotation (prevents the log filling the disk)
+sudo install -m 0644 deploy/logrotate/natflow /etc/logrotate.d/natflow
+sudo logrotate --debug /etc/logrotate.d/natflow   # verify
+
+# 3. firewall: allow only the exporter device to the UDP ports
+DEVICE_IP=<exporter-ip> ./deploy/ufw-example.sh
+
+# 4. health check (exit non-zero on failure -> use in monitoring/cron)
+./scripts/healthcheck.sh
+
+# 5. daily summary backup (cron, e.g. 02:00)
+#    0 2 * * * /opt/natflow-dataplane/scripts/backup-daily.sh
+./scripts/backup-daily.sh
+
+# 6. (optional) capacity test before onboarding a busy device
+./scripts/benchmark.sh
+```
+
+Keep `logging.level` at `info` (default) in production — decode-failure logs are
+emitted only at `debug`, so there is no per-packet log spam by default. Do not
+raise to `debug` against a live device.
+
 ## UDP ports
 
 | Listener   | Default port | Protocol |

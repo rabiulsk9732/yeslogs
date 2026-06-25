@@ -1,0 +1,9 @@
+# Install to /etc/logrotate.d/natflow
+/var/log/natflow/*.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
