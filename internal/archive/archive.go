@@ -130,6 +130,9 @@ func (e *Exporter) exportDay(ctx context.Context, ispID uint32, day time.Time, f
 	if err := gz.Close(); err != nil {
 		return Result{}, err
 	}
+	if count == 0 {
+		return Result{}, nil // nothing to archive for this day; don't upload an empty object
+	}
 	if err := tmp.Sync(); err != nil {
 		return Result{}, err
 	}

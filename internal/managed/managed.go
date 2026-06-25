@@ -1,7 +1,9 @@
 // Package managed implements the collector side of control-plane management: it
-// pulls the device registry + exporter policy from the Director and applies it
-// through the existing atomic device/Live stores (the same hot-reload path used
-// for local config), so the dataplane is fully driven from the control plane.
+// fetches the device registry + exporter policy from a Source (the Director,
+// over HTTP for split deployments, or in-process when DP and CP run as one
+// service) and applies it through the existing atomic device/Live stores — the
+// same hot-reload path used for local config, so the dataplane is fully driven
+// from the control plane.
 package managed
 
 import (
@@ -21,11 +23,48 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/rules"
 )
 
-// Client pulls config from the Director and applies it.
+// Source supplies the current config bundle. Implementations: HTTP (split
+// deployment) and in-process (single unified service).
+type Source interface {
+	Fetch(ctx context.Context) (agentcfg.Bundle, error)
+}
+
+// httpSource pulls the bundle from a Director over HTTP.
+type httpSource struct {
+	url   string
+	token string
+	httpc *http.Client
+}
+
+func (h httpSource) Fetch(ctx context.Context) (agentcfg.Bundle, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url, nil)
+	if err != nil {
+		return agentcfg.Bundle{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	resp, err := h.httpc.Do(req)
+	if err != nil {
+		return agentcfg.Bundle{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return agentcfg.Bundle{}, fmt.Errorf("director returned status %d", resp.StatusCode)
+	}
+	var b agentcfg.Bundle
+	if err := json.NewDecoder(resp.Body).Decode(&b); err != nil {
+		return agentcfg.Bundle{}, fmt.Errorf("decode bundle: %w", err)
+	}
+	return b, nil
+}
+
+// SourceFunc adapts a function to a Source (used for the in-process Director).
+type SourceFunc func(ctx context.Context) (agentcfg.Bundle, error)
+
+func (f SourceFunc) Fetch(ctx context.Context) (agentcfg.Bundle, error) { return f(ctx) }
+
+// Client fetches config from a Source and applies it.
 type Client struct {
-	url       string
-	token     string
-	httpc     *http.Client
+	src       Source
 	devices   *device.Store
 	live      *config.Store
 	metrics   *metrics.Metrics
@@ -36,12 +75,20 @@ type Client struct {
 	lastVersion string
 }
 
-// New builds a managed Client.
+// New builds a Client that pulls from a Director over HTTP.
 func New(dir config.DirectorConfig, devices *device.Store, live *config.Store, base rules.RuleSet, m *metrics.Metrics, log *slog.Logger) *Client {
+	src := httpSource{
+		url:   strings.TrimRight(dir.URL, "/") + "/api/v1/agent/config",
+		token: dir.Token,
+		httpc: &http.Client{Timeout: 10 * time.Second},
+	}
+	return NewWithSource(src, devices, live, base, m, log)
+}
+
+// NewWithSource builds a Client backed by an arbitrary Source (e.g. in-process).
+func NewWithSource(src Source, devices *device.Store, live *config.Store, base rules.RuleSet, m *metrics.Metrics, log *slog.Logger) *Client {
 	return &Client{
-		url:       strings.TrimRight(dir.URL, "/") + "/api/v1/agent/config",
-		token:     dir.Token,
-		httpc:     &http.Client{Timeout: 10 * time.Second},
+		src:       src,
 		devices:   devices,
 		live:      live,
 		metrics:   m,
@@ -56,22 +103,9 @@ func (c *Client) PollOnce(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
+	b, err := c.src.Fetch(ctx)
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := c.httpc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("director returned status %d", resp.StatusCode)
-	}
-	var b agentcfg.Bundle
-	if err := json.NewDecoder(resp.Body).Decode(&b); err != nil {
-		return fmt.Errorf("decode bundle: %w", err)
 	}
 
 	specs := make([]device.Spec, 0, len(b.Devices))
@@ -107,7 +141,7 @@ func (c *Client) PollOnce(ctx context.Context) error {
 	return nil
 }
 
-// Run polls the Director every interval until ctx is cancelled.
+// Run polls the Source every interval until ctx is cancelled.
 func (c *Client) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -117,7 +151,7 @@ func (c *Client) Run(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			if err := c.PollOnce(ctx); err != nil {
-				c.log.Warn("director poll failed; keeping current registry", "error", err)
+				c.log.Warn("config poll failed; keeping current registry", "error", err)
 			}
 		}
 	}

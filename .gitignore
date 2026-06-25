@@ -3,3 +3,7 @@
 *.out
 *.test
 .DS_Store
+node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+tests/e2e/.last-run.json

@@ -37,5 +37,5 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_logs
 ENGINE = MergeTree
 PARTITION BY event_date
 ORDER BY (isp_id, device_id, flow_start, src_ip, src_port, dst_ip, dst_port)
-TTL event_date + INTERVAL 30 DAY
+TTL event_date + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;

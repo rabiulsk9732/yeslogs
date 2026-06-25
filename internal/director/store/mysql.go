@@ -78,6 +78,20 @@ var schema = []string{
 		last_seen TIMESTAMP NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`CREATE TABLE IF NOT EXISTS query_audit (
+		id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+		user_email VARCHAR(190) NOT NULL,
+		isp_id INT UNSIGNED NOT NULL DEFAULT 0,
+		query_ip VARCHAR(45) NOT NULL,
+		query_port INT NOT NULL DEFAULT 0,
+		query_proto VARCHAR(8) NOT NULL DEFAULT '',
+		from_ts DATETIME NULL,
+		to_ts DATETIME NULL,
+		result_count INT NOT NULL DEFAULT 0,
+		case_ref VARCHAR(190) NOT NULL DEFAULT '',
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		INDEX idx_qa_isp (isp_id, created_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 }
 
 // Migrate creates the schema if absent.
@@ -275,6 +289,58 @@ func (s *MySQLStore) GetAgentByToken(ctx context.Context, tokenHash string) (Age
 func (s *MySQLStore) TouchAgent(ctx context.Context, id int64, t time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE agents SET last_seen=? WHERE id=?`, t.UTC(), id)
 	return err
+}
+
+func (s *MySQLStore) LogQuery(ctx context.Context, q QueryAudit) (int64, error) {
+	var from, to any
+	if !q.FromTS.IsZero() {
+		from = q.FromTS.UTC()
+	}
+	if !q.ToTS.IsZero() {
+		to = q.ToTS.UTC()
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO query_audit (user_email, isp_id, query_ip, query_port, query_proto, from_ts, to_ts, result_count, case_ref)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		q.UserEmail, q.ISPID, q.QueryIP, q.QueryPort, q.QueryProto, from, to, q.ResultCount, q.CaseRef)
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	return id, nil
+}
+
+func (s *MySQLStore) ListQueries(ctx context.Context, ispID uint32, limit int) ([]QueryAudit, error) {
+	const cols = `id, user_email, isp_id, query_ip, query_port, query_proto, from_ts, to_ts, result_count, case_ref, created_at`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ispID == 0 {
+		rows, err = s.db.QueryContext(ctx, `SELECT `+cols+` FROM query_audit ORDER BY id DESC LIMIT ?`, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `SELECT `+cols+` FROM query_audit WHERE isp_id=? ORDER BY id DESC LIMIT ?`, ispID, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueryAudit
+	for rows.Next() {
+		var q QueryAudit
+		var from, to sql.NullTime
+		if err := rows.Scan(&q.ID, &q.UserEmail, &q.ISPID, &q.QueryIP, &q.QueryPort, &q.QueryProto, &from, &to, &q.ResultCount, &q.CaseRef, &q.CreatedAt); err != nil {
+			return nil, err
+		}
+		if from.Valid {
+			q.FromTS = from.Time
+		}
+		if to.Valid {
+			q.ToTS = to.Time
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
 }
 
 func rowsAffectedErr(res sql.Result) error {

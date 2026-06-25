@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/natflow/natflow-dataplane/internal/archive"
 	"github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/director/agentcfg"
 	"github.com/natflow/natflow-dataplane/internal/director/store"
@@ -48,7 +49,23 @@ type Server struct {
 	flowDays   int
 	dummyHash  string // bcrypt hash used to equalize login timing for unknown users
 	log        *slog.Logger
+
+	// retention / archive (optional; set via SetArchive / SetRetentionDays)
+	arch          *archive.Exporter
+	archBucket    string
+	archFormat    string
+	retentionDays int
 }
+
+// SetArchive enables the S3 cold-archive feature in the console.
+func (s *Server) SetArchive(exp *archive.Exporter, bucket, format string) {
+	s.arch = exp
+	s.archBucket = bucket
+	s.archFormat = format
+}
+
+// SetRetentionDays sets the displayed retention target (days).
+func (s *Server) SetRetentionDays(d int) { s.retentionDays = d }
 
 // New builds a Server.
 func New(cfg Config, st store.Store, fr *FlowReader, log *slog.Logger) (*Server, error) {
@@ -79,11 +96,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/agent/config", s.handleAgentConfig)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 
-	// UI (session auth).
+	// Console SPA + JSON API (session cookie; handlers do their own auth).
+	mux.HandleFunc("GET /{$}", s.serveConsole)
+	mux.Handle("GET /assets/", s.assetsHandler())
+	mux.HandleFunc("GET /api/v1/me", s.handleMe)
+	mux.HandleFunc("POST /api/v1/login", s.handleAPILogin)
+	mux.HandleFunc("POST /api/v1/logout", s.handleAPILogout)
+	mux.HandleFunc("GET /api/v1/console/data", s.handleConsoleData)
+	mux.HandleFunc("GET /api/v1/isps", s.apiListISPs)
+	mux.HandleFunc("POST /api/v1/isps", s.apiCreateISP)
+	mux.HandleFunc("POST /api/v1/isps/{id}/toggle", s.apiToggleISP)
+	mux.HandleFunc("GET /api/v1/devices", s.apiListDevices)
+	mux.HandleFunc("POST /api/v1/devices", s.apiCreateDevice)
+	mux.HandleFunc("POST /api/v1/devices/{id}/toggle", s.apiToggleDevice)
+	mux.HandleFunc("DELETE /api/v1/devices/{id}", s.apiDeleteDevice)
+	mux.HandleFunc("POST /api/v1/search", s.handleSearch)
+	mux.HandleFunc("GET /api/v1/report", s.handleReport)
+	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/v1/retention", s.handleRetention)
+	mux.HandleFunc("POST /api/v1/archive/{date}", s.handleArchive)
+
+	// Legacy server-rendered admin pages (session auth).
 	mux.HandleFunc("GET /login", s.handleLoginForm)
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.Handle("POST /logout", s.auth(s.handleLogout))
-	mux.Handle("GET /{$}", s.auth(s.handleHome))
+	mux.Handle("GET /admin", s.auth(s.handleHome))
 	mux.Handle("GET /isps", s.director(s.handleISPs))
 	mux.Handle("POST /isps", s.director(s.handleCreateISP))
 	mux.Handle("POST /isps/{id}/toggle", s.director(s.handleToggleISP))
@@ -417,6 +454,12 @@ func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(bundle)
+}
+
+// Bundle returns the device registry + policy bundle (for in-process collectors
+// in the unified single-service deployment).
+func (s *Server) Bundle(ctx context.Context) (agentcfg.Bundle, error) {
+	return s.buildBundle(ctx)
 }
 
 // buildBundle assembles the device registry + policy for managed collectors.

@@ -1,0 +1,29 @@
+<clickhouse>
+    <logger>
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>200M</size>
+        <count>5</count>
+    </logger>
+
+    <path>/var/lib/clickhouse/</path>
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+
+    <!-- Bind to loopback only: ClickHouse is reached in-process by natlog. -->
+    <listen_host>127.0.0.1</listen_host>
+    <tcp_port>9000</tcp_port>
+    <http_port>8123</http_port>
+
+    <mark_cache_size>536870912</mark_cache_size>
+    <mlock_executable>false</mlock_executable>
+
+    <user_directories>
+        <users_xml>
+            <path>/etc/clickhouse-server/users.xml</path>
+        </users_xml>
+    </user_directories>
+
+    <!-- config.d/*.xml (e.g. natflow-tuning.xml) is auto-merged. -->
+</clickhouse>

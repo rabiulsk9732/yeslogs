@@ -28,8 +28,21 @@ type Config struct {
 	Security   SecurityConfig   `yaml:"security"`
 	Devices    []device.Spec    `yaml:"devices"`
 	Director   DirectorConfig   `yaml:"director"`
+	CP         CPConfig         `yaml:"cp"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
 	Logging    LoggingConfig    `yaml:"logging"`
+}
+
+// CPConfig is the control-plane section, used only by the unified natlog service
+// (the standalone collector ignores it).
+type CPConfig struct {
+	Bind             string `yaml:"bind"`
+	SessionKey       string `yaml:"session_key"`
+	CookieSecure     bool   `yaml:"cookie_secure"`
+	MySQLDSN         string `yaml:"mysql_dsn"`
+	FlowDays         int    `yaml:"flow_days"`
+	RegistryRefreshS int    `yaml:"registry_refresh_s"`
+	RetentionDays    int    `yaml:"retention_days"`
 }
 
 // DirectorConfig enables managed mode: the collector pulls its device registry

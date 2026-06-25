@@ -11,6 +11,39 @@ Docker, no Kafka, no PostgreSQL — a single static Go binary under systemd.
                          └────────────── Prometheus metrics ───────────────┘
 ```
 
+## NATLog — unified IPDR product
+
+On top of the dataplane, **`cmd/natlog`** is a single-binary, multi-tenant
+**IPDR / CGNAT lawful-logging platform** for ISPs (DoT/CERT-In style: 180-day
+retention, in-country, on-demand to law enforcement). One process runs both the
+**dataplane** (UDP collector → ClickHouse) and the **control plane** (web console
++ API); the device registry is shared in-process, so a device added in the UI
+applies to ingestion within seconds — no restart, no token.
+
+The console (`http://host:8080`) is a self-contained SPA (vendored jQuery +
+Font Awesome, **no CDN**) with:
+
+- **IP Search** ⭐ — lawful reverse-NAT lookup: `public IP + port + time →
+  subscriber/private IP`, every query **audited**.
+- **Reports** — one-click **CSV / Excel (.xlsx) / PDF** export with a case header.
+- **Audit** — immutable trail of who looked up what, when.
+- **Devices** — per-ISP exporter registry (drives the dataplane in-process).
+- **ISPs** (Director only) — tenant onboarding + ISP-admin logins.
+- **Retention** — 180-day window, storage usage, per-day breakdown, S3 cold archive.
+
+Roles: **Director** (software owner, sees all) and **ISP** (tenant, scoped;
+cross-tenant access → 403). Auth is bcrypt + signed sessions + CSRF.
+Storage: **MariaDB** (tenants/users/devices/audit) + **ClickHouse** (flow/IPDR).
+
+```bash
+sudo CLICKHOUSE_BIN=/path/to/clickhouse ./scripts/install.sh   # systemd: natlog + clickhouse-server + mariadb
+# console: http://<host>:8080   (admin creds in /etc/natlog/admin-credentials.txt)
+```
+
+E2E tests (Playwright) live in `tests/e2e`; see `docs/PRODUCTION-PLAN.md` for the
+module map. The split `cmd/collector` + `cmd/director` remain for multi-node
+deployments.
+
 ## Status
 
 | Protocol   | Port (default) | Decoding                                          |
@@ -29,7 +62,8 @@ their template are counted under `template_unknown_total` until it is learned.
 ## Layout
 
 ```
-cmd/collector            entrypoint + wiring + reload + graceful shutdown
+cmd/natlog               unified IPDR service (dataplane + control plane in one process)
+cmd/collector            dataplane-only entrypoint (split deployments)
 cmd/benchgen             NetFlow v5/v9/IPFIX load generator
 cmd/pcapreplay           replay a pcap's UDP payloads to a collector
 cmd/pcapsanitize         rewrite IPs in a pcap (headers + flow records)

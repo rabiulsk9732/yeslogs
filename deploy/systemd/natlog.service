@@ -1,0 +1,27 @@
+[Unit]
+Description=NATLog — unified IPDR/NetFlow service (dataplane + control plane)
+Documentation=https://github.com/natflow/natflow-dataplane
+After=network-online.target mariadb.service clickhouse-server.service
+Wants=network-online.target
+Requires=mariadb.service clickhouse-server.service
+
+[Service]
+Type=simple
+User=natlog
+Group=natlog
+ExecStart=/usr/local/bin/natlog --config /etc/natlog/natlog.yaml
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=1048576
+
+# Hardening (high ports only, no privileged dirs).
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

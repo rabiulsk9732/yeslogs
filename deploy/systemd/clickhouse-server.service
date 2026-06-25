@@ -1,0 +1,19 @@
+[Unit]
+Description=ClickHouse Server (NATLog flow store)
+Documentation=https://clickhouse.com/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clickhouse
+Group=clickhouse
+# The single-binary server runs cleanly under systemd with its own watchdog off.
+Environment=CLICKHOUSE_WATCHDOG_ENABLE=0
+ExecStart=/usr/local/bin/clickhouse server --config-file=/etc/clickhouse-server/config.xml
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=500000
+
+[Install]
+WantedBy=multi-user.target

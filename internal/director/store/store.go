@@ -68,6 +68,22 @@ type Agent struct {
 	CreatedAt time.Time
 }
 
+// QueryAudit is an immutable record of a lawful IPDR lookup (who searched what,
+// when, and how many records matched) — required for lawful-intercept audit.
+type QueryAudit struct {
+	ID          int64
+	UserEmail   string
+	ISPID       uint32
+	QueryIP     string
+	QueryPort   int    // 0 = any
+	QueryProto  string // "" = any
+	FromTS      time.Time
+	ToTS        time.Time
+	ResultCount int
+	CaseRef     string
+	CreatedAt   time.Time
+}
+
 // Store is the Director's persistence interface.
 type Store interface {
 	Migrate(ctx context.Context) error
@@ -91,6 +107,11 @@ type Store interface {
 	CreateAgent(ctx context.Context, name, tokenHash string) (Agent, error)
 	GetAgentByToken(ctx context.Context, tokenHash string) (Agent, error)
 	TouchAgent(ctx context.Context, id int64, t time.Time) error
+
+	// LogQuery records a lawful IPDR lookup; ListQueries returns recent audits
+	// (ispID 0 = all, director only).
+	LogQuery(ctx context.Context, q QueryAudit) (int64, error)
+	ListQueries(ctx context.Context, ispID uint32, limit int) ([]QueryAudit, error)
 
 	Close() error
 }

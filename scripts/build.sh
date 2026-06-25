@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Build the collector binary into ./bin/natflow-collector.
+# Build all NATLog binaries into ./bin (static, CGO-free).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 GO=${GO:-go}
-
 mkdir -p bin
-echo "==> building natflow-collector"
-CGO_ENABLED=0 "$GO" build -trimpath -ldflags="-s -w" -o bin/natflow-collector ./cmd/collector
-echo "==> built: $(pwd)/bin/natflow-collector"
+
+# natlog = unified service (dataplane + control plane); the rest are split-mode
+# and operator tools.
+for cmd in natlog collector director benchgen pcapreplay pcapsanitize; do
+  echo "==> building $cmd"
+  CGO_ENABLED=0 "$GO" build -trimpath -ldflags="-s -w" -o "bin/$cmd" "./cmd/$cmd"
+done
+echo "==> built into $(pwd)/bin"
 "$GO" version

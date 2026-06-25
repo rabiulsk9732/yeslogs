@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
+	github.com/go-pdf/fpdf v0.9.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/minio/minio-go/v7 v7.2.0
 	github.com/prometheus/client_golang v1.23.2

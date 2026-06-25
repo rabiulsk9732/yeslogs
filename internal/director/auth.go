@@ -116,6 +116,9 @@ func (id Identity) scopeISP(requested uint32) (uint32, error) {
 	if id.isDirector() {
 		return requested, nil
 	}
+	if id.ISPID == 0 {
+		return 0, fmt.Errorf("forbidden: no tenant") // fail closed: never let a non-director resolve to global (0)
+	}
 	if requested != 0 && requested != id.ISPID {
 		return 0, fmt.Errorf("forbidden: cross-tenant access")
 	}

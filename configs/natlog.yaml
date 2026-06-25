@@ -1,0 +1,68 @@
+# NATLog — unified single-service config (dataplane + control plane in one process).
+#
+# Bootstrap once:
+#   natlog --config configs/natlog.yaml --migrate
+#   natlog --config configs/natlog.yaml --create-admin --email you@example.com --password '...'
+# Then run:
+#   natlog --config configs/natlog.yaml
+# Open the console at http://<host>:8080
+
+# ---------------- dataplane (collector) ----------------
+server:
+  name: "natlog-01"
+  isp_id: 0            # 0 = identity comes from the per-device registry (control plane)
+  device_id_default: 0
+
+receiver:
+  bind_ip: "0.0.0.0"   # receive NetFlow/IPFIX from real exporters
+  ports: {netflow5: 2055, netflow9: 9995, ipfix: 4739}
+  workers: 4
+  udp_read_buffer_mb: 16
+
+clickhouse:
+  addr: "127.0.0.1:9000"
+  database: "natlogs"
+  username: "default"
+  password: ""
+  batch_size: 5000
+  flush_interval_ms: 300
+  writer_workers: 2
+  max_queue_rows: 200000
+
+rules:
+  skip_dns: true
+  skip_private_to_private: true
+  skip_zero_bytes: true
+
+security:
+  unknown_exporter_mode: "reject"   # only control-plane-registered exporters are accepted
+
+metrics:
+  bind: "127.0.0.1:9101"
+
+logging:
+  level: "info"
+  file: ""
+
+# ---------------- control plane (Director console + API) ----------------
+cp:
+  bind: "0.0.0.0:8080"
+  # CHANGE THIS to a long random secret (>= 16 chars). Rotating it logs everyone out.
+  session_key: "CHANGE-ME-to-a-long-random-secret-string"
+  cookie_secure: false               # set true when serving over HTTPS
+  mysql_dsn: "natflow:natflow@tcp(127.0.0.1:3306)/natflow_cp?parseTime=true&loc=UTC"
+  flow_days: 1                        # dashboard query window
+  registry_refresh_s: 15             # how often the dataplane re-reads the device registry
+  retention_days: 180                # displayed retention target (set ClickHouse TTL to match)
+
+# ---------------- S3 cold archive (optional) ----------------
+# Configure to surface "Run S3 archive" in the console Retention page and enable
+# off-box long-term retention. Leave bucket empty to disable.
+s3:
+  endpoint: ""                       # e.g. https://s3.ap-south-1.amazonaws.com or http://minio:9000
+  region: "us-east-1"
+  bucket: ""
+  access_key: ""
+  secret_key: ""
+  path_prefix: "natlog"
+  export_format: "csvgz"

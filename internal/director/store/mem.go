@@ -9,15 +9,17 @@ import (
 
 // MemStore is an in-memory Store for tests.
 type MemStore struct {
-	mu       sync.Mutex
-	isps     map[uint32]ISP
-	users    map[string]User // by email
-	devices  map[int64]Device
-	agents   map[string]Agent // by token hash
-	nextISP  uint32
-	nextUser int64
-	nextDev  int64
-	nextAgt  int64
+	mu        sync.Mutex
+	isps      map[uint32]ISP
+	users     map[string]User // by email
+	devices   map[int64]Device
+	agents    map[string]Agent // by token hash
+	queries   []QueryAudit     // newest first
+	nextISP   uint32
+	nextUser  int64
+	nextDev   int64
+	nextAgt   int64
+	nextQuery int64
 }
 
 // NewMem returns an empty in-memory Store.
@@ -204,4 +206,30 @@ func (m *MemStore) TouchAgent(_ context.Context, id int64, t time.Time) error {
 		}
 	}
 	return ErrNotFound
+}
+
+func (m *MemStore) LogQuery(_ context.Context, q QueryAudit) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextQuery++
+	q.ID = m.nextQuery
+	q.CreatedAt = time.Now().UTC()
+	m.queries = append([]QueryAudit{q}, m.queries...) // newest first
+	return q.ID, nil
+}
+
+func (m *MemStore) ListQueries(_ context.Context, ispID uint32, limit int) ([]QueryAudit, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]QueryAudit, 0, limit)
+	for _, q := range m.queries {
+		if ispID != 0 && q.ISPID != ispID {
+			continue
+		}
+		out = append(out, q)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
