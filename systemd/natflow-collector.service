@@ -1,0 +1,29 @@
+[Unit]
+Description=NATFlow Dataplane Collector
+Documentation=https://github.com/natflow/natflow-dataplane
+After=network-online.target clickhouse-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/natflow-dataplane
+ExecStart=/opt/natflow-dataplane/bin/natflow-collector --config /opt/natflow-dataplane/configs/collector.yaml
+Restart=always
+RestartSec=3
+
+# Allow the bounded shutdown drain (clickhouse.shutdown_drain_ms, default 15s)
+# to complete before systemd escalates to SIGKILL.
+TimeoutStopSec=30
+
+# High-throughput UDP ingest needs many file descriptors.
+LimitNOFILE=1048576
+
+# Sensible hardening that does not interfere with UDP ingest or log writing.
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/log/natflow
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

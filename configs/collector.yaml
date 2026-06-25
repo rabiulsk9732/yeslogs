@@ -1,0 +1,45 @@
+# NATFlow Dataplane Collector configuration.
+# Unknown keys are rejected on load, so typos fail fast.
+
+server:
+  name: "dp-india-01"
+  isp_id: 1
+  device_id_default: 0
+
+receiver:
+  bind_ip: "0.0.0.0"
+  ports:
+    netflow5: 2055
+    netflow9: 9995
+    ipfix: 4739
+  # Kernel UDP receive buffer (SO_RCVBUF). Raising this needs a matching
+  # net.core.rmem_max sysctl (see README), otherwise the kernel silently caps it.
+  udp_read_buffer_mb: 128
+  # Number of reader goroutines per listener. Defaults to NumCPU when 0.
+  workers: 6
+
+clickhouse:
+  addr: "127.0.0.1:9000"
+  database: "natlogs"
+  username: "default"
+  password: ""
+  batch_size: 10000
+  flush_interval_ms: 1000
+  # In-memory buffer (records) between the pipeline and the flush loop. Must be
+  # >= batch_size. Defaults to batch_size * 10 when 0.
+  queue_capacity: 100000
+  # Max time to drain the queue into ClickHouse on shutdown before giving up so
+  # process exit cannot hang on an unreachable backend. Defaults to 15000.
+  shutdown_drain_ms: 15000
+
+rules:
+  skip_dns: true
+  skip_private_to_private: true
+  skip_zero_bytes: true
+
+metrics:
+  bind: "127.0.0.1:9101"
+
+logging:
+  level: "info"
+  file: "/var/log/natflow/collector.log"
