@@ -79,8 +79,8 @@ func run(cfg config) error {
 	if cfg.dnsPct+cfg.privatePct+cfg.zeroBytePct > 100 {
 		return fmt.Errorf("dns+private+zero-byte percentages exceed 100")
 	}
-	if cfg.proto != "netflow5" && cfg.proto != "netflow9" {
-		return fmt.Errorf("proto must be netflow5 or netflow9, got %q", cfg.proto)
+	if cfg.proto != "netflow5" && cfg.proto != "netflow9" && cfg.proto != "ipfix" {
+		return fmt.Errorf("proto must be netflow5, netflow9 or ipfix, got %q", cfg.proto)
 	}
 	if cfg.pps < 1 {
 		return fmt.Errorf("pps must be >= 1")
@@ -209,10 +209,17 @@ func buildRing(cfg config) (ring [][]byte, tmpl []byte) {
 	sysUptime := uint32(3_600_000) // 1h of uptime in ms
 
 	ring = make([][]byte, cfg.ringSize)
-	if cfg.proto == "netflow9" {
+	switch cfg.proto {
+	case "netflow9":
 		tmpl = v9TemplatePacket(now, sysUptime)
 		for i := range ring {
 			ring[i] = v9DataPacket(cfg, rng, now, sysUptime)
+		}
+		return ring, tmpl
+	case "ipfix":
+		tmpl = ipfixTemplatePacket(now)
+		for i := range ring {
+			ring[i] = ipfixDataPacket(cfg, rng, now)
 		}
 		return ring, tmpl
 	}
@@ -361,6 +368,86 @@ func fillRecord(r []byte, cfg config, rng *rand.Rand, sysUptime uint32) {
 	r[38] = 6    // TCP
 	r[44] = 24   // src mask
 	r[45] = 24   // dst mask
+}
+
+// --- IPFIX generation ------------------------------------------------------
+
+const (
+	ipfixTemplateID = 256
+	ipfixRecordLen  = 37 // src4 dst4 sport2 dport2 proto1 octets4 pkts4 startMs8 endMs8
+)
+
+// IPFIX (type,length) specifiers matching the record layout below.
+var ipfixTemplateFields = [][2]uint16{
+	{8, 4}, {12, 4}, {7, 2}, {11, 2}, {4, 1}, {1, 4}, {2, 4}, {152, 8}, {153, 8},
+}
+
+func ipfixHeader(msgLen int, now uint32) []byte {
+	h := make([]byte, 16)
+	binary.BigEndian.PutUint16(h[0:2], 10)
+	binary.BigEndian.PutUint16(h[2:4], uint16(msgLen))
+	binary.BigEndian.PutUint32(h[4:8], now) // export time (seconds)
+	binary.BigEndian.PutUint32(h[8:12], 0)  // sequence number
+	binary.BigEndian.PutUint32(h[12:16], 1) // observation domain id
+	return h
+}
+
+func ipfixTemplatePacket(now uint32) []byte {
+	rec := make([]byte, 4+len(ipfixTemplateFields)*4)
+	binary.BigEndian.PutUint16(rec[0:2], ipfixTemplateID)
+	binary.BigEndian.PutUint16(rec[2:4], uint16(len(ipfixTemplateFields)))
+	for i, f := range ipfixTemplateFields {
+		o := 4 + i*4
+		binary.BigEndian.PutUint16(rec[o:o+2], f[0])
+		binary.BigEndian.PutUint16(rec[o+2:o+4], f[1])
+	}
+	set := make([]byte, 4+len(rec))
+	binary.BigEndian.PutUint16(set[0:2], 2) // Template Set id
+	binary.BigEndian.PutUint16(set[2:4], uint16(len(set)))
+	copy(set[4:], rec)
+	return append(ipfixHeader(16+len(set), now), set...)
+}
+
+func ipfixDataPacket(cfg config, rng *rand.Rand, now uint32) []byte {
+	dataLen := cfg.flowsPerPkt * ipfixRecordLen
+	set := make([]byte, 4+dataLen)
+	binary.BigEndian.PutUint16(set[0:2], ipfixTemplateID) // Data Set id == template id
+	binary.BigEndian.PutUint16(set[2:4], uint16(len(set)))
+	for j := 0; j < cfg.flowsPerPkt; j++ {
+		off := 4 + j*ipfixRecordLen
+		fillIPFIXRecord(set[off:off+ipfixRecordLen], cfg, rng, now)
+	}
+	return append(ipfixHeader(16+len(set), now), set...)
+}
+
+func fillIPFIXRecord(r []byte, cfg config, rng *rand.Rand, now uint32) {
+	var src, dst net.IP
+	var sp, dp uint16
+	octets := uint32(64 + rng.Intn(1<<16))
+	pkts := uint32(1 + rng.Intn(64))
+	proto := uint8(6)
+
+	switch category(cfg, rng) {
+	case catDNS:
+		src, dst, sp, dp, proto = privateIP(rng), publicIP(rng), ephemeralPort(rng), 53, 17
+	case catPrivate:
+		src, dst, sp, dp = privateIP(rng), privateIP(rng), ephemeralPort(rng), uint16(1+rng.Intn(1024))
+	case catZero:
+		src, dst, sp, dp, octets = privateIP(rng), publicIP(rng), ephemeralPort(rng), 443, 0
+	default:
+		src, dst, sp, dp = privateIP(rng), publicIP(rng), ephemeralPort(rng), []uint16{80, 443, 8080, 22}[rng.Intn(4)]
+	}
+
+	nowMs := uint64(now) * 1000
+	copy(r[0:4], src.To4())
+	copy(r[4:8], dst.To4())
+	binary.BigEndian.PutUint16(r[8:10], sp)
+	binary.BigEndian.PutUint16(r[10:12], dp)
+	r[12] = proto
+	binary.BigEndian.PutUint32(r[13:17], octets)
+	binary.BigEndian.PutUint32(r[17:21], pkts)
+	binary.BigEndian.PutUint64(r[21:29], nowMs-uint64(2000+rng.Intn(60000))) // flowStartMs
+	binary.BigEndian.PutUint64(r[29:37], nowMs-uint64(rng.Intn(2000)))       // flowEndMs
 }
 
 type cat int

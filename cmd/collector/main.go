@@ -94,7 +94,7 @@ func run() (err error) {
 	}{
 		{"netflow5", cfg.Receiver.Ports.NetFlow5, netflow5.New()},
 		{"netflow9", cfg.Receiver.Ports.NetFlow9, netflow9.New(m.TemplatesReceived, m.TemplateUnknown)},
-		{"ipfix", cfg.Receiver.Ports.IPFIX, ipfix.New()},
+		{"ipfix", cfg.Receiver.Ports.IPFIX, ipfix.New(m.TemplatesReceived, m.TemplateUnknown)},
 	}
 
 	var receivers []*receiver.Receiver

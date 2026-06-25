@@ -11,7 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/natflow/natflow-dataplane/internal/decoder/ipfix"
+	"github.com/natflow/natflow-dataplane/internal/decoder"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
@@ -136,16 +136,24 @@ func TestEndToEndNetFlow5(t *testing.T) {
 	}
 }
 
-// TestUnsupportedProtocolCounted verifies that a structurally-valid but
-// not-yet-decoded protocol (IPFIX in v1) is counted under packets_unsupported
-// rather than packets_dropped.
+// unsupportedDecoder always reports decoder.ErrUnsupported, standing in for a
+// recognized-but-undecodable protocol.
+type unsupportedDecoder struct{}
+
+func (unsupportedDecoder) Kind() string { return "fake" }
+func (unsupportedDecoder) Decode(dst []decoder.Flow, _ []byte, _ net.IP) ([]decoder.Flow, error) {
+	return dst, decoder.ErrUnsupported
+}
+
+// TestUnsupportedProtocolCounted verifies that a recognized-but-undecodable
+// protocol is counted under packets_unsupported rather than packets_dropped.
 func TestUnsupportedProtocolCounted(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	m := metrics.New()
 	w := &captureWriter{}
 
-	p := pipeline.New(ipfix.New(), normalizer.New(1, 0), rules.New(true, true, true), w, m, log)
-	rcv, err := receiver.New("ipfix", "127.0.0.1", 0, 1, 0, p, m, log)
+	p := pipeline.New(unsupportedDecoder{}, normalizer.New(1, 0), rules.New(true, true, true), w, m, log)
+	rcv, err := receiver.New("fake", "127.0.0.1", 0, 1, 0, p, m, log)
 	if err != nil {
 		t.Fatalf("receiver.New: %v", err)
 	}
@@ -158,10 +166,7 @@ func TestUnsupportedProtocolCounted(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Minimal valid IPFIX message header: 16 bytes with version field == 10.
-	msg := make([]byte, 16)
-	binary.BigEndian.PutUint16(msg[0:2], 10)
-	if _, err := conn.Write(msg); err != nil {
+	if _, err := conn.Write([]byte{0xde, 0xad, 0xbe, 0xef}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
