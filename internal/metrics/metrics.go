@@ -48,6 +48,16 @@ type Metrics struct {
 	ArchiveErrors        prometheus.Counter
 	ArchiveUploadLatency prometheus.Histogram
 
+	// Device registry.
+	DeviceRegistryEntries      prometheus.Gauge
+	DeviceMatchedPackets       prometheus.Counter
+	DeviceRejectedPackets      prometheus.Counter
+	UnknownExporterPackets     prometheus.Counter
+	UnknownExporterFlows       prometheus.Counter
+	DeviceRuleSkipped          prometheus.Counter
+	DeviceRegistryReloads      prometheus.Counter
+	DeviceRegistryReloadErrors prometheus.Counter
+
 	reg *prometheus.Registry
 }
 
@@ -112,6 +122,19 @@ func New() *Metrics {
 		Buckets: []float64{10, 50, 100, 250, 500, 1000, 5000, 30000, 120000},
 	})
 	reg.MustRegister(m.ArchiveUploadLatency)
+
+	m.DeviceRegistryEntries = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "device_registry_entries",
+		Help: "Number of devices in the registry.",
+	})
+	reg.MustRegister(m.DeviceRegistryEntries)
+	m.DeviceMatchedPackets = counter("device_matched_packets_total", "Packets from a registered, enabled device.")
+	m.DeviceRejectedPackets = counter("device_rejected_packets_total", "Packets dropped by device policy (disabled device or unknown-in-reject-mode).")
+	m.UnknownExporterPackets = counter("unknown_exporter_packets_total", "Packets from an exporter not in the registry.")
+	m.UnknownExporterFlows = counter("unknown_exporter_flows_total", "Flows decoded from exporters not in the registry.")
+	m.DeviceRuleSkipped = counter("device_rule_skipped_total", "Flows skipped by a matched device's rules.")
+	m.DeviceRegistryReloads = counter("device_registry_reloads_total", "Successful device registry reloads.")
+	m.DeviceRegistryReloadErrors = counter("device_registry_reload_errors_total", "Failed device registry reloads.")
 	// Go runtime + process metrics are handy for ops dashboards.
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))

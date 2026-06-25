@@ -22,6 +22,7 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/decoder/ipfix"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow9"
+	devreg "github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/logger"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
@@ -91,7 +92,16 @@ func run() (err error) {
 		"workers", cfg.ClickHouse.WriterWorkers, "batch_size", cfg.ClickHouse.BatchSize,
 		"flush_interval", cfg.ClickHouse.FlushInterval(), "max_queue_rows", cfg.ClickHouse.MaxQueueRows)
 
-	norm := normalizer.New(cfg.Server.ISPID, cfg.Server.DeviceIDDefault)
+	norm := normalizer.New()
+	registry, derr := devreg.Build(cfg.Devices, cfg.Live().Rules)
+	if derr != nil {
+		return fmt.Errorf("device registry: %w", derr)
+	}
+	devices := devreg.NewStore(registry)
+	m.DeviceRegistryEntries.Set(float64(registry.Len()))
+	log.Info("device registry loaded",
+		"entries", registry.Len(), "unknown_exporter_mode", cfg.Security.UnknownExporterMode)
+
 	bindings := []struct {
 		name string
 		port int
@@ -104,7 +114,7 @@ func run() (err error) {
 
 	var receivers []*receiver.Receiver
 	for _, b := range bindings {
-		p := pipeline.New(b.dec, norm, live, manager, m, log)
+		p := pipeline.New(b.dec, norm, live, devices, cfg.Server.ISPID, cfg.Server.DeviceIDDefault, manager, m, log)
 		rcv, rerr := receiver.New(b.name, cfg.Receiver.BindIP, b.port,
 			cfg.Receiver.Workers, cfg.Receiver.UDPReadBufferMB, p, m, log)
 		if rerr != nil {
@@ -161,12 +171,25 @@ func run() (err error) {
 		live.Store(next.Live())
 		levelVar.Set(logger.ParseLevel(next.Logging.Level))
 		manager.Reload(next.ClickHouse.WriterWorkers, next.ClickHouse.MaxQueueRows)
+
+		// Rebuild the device registry (effective device rules depend on the
+		// possibly-changed global rules, so always rebuild).
+		if reg, rerr := devreg.Build(next.Devices, next.Live().Rules); rerr != nil {
+			m.DeviceRegistryReloadErrors.Inc()
+			log.Error("device registry reload failed; keeping previous registry", "error", rerr)
+		} else {
+			devices.Store(reg)
+			m.DeviceRegistryEntries.Set(float64(reg.Len()))
+			m.DeviceRegistryReloads.Inc()
+		}
+
 		current = next
 		m.ConfigReloads.Inc()
 		log.Info("config reloaded",
 			"batch_size", next.ClickHouse.BatchSize, "flush_interval", next.ClickHouse.FlushInterval(),
 			"writer_workers", next.ClickHouse.WriterWorkers, "max_queue_rows", next.ClickHouse.MaxQueueRows,
-			"backpressure", next.Pipeline.BackpressureMode, "level", next.Logging.Level)
+			"backpressure", next.Pipeline.BackpressureMode, "level", next.Logging.Level,
+			"devices", devices.Load().Len(), "unknown_exporter_mode", next.Security.UnknownExporterMode)
 	}
 
 	log.Info("collector running; SIGHUP=reload, SIGINT/SIGTERM=stop")

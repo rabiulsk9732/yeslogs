@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/rules"
 )
 
@@ -24,8 +25,15 @@ type Config struct {
 	Rules      RulesConfig      `yaml:"rules"`
 	Pipeline   PipelineConfig   `yaml:"pipeline"`
 	S3         S3Config         `yaml:"s3"`
+	Security   SecurityConfig   `yaml:"security"`
+	Devices    []device.Spec    `yaml:"devices"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
 	Logging    LoggingConfig    `yaml:"logging"`
+}
+
+// SecurityConfig holds exporter-trust settings.
+type SecurityConfig struct {
+	UnknownExporterMode string `yaml:"unknown_exporter_mode"` // allow | observe | reject
 }
 
 // ServerConfig identifies this collector instance.
@@ -163,6 +171,7 @@ type Live struct {
 	RetryMaxAttempts int
 	RetryBackoff     time.Duration
 	Backpressure     BackpressureMode
+	UnknownMode      device.UnknownMode
 
 	S3Enabled          bool
 	S3ArchiveAfterDays int
@@ -171,7 +180,9 @@ type Live struct {
 // Live extracts the reloadable subset from the full config.
 func (c *Config) Live() Live {
 	mode, _ := ParseBackpressure(c.Pipeline.BackpressureMode)
+	unknown, _ := device.ParseUnknownMode(c.Security.UnknownExporterMode)
 	return Live{
+		UnknownMode: unknown,
 		Rules: rules.RuleSet{
 			SkipDNS:              c.Rules.SkipDNS,
 			SkipPrivateToPrivate: c.Rules.SkipPrivateToPrivate,
@@ -307,6 +318,11 @@ func (c *Config) applyDefaults() {
 	if c.S3.Region == "" {
 		c.S3.Region = "us-east-1"
 	}
+	if c.Security.UnknownExporterMode == "" {
+		// Default to allow so existing configs without a device registry keep
+		// their pre-registry behavior; production should set "reject".
+		c.Security.UnknownExporterMode = "allow"
+	}
 	if c.Metrics.Bind == "" {
 		c.Metrics.Bind = "127.0.0.1:9101"
 	}
@@ -348,6 +364,12 @@ func (c *Config) validate() error {
 	case "csvgz", "parquet":
 	default:
 		return fmt.Errorf("s3.export_format %q must be csvgz or parquet", c.S3.ExportFormat)
+	}
+	if _, err := device.ParseUnknownMode(c.Security.UnknownExporterMode); err != nil {
+		return err
+	}
+	if err := device.Validate(c.Devices); err != nil {
+		return err
 	}
 	if c.S3.Enabled {
 		if c.S3.Bucket == "" {

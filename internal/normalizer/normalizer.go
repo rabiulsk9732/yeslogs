@@ -1,6 +1,6 @@
 // Package normalizer converts protocol-agnostic decoder.Flow values into the
-// canonical FlowRecord the rest of the pipeline (rules, writer) operates on,
-// attaching ISP/device identity and the flow-type label.
+// canonical FlowRecord that the rest of the pipeline (rules, writer) operates
+// on, attaching the resolved ISP/device identity and the flow-type label.
 package normalizer
 
 import (
@@ -10,8 +10,8 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/decoder"
 )
 
-// FlowRecord is the canonical, enriched representation of a single flow. It
-// maps 1:1 to a row in the ClickHouse flow_logs table.
+// FlowRecord is the canonical, enriched representation of a single flow. It maps
+// 1:1 to a row in the ClickHouse flow_logs table.
 type FlowRecord struct {
 	ISPID    uint32
 	DeviceID uint32
@@ -35,23 +35,19 @@ type FlowRecord struct {
 	ExporterIP net.IP
 }
 
-// Normalizer enriches decoded flows with static server identity.
-type Normalizer struct {
-	ispID    uint32
-	deviceID uint32
-}
+// Normalizer maps decoded flows to FlowRecords. It is stateless; the ISP/device
+// identity is resolved per packet (from the device registry) and passed in.
+type Normalizer struct{}
 
-// New returns a Normalizer that stamps every record with ispID and the default
-// deviceID (used when the protocol carries no device identifier).
-func New(ispID, deviceID uint32) *Normalizer {
-	return &Normalizer{ispID: ispID, deviceID: deviceID}
-}
+// New returns a Normalizer.
+func New() *Normalizer { return &Normalizer{} }
 
-// Normalize maps a decoder.Flow to a FlowRecord, tagging it with flowType.
-func (n *Normalizer) Normalize(f decoder.Flow, flowType string) FlowRecord {
+// Normalize maps a decoder.Flow to a FlowRecord, tagging it with flowType and
+// the supplied ISP/device identity.
+func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID uint32) FlowRecord {
 	return FlowRecord{
-		ISPID:         n.ispID,
-		DeviceID:      n.deviceID,
+		ISPID:         ispID,
+		DeviceID:      deviceID,
 		SrcIP:         f.SrcIP,
 		SrcPort:       f.SrcPort,
 		DstIP:         f.DstIP,

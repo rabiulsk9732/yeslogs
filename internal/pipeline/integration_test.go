@@ -14,6 +14,7 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/config"
 	"github.com/natflow/natflow-dataplane/internal/decoder"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
+	"github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
@@ -25,6 +26,11 @@ func liveStore() *config.Store {
 	return config.NewStore(config.Live{
 		Rules: rules.RuleSet{SkipDNS: true, SkipPrivateToPrivate: true, SkipZeroBytes: true},
 	})
+}
+
+func emptyDevices() *device.Store {
+	r, _ := device.Build(nil, rules.RuleSet{})
+	return device.NewStore(r)
 }
 
 // captureWriter stands in for the ClickHouse writer at the pipeline boundary.
@@ -82,8 +88,10 @@ func TestEndToEndNetFlow5(t *testing.T) {
 
 	p := pipeline.New(
 		netflow5.New(),
-		normalizer.New(42, 7),
-		liveStore(), // skip DNS / private->private / zero-byte
+		normalizer.New(),
+		liveStore(),    // skip DNS / private->private / zero-byte
+		emptyDevices(), // unmatched -> allow mode uses the defaults below
+		42, 7,
 		w, m, log,
 	)
 
@@ -159,7 +167,7 @@ func TestUnsupportedProtocolCounted(t *testing.T) {
 	m := metrics.New()
 	w := &captureWriter{}
 
-	p := pipeline.New(unsupportedDecoder{}, normalizer.New(1, 0), liveStore(), w, m, log)
+	p := pipeline.New(unsupportedDecoder{}, normalizer.New(), liveStore(), emptyDevices(), 1, 0, w, m, log)
 	rcv, err := receiver.New("fake", "127.0.0.1", 0, 1, 0, p, m, log)
 	if err != nil {
 		t.Fatalf("receiver.New: %v", err)

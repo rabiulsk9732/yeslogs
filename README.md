@@ -37,6 +37,7 @@ internal/decoder         common Flow type + Decoder interface
 internal/decoder/netflow5 NetFlow v5 decoder (complete)
 internal/decoder/netflow9 NetFlow v9 decoder (template cache + data decode)
 internal/decoder/ipfix    IPFIX decoder (templates + varlen + enterprise)
+internal/device          exporter device registry (identity + per-device rules)
 internal/normalizer      decoder.Flow -> canonical FlowRecord
 internal/rules           skip filters (DNS / private->private / zero-byte)
 internal/pipeline        decode -> normalize -> rules -> enqueue
@@ -174,6 +175,69 @@ back to gzip-CSV (the config field is honored for forward compatibility). For a
 local MinIO test target: `endpoint: "http://127.0.0.1:9000"`, matching
 `access_key`/`secret_key`, and create the bucket first (`mc mb local/<bucket>`).
 
+## Device registry & exporter trust
+
+Map each exporter's **source IP** to its identity (`isp_id`/`device_id`), vendor
+`profile`, and optional per-device skip-rule overrides:
+
+```yaml
+security:
+  unknown_exporter_mode: "reject"   # allow | observe | reject
+
+devices:
+  - name: "rtr-mikrotik-01"
+    enabled: true
+    exporter_ip: "203.0.113.10"     # the source IP the device sends FROM
+    isp_id: 1
+    device_id: 101
+    protocol: netflow9              # netflow5 | netflow9 | ipfix | auto
+    profile: mikrotik               # mikrotik | cisco | juniper | huawei | generic
+    allowed_ports: [9995]
+    rules:                          # omitted fields inherit the global rules.*
+      skip_dns: true
+      skip_private_to_private: true
+      skip_zero_bytes: false
+```
+
+For a matched, **enabled** device, flows are stamped with its `isp_id`/`device_id`
+and its effective rules are applied (global rules with per-device overrides
+merged). A matched but **disabled** device has its packets dropped.
+
+Validation (at load and on reload): `exporter_ip` must be a valid, unique IP;
+`isp_id` and `device_id` must be `> 0`; `protocol`/`profile` must be from the
+allowed sets. A bad device config fails startup, or on reload is rejected and
+the previous registry is kept (`device_registry_reload_errors_total`).
+
+### Unknown exporter modes
+
+`security.unknown_exporter_mode` controls packets from an IP **not** in the
+registry:
+
+| Mode | Behavior | Metrics |
+| ---- | -------- | ------- |
+| `allow` (default) | decode with the server default `isp_id`/`device_id` (pre-registry behavior) | `unknown_exporter_packets_total`, `unknown_exporter_flows_total` |
+| `observe` | decode with `isp_id=0`/`device_id=0` (visibility, no trust) | same as above |
+| `reject` | **drop the packet** before decoding | `unknown_exporter_packets_total`, `device_rejected_packets_total` |
+
+The registry reloads with `SIGHUP`/`--watch-config` (atomic swap, no dropped
+ingest): `device_registry_reloads_total` / `device_registry_reload_errors_total`,
+and `device_registry_entries` gauges the current size.
+
+### Real device onboarding checklist
+
+1. Find the exporter's real source IP: `tcpdump -ni any udp port 9995`.
+2. Add a `devices:` entry (see `docs/devices/<vendor>.md` for MikroTik, Cisco,
+   Juniper, Huawei, generic IPFIX) and `systemctl reload natflow-collector`.
+3. **Firewall: allow only known exporter IPs** to the UDP ports, deny the rest:
+   ```bash
+   DEVICE_IP=203.0.113.10 ./deploy/ufw-example.sh
+   ```
+4. Confirm `device_matched_packets_total` rises and rows land:
+   `clickhouse-client -q "SELECT count() FROM natlogs.flow_logs WHERE device_id=101"`.
+5. Once all devices are registered, set `security.unknown_exporter_mode: "reject"`
+   and reload — now only known exporters are accepted (defense in depth with the
+   firewall).
+
 ### Kernel tuning (recommended for high PPS)
 
 `udp_read_buffer_mb` is capped by `net.core.rmem_max`. Raise it so bursts are not
@@ -292,6 +356,12 @@ Prometheus metrics are served at `http://127.0.0.1:9101/metrics`, with a
 | `writer_retries_total`       | batch send retries                                  |
 | `config_reloads_total` / `config_reload_errors_total` | runtime reloads      |
 | `archive_runs_total` / `archive_rows_total` / `archive_bytes_total` | S3 archive |
+| `device_registry_entries`    | devices currently in the registry (gauge)           |
+| `device_matched_packets_total` | packets from a registered, enabled device         |
+| `device_rejected_packets_total` | packets dropped by device policy (disabled / reject) |
+| `unknown_exporter_packets_total` / `unknown_exporter_flows_total` | unregistered exporter traffic |
+| `device_rule_skipped_total`  | flows skipped by a matched device's rules           |
+| `device_registry_reloads_total` / `device_registry_reload_errors_total` | registry reloads |
 
 > A brief rise in `template_unknown_total` at startup is normal — NetFlow
 > v9/IPFIX data that arrives before its template is dropped until the template

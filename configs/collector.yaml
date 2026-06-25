@@ -52,6 +52,30 @@ s3:
   archive_after_days: 7
   export_format: "csvgz"   # csvgz | parquet (parquet falls back to csvgz in v0.3.1)
 
+security:
+  # How to treat packets from an exporter not in the device registry below:
+  #   allow   - decode with the default server isp_id/device_id (backward compatible)
+  #   observe - decode with isp_id=0/device_id=0 (visibility without trust)
+  #   reject  - drop the packet (RECOMMENDED in production once devices are listed)
+  unknown_exporter_mode: "allow"
+
+# Device registry: map each exporter source IP to its identity, vendor profile,
+# and per-device skip-rule overrides (omitted rule fields inherit rules.* above).
+# Populate for production, then set security.unknown_exporter_mode: "reject".
+devices: []
+#  - name: "rtr-mikrotik-01"
+#    enabled: true
+#    exporter_ip: "203.0.113.10"
+#    isp_id: 1
+#    device_id: 101
+#    protocol: netflow9       # netflow5 | netflow9 | ipfix | auto
+#    profile: mikrotik        # mikrotik | cisco | juniper | huawei | generic
+#    allowed_ports: [9995]
+#    rules:
+#      skip_dns: true
+#      skip_private_to_private: true
+#      skip_zero_bytes: false   # this device keeps zero-byte flows
+
 metrics:
   bind: "127.0.0.1:9101"
 

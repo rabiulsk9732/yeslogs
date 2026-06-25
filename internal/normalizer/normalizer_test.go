@@ -9,7 +9,7 @@ import (
 )
 
 func TestNormalize(t *testing.T) {
-	n := New(7, 3)
+	n := New()
 	start := time.Unix(1_600_000_000, 0).UTC()
 	f := decoder.Flow{
 		SrcIP:      net.IPv4(10, 0, 0, 1).To4(),
@@ -24,7 +24,7 @@ func TestNormalize(t *testing.T) {
 		ExporterIP: net.IPv4(192, 168, 0, 1).To4(),
 	}
 
-	r := n.Normalize(f, "netflow5")
+	r := n.Normalize(f, "netflow5", 7, 3)
 	if r.ISPID != 7 || r.DeviceID != 3 {
 		t.Errorf("identity = %d/%d, want 7/3", r.ISPID, r.DeviceID)
 	}
