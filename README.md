@@ -11,17 +11,20 @@ Docker, no Kafka, no PostgreSQL — a single static Go binary under systemd.
                          └────────────── Prometheus metrics ───────────────┘
 ```
 
-## Status (v1)
+## Status
 
-| Protocol   | Port (default) | Decoding                                   |
-| ---------- | -------------- | ------------------------------------------ |
-| NetFlow v5 | 2055           | **Fully implemented**                      |
-| NetFlow v9 | 9995           | Header validation only (template TODO)     |
-| IPFIX      | 4739           | Header validation only (template TODO)     |
+| Protocol   | Port (default) | Decoding                                        |
+| ---------- | -------------- | ----------------------------------------------- |
+| NetFlow v5 | 2055           | **Fully implemented**                           |
+| NetFlow v9 | 9995           | **Template decode** (data + options + NAT fields) |
+| IPFIX      | 4739           | Header validation only (template TODO)          |
 
-NetFlow v9 / IPFIX listeners bind and count packets, but data records are not
-yet decoded (they are template-based; see `internal/decoder/netflow9` and
-`internal/decoder/ipfix`). v5 is the production path for v1.
+NetFlow v9 caches templates per (exporter, source-id, template-id), decodes
+Data FlowSets against them (including CGNAT post-NAT address/port fields), and
+skips Options Template records. Data FlowSets that arrive before their template
+are counted under `template_unknown_total` until the template is learned. IPFIX
+listeners bind and count packets (`packets_unsupported_total`) but do not yet
+decode records.
 
 ## Layout
 
@@ -31,7 +34,7 @@ internal/config          YAML load, defaults, validation
 internal/receiver        UDP listeners + worker pool
 internal/decoder         common Flow type + Decoder interface
 internal/decoder/netflow5 NetFlow v5 decoder (complete)
-internal/decoder/netflow9 NetFlow v9 placeholder
+internal/decoder/netflow9 NetFlow v9 decoder (template cache + data decode)
 internal/decoder/ipfix    IPFIX placeholder
 internal/normalizer      decoder.Flow -> canonical FlowRecord
 internal/rules           skip filters (DNS / private->private / zero-byte)
@@ -194,18 +197,21 @@ Prometheus metrics are served at `http://127.0.0.1:9101/metrics`, with a
 | ---------------------------- | --------------------------------------------------- |
 | `packets_received_total`     | UDP datagrams received (all listeners)              |
 | `packets_dropped_total`      | datagrams dropped (malformed / decode errors)      |
-| `packets_unsupported_total`  | datagrams for a recognized-but-undecoded protocol (v9/IPFIX in v1) |
+| `packets_unsupported_total`  | datagrams for a recognized-but-undecoded protocol (IPFIX in v1) |
 | `flows_decoded_total`        | flow records decoded                                |
 | `flows_skipped_total`        | flows dropped by skip rules                         |
 | `flows_inserted_total`       | flows inserted into ClickHouse                      |
 | `flows_dropped_total`        | flows dropped without insertion (queue full / shutdown deadline) |
 | `flows_rejected_total`       | flows rejected by ClickHouse during row append      |
 | `insert_errors_total`        | batch inserts that failed after retries             |
+| `templates_received_total`   | NetFlow v9/IPFIX templates parsed                   |
+| `template_unknown_total`     | data flowsets dropped (template not yet known)      |
 | `current_queue_size`         | flows currently buffered in the writer queue        |
 
-> NetFlow v9 / IPFIX datagrams currently increment `packets_unsupported_total`
-> (not `packets_dropped_total`), since the listeners bind and observe them but do
-> not yet decode their template-based records.
+> IPFIX datagrams currently increment `packets_unsupported_total` (the listener
+> binds and observes them but does not yet decode records). A brief rise in
+> `template_unknown_total` at startup is normal — NetFlow v9 data that arrives
+> before its template is dropped until the template is learned.
 
 ## Test without a real exporter
 
@@ -229,20 +235,22 @@ curl -s 127.0.0.1:9101/metrics | grep -E 'flows_(decoded|skipped|inserted)_total
 
 ## Benchmarking
 
-`cmd/benchgen` is a NetFlow v5 load generator for stress-testing the collector.
+`cmd/benchgen` is a NetFlow v5/v9 load generator for stress-testing the collector.
 
 ```bash
 go build -o bin/benchgen ./cmd/benchgen
 ```
 
-It emits valid v5 datagrams at a target packet rate, with a configurable mix of
+It emits valid datagrams at a target packet rate, with a configurable mix of
 DNS / private / zero-byte flows so the skip rules are exercised under load. Each
-packet carries `--flows-per-packet` flows (v5 max 30), so flows/sec = pps ×
+packet carries `--flows-per-packet` flows (v5/v9 max 30), so flows/sec = pps ×
 flows-per-packet. It prints packets/s, flows/s, Mbps and send_errors every second.
+With `--proto netflow9` it injects the v9 template first and refreshes it
+periodically, then sends template-described data packets (target port 9995).
 
-Flags: `--target`, `--pps`, `--flows-per-packet`, `--duration`, `--dns-percent`,
-`--private-percent`, `--zero-byte-percent`, `--senders` (concurrent sockets;
-raise for high pps), `--ring-size`.
+Flags: `--target`, `--proto` (netflow5|netflow9), `--pps`, `--flows-per-packet`,
+`--duration`, `--dns-percent`, `--private-percent`, `--zero-byte-percent`,
+`--senders` (concurrent sockets; raise for high pps), `--ring-size`.
 
 Ramp the rate (collector + ClickHouse must be running):
 

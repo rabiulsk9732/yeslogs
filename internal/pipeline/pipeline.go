@@ -15,6 +15,10 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/rules"
 )
 
+// maxPooledFlows caps the capacity of decode scratch buffers retained in the
+// pool, so an oversized buffer grown by one large packet is not pinned.
+const maxPooledFlows = 16384
+
 // Writer is the subset of the ClickHouse writer the pipeline depends on.
 type Writer interface {
 	// Enqueue submits a record for insertion, returning false if it was
@@ -90,6 +94,10 @@ func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
 		}
 	}
 
-	*bufp = flows
-	p.pool.Put(bufp)
+	// Don't return a pathologically large scratch buffer to the pool (a hostile
+	// packet could otherwise pin oversized arrays, one per worker); let it GC.
+	if cap(flows) <= maxPooledFlows {
+		*bufp = flows
+		p.pool.Put(bufp)
+	}
 }

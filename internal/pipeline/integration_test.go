@@ -11,8 +11,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/natflow/natflow-dataplane/internal/decoder/ipfix"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
-	"github.com/natflow/natflow-dataplane/internal/decoder/netflow9"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
@@ -137,15 +137,15 @@ func TestEndToEndNetFlow5(t *testing.T) {
 }
 
 // TestUnsupportedProtocolCounted verifies that a structurally-valid but
-// not-yet-decoded protocol (NetFlow v9) is counted under packets_unsupported
+// not-yet-decoded protocol (IPFIX in v1) is counted under packets_unsupported
 // rather than packets_dropped.
 func TestUnsupportedProtocolCounted(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	m := metrics.New()
 	w := &captureWriter{}
 
-	p := pipeline.New(netflow9.New(), normalizer.New(1, 0), rules.New(true, true, true), w, m, log)
-	rcv, err := receiver.New("netflow9", "127.0.0.1", 0, 1, 0, p, m, log)
+	p := pipeline.New(ipfix.New(), normalizer.New(1, 0), rules.New(true, true, true), w, m, log)
+	rcv, err := receiver.New("ipfix", "127.0.0.1", 0, 1, 0, p, m, log)
 	if err != nil {
 		t.Fatalf("receiver.New: %v", err)
 	}
@@ -158,10 +158,10 @@ func TestUnsupportedProtocolCounted(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Minimal valid v9 header: 20 bytes with version field == 9.
-	v9 := make([]byte, 20)
-	binary.BigEndian.PutUint16(v9[0:2], 9)
-	if _, err := conn.Write(v9); err != nil {
+	// Minimal valid IPFIX message header: 16 bytes with version field == 10.
+	msg := make([]byte, 16)
+	binary.BigEndian.PutUint16(msg[0:2], 10)
+	if _, err := conn.Write(msg); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

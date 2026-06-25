@@ -93,7 +93,7 @@ func run() (err error) {
 		dec  decoder.Decoder
 	}{
 		{"netflow5", cfg.Receiver.Ports.NetFlow5, netflow5.New()},
-		{"netflow9", cfg.Receiver.Ports.NetFlow9, netflow9.New()},
+		{"netflow9", cfg.Receiver.Ports.NetFlow9, netflow9.New(m.TemplatesReceived, m.TemplateUnknown)},
 		{"ipfix", cfg.Receiver.Ports.IPFIX, ipfix.New()},
 	}
 

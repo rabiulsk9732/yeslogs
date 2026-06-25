@@ -25,6 +25,8 @@ type Metrics struct {
 	FlowsDropped       prometheus.Counter // dropped without insertion (queue full / shutdown)
 	FlowsRejected      prometheus.Counter // rejected by ClickHouse on append
 	InsertErrors       prometheus.Counter
+	TemplatesReceived  prometheus.Counter // NetFlow v9/IPFIX templates parsed
+	TemplateUnknown    prometheus.Counter // data flowsets referencing an unknown template
 	QueueSize          prometheus.Gauge
 
 	reg *prometheus.Registry
@@ -49,6 +51,8 @@ func New() *Metrics {
 		FlowsDropped:       counter("flows_dropped_total", "Flow records dropped without insertion (writer queue full or shutdown deadline)."),
 		FlowsRejected:      counter("flows_rejected_total", "Flow records rejected by ClickHouse during row append."),
 		InsertErrors:       counter("insert_errors_total", "ClickHouse batch insert failures after retries."),
+		TemplatesReceived:  counter("templates_received_total", "NetFlow v9/IPFIX templates parsed from exporters."),
+		TemplateUnknown:    counter("template_unknown_total", "Data flowsets dropped because their template was not yet known."),
 	}
 	m.QueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "current_queue_size",

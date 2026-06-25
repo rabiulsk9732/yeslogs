@@ -29,6 +29,7 @@ const (
 
 type config struct {
 	target      string
+	proto       string
 	pps         int
 	flowsPerPkt int
 	duration    time.Duration
@@ -50,6 +51,7 @@ type counters struct {
 func main() {
 	cfg := config{}
 	flag.StringVar(&cfg.target, "target", "127.0.0.1:2055", "collector UDP address host:port")
+	flag.StringVar(&cfg.proto, "proto", "netflow5", "protocol to generate: netflow5 | netflow9")
 	flag.IntVar(&cfg.pps, "pps", 1000, "target packets per second (across all senders)")
 	flag.IntVar(&cfg.flowsPerPkt, "flows-per-packet", 30, "flow records per packet (max 30)")
 	flag.DurationVar(&cfg.duration, "duration", 30*time.Second, "how long to send")
@@ -77,6 +79,9 @@ func run(cfg config) error {
 	if cfg.dnsPct+cfg.privatePct+cfg.zeroBytePct > 100 {
 		return fmt.Errorf("dns+private+zero-byte percentages exceed 100")
 	}
+	if cfg.proto != "netflow5" && cfg.proto != "netflow9" {
+		return fmt.Errorf("proto must be netflow5 or netflow9, got %q", cfg.proto)
+	}
 	if cfg.pps < 1 {
 		return fmt.Errorf("pps must be >= 1")
 	}
@@ -87,11 +92,10 @@ func run(cfg config) error {
 		cfg.ringSize = 1
 	}
 
-	ring := buildRing(cfg)
-	pktBytes := int64(v5HeaderLen + cfg.flowsPerPkt*v5RecordLen)
+	ring, tmpl := buildRing(cfg)
 
-	fmt.Printf("benchgen -> %s | pps=%d senders=%d flows/pkt=%d (%.1f flows/s) dur=%s mix[dns=%d%% priv=%d%% zero=%d%%]\n",
-		cfg.target, cfg.pps, cfg.senders, cfg.flowsPerPkt,
+	fmt.Printf("benchgen [%s] -> %s | pps=%d senders=%d flows/pkt=%d (%.1f flows/s) dur=%s mix[dns=%d%% priv=%d%% zero=%d%%]\n",
+		cfg.proto, cfg.target, cfg.pps, cfg.senders, cfg.flowsPerPkt,
 		float64(cfg.pps)*float64(cfg.flowsPerPkt), cfg.duration,
 		cfg.dnsPct, cfg.privatePct, cfg.zeroBytePct)
 
@@ -101,7 +105,7 @@ func run(cfg config) error {
 	// Per-second reporter.
 	var repWG sync.WaitGroup
 	repWG.Add(1)
-	go report(&c, pktBytes, stop, &repWG)
+	go report(&c, stop, &repWG)
 
 	// Senders.
 	perSender := float64(cfg.pps) / float64(cfg.senders)
@@ -111,7 +115,7 @@ func run(cfg config) error {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			sender(cfg, ring, perSender, start, &c, id)
+			sender(cfg, ring, tmpl, perSender, start, &c, id)
 		}(s)
 	}
 	wg.Wait()
@@ -126,9 +130,14 @@ func run(cfg config) error {
 	return nil
 }
 
+// templateRefreshEvery re-sends the v9 template periodically so a fresh
+// collector (or one that expired the template) can resume decoding.
+const templateRefreshEvery = 2000
+
 // sender paces its share of the packet rate using a self-correcting accumulator
-// and writes pre-built packets round-robin over the ring.
-func sender(cfg config, ring [][]byte, perSec float64, start time.Time, c *counters, id int) {
+// and writes pre-built packets round-robin over the ring. For NetFlow v9 it
+// injects the template packet first and every templateRefreshEvery packets.
+func sender(cfg config, ring [][]byte, tmpl []byte, perSec float64, start time.Time, c *counters, id int) {
 	conn, err := net.Dial("udp", cfg.target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sender %d dial: %v\n", id, err)
@@ -138,7 +147,7 @@ func sender(cfg config, ring [][]byte, perSec float64, start time.Time, c *count
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(id)))
 	idx := rng.Intn(len(ring))
-	var sent int64
+	var sent, n int64
 
 	for {
 		elapsed := time.Since(start)
@@ -147,13 +156,21 @@ func sender(cfg config, ring [][]byte, perSec float64, start time.Time, c *count
 		}
 		target := int64(elapsed.Seconds() * perSec)
 		for sent < target {
-			pkt := ring[idx%len(ring)]
-			idx++
+			var pkt []byte
+			flows := int64(0)
+			if tmpl != nil && n%templateRefreshEvery == 0 {
+				pkt = tmpl // v9 template (carries no flows)
+			} else {
+				pkt = ring[idx%len(ring)]
+				idx++
+				flows = int64(cfg.flowsPerPkt)
+			}
+			n++
 			if _, err := conn.Write(pkt); err != nil {
 				c.errors.Add(1)
 			} else {
 				c.packets.Add(1)
-				c.flows.Add(int64(cfg.flowsPerPkt))
+				c.flows.Add(flows)
 				c.bytes.Add(int64(len(pkt)))
 			}
 			sent++
@@ -162,9 +179,8 @@ func sender(cfg config, ring [][]byte, perSec float64, start time.Time, c *count
 	}
 }
 
-func report(c *counters, pktBytes int64, stop <-chan struct{}, wg *sync.WaitGroup) {
+func report(c *counters, stop <-chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
-	_ = pktBytes
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var lastP, lastF, lastB, lastE int64
@@ -184,30 +200,122 @@ func report(c *counters, pktBytes int64, stop <-chan struct{}, wg *sync.WaitGrou
 	}
 }
 
-// buildRing pre-builds a ring of distinct valid v5 packets whose flows follow
-// the requested category mix, so the hot send loop does no per-packet encoding.
-func buildRing(cfg config) [][]byte {
+// buildRing pre-builds a ring of distinct valid packets whose flows follow the
+// requested category mix, so the hot send loop does no per-packet encoding. For
+// NetFlow v9 it also returns the template packet to inject periodically.
+func buildRing(cfg config) (ring [][]byte, tmpl []byte) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	now := uint32(time.Now().Unix())
 	sysUptime := uint32(3_600_000) // 1h of uptime in ms
 
-	ring := make([][]byte, cfg.ringSize)
-	for i := range ring {
-		pkt := make([]byte, v5HeaderLen+cfg.flowsPerPkt*v5RecordLen)
-		binary.BigEndian.PutUint16(pkt[0:2], 5)
-		binary.BigEndian.PutUint16(pkt[2:4], uint16(cfg.flowsPerPkt))
-		binary.BigEndian.PutUint32(pkt[4:8], sysUptime)
-		binary.BigEndian.PutUint32(pkt[8:12], now)
-		binary.BigEndian.PutUint32(pkt[12:16], 0)         // unix_nsecs
-		binary.BigEndian.PutUint32(pkt[16:20], uint32(i)) // flow_sequence
-
-		for j := 0; j < cfg.flowsPerPkt; j++ {
-			off := v5HeaderLen + j*v5RecordLen
-			fillRecord(pkt[off:off+v5RecordLen], cfg, rng, sysUptime)
+	ring = make([][]byte, cfg.ringSize)
+	if cfg.proto == "netflow9" {
+		tmpl = v9TemplatePacket(now, sysUptime)
+		for i := range ring {
+			ring[i] = v9DataPacket(cfg, rng, now, sysUptime)
 		}
-		ring[i] = pkt
+		return ring, tmpl
 	}
-	return ring
+	for i := range ring {
+		ring[i] = v5Packet(cfg, rng, now, sysUptime, i)
+	}
+	return ring, nil
+}
+
+func v5Packet(cfg config, rng *rand.Rand, now, sysUptime uint32, seq int) []byte {
+	pkt := make([]byte, v5HeaderLen+cfg.flowsPerPkt*v5RecordLen)
+	binary.BigEndian.PutUint16(pkt[0:2], 5)
+	binary.BigEndian.PutUint16(pkt[2:4], uint16(cfg.flowsPerPkt))
+	binary.BigEndian.PutUint32(pkt[4:8], sysUptime)
+	binary.BigEndian.PutUint32(pkt[8:12], now)
+	binary.BigEndian.PutUint32(pkt[12:16], 0)           // unix_nsecs
+	binary.BigEndian.PutUint32(pkt[16:20], uint32(seq)) // flow_sequence
+	for j := 0; j < cfg.flowsPerPkt; j++ {
+		off := v5HeaderLen + j*v5RecordLen
+		fillRecord(pkt[off:off+v5RecordLen], cfg, rng, sysUptime)
+	}
+	return pkt
+}
+
+// --- NetFlow v9 generation -------------------------------------------------
+
+const (
+	v9TemplateID = 256
+	v9SourceID   = 1
+	v9RecordLen  = 29 // src4 dst4 sport2 dport2 proto1 bytes4 pkts4 first4 last4
+)
+
+// v9 field (type,length) pairs matching the record layout below.
+var v9TemplateFields = [][2]uint16{
+	{8, 4}, {12, 4}, {7, 2}, {11, 2}, {4, 1}, {1, 4}, {2, 4}, {22, 4}, {21, 4},
+}
+
+func v9Header(count uint16, now, sysUptime uint32) []byte {
+	h := make([]byte, 20)
+	binary.BigEndian.PutUint16(h[0:2], 9)
+	binary.BigEndian.PutUint16(h[2:4], count)
+	binary.BigEndian.PutUint32(h[4:8], sysUptime)
+	binary.BigEndian.PutUint32(h[8:12], now)
+	binary.BigEndian.PutUint32(h[12:16], 0)          // package_sequence
+	binary.BigEndian.PutUint32(h[16:20], v9SourceID) // source_id
+	return h
+}
+
+func v9TemplatePacket(now, sysUptime uint32) []byte {
+	body := make([]byte, 4+len(v9TemplateFields)*4)
+	binary.BigEndian.PutUint16(body[0:2], v9TemplateID)
+	binary.BigEndian.PutUint16(body[2:4], uint16(len(v9TemplateFields)))
+	for i, f := range v9TemplateFields {
+		o := 4 + i*4
+		binary.BigEndian.PutUint16(body[o:o+2], f[0])
+		binary.BigEndian.PutUint16(body[o+2:o+4], f[1])
+	}
+	fs := make([]byte, 4+len(body))
+	binary.BigEndian.PutUint16(fs[0:2], 0) // template flowset id
+	binary.BigEndian.PutUint16(fs[2:4], uint16(len(fs)))
+	copy(fs[4:], body)
+	return append(v9Header(1, now, sysUptime), fs...)
+}
+
+func v9DataPacket(cfg config, rng *rand.Rand, now, sysUptime uint32) []byte {
+	dataLen := cfg.flowsPerPkt * v9RecordLen
+	fs := make([]byte, 4+dataLen)
+	binary.BigEndian.PutUint16(fs[0:2], v9TemplateID) // data flowset id == template id
+	binary.BigEndian.PutUint16(fs[2:4], uint16(len(fs)))
+	for j := 0; j < cfg.flowsPerPkt; j++ {
+		off := 4 + j*v9RecordLen
+		fillV9Record(fs[off:off+v9RecordLen], cfg, rng, sysUptime)
+	}
+	return append(v9Header(uint16(cfg.flowsPerPkt), now, sysUptime), fs...)
+}
+
+func fillV9Record(r []byte, cfg config, rng *rand.Rand, sysUptime uint32) {
+	var src, dst net.IP
+	var sp, dp uint16
+	octets := uint32(64 + rng.Intn(1<<16))
+	pkts := uint32(1 + rng.Intn(64))
+	proto := uint8(6)
+
+	switch category(cfg, rng) {
+	case catDNS:
+		src, dst, sp, dp, proto = privateIP(rng), publicIP(rng), ephemeralPort(rng), 53, 17
+	case catPrivate:
+		src, dst, sp, dp = privateIP(rng), privateIP(rng), ephemeralPort(rng), uint16(1+rng.Intn(1024))
+	case catZero:
+		src, dst, sp, dp, octets = privateIP(rng), publicIP(rng), ephemeralPort(rng), 443, 0
+	default:
+		src, dst, sp, dp = privateIP(rng), publicIP(rng), ephemeralPort(rng), []uint16{80, 443, 8080, 22}[rng.Intn(4)]
+	}
+
+	copy(r[0:4], src.To4())
+	copy(r[4:8], dst.To4())
+	binary.BigEndian.PutUint16(r[8:10], sp)
+	binary.BigEndian.PutUint16(r[10:12], dp)
+	r[12] = proto
+	binary.BigEndian.PutUint32(r[13:17], octets)
+	binary.BigEndian.PutUint32(r[17:21], pkts)
+	binary.BigEndian.PutUint32(r[21:25], sysUptime-uint32(2000+rng.Intn(60000))) // first
+	binary.BigEndian.PutUint32(r[25:29], sysUptime-uint32(rng.Intn(2000)))       // last
 }
 
 // fillRecord writes one 48-byte v5 record of a category chosen by the mix.
