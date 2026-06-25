@@ -49,7 +49,8 @@ internal/logger          structured JSON logging (slog, reloadable level)
 configs/collector.yaml   configuration
 migrations/clickhouse.sql flow_logs schema
 systemd/                 service unit
-deploy/                  logrotate + firewall example
+deploy/                  logrotate, firewall, ClickHouse tuning, Grafana dashboard
+docs/devices/            per-vendor onboarding guides
 scripts/                 build / install / test-send / benchmark / healthcheck / backup / archive-day
 ```
 
@@ -155,6 +156,23 @@ Start with `writer_workers` ≈ CPU cores and a `batch_size` of 10k–50k. If
 `writer_queue_size{worker=...}` climbs and `writer_queue_dropped_total` rises,
 ClickHouse insert is the bottleneck — add ClickHouse resources or raise
 `batch_size`. `writer_insert_latency_ms` shows per-batch insert latency.
+
+### Advanced tuning (v0.4.0)
+
+| Knob | Reload | Effect |
+| ---- | ------ | ------ |
+| `clickhouse.compression` | restart | `lz4` (default) / `lz4hc` / `zstd` / `none`. `none` trades network for CPU (use on loopback/LAN). |
+| `clickhouse.max_open_conns` | restart | Cap concurrent ClickHouse connections (0 = auto). |
+| `clickhouse.async_insert` | hot | Use ClickHouse server-side async inserts (per-INSERT setting). |
+| `clickhouse.wait_for_async_insert` | hot | `true` durable ack; `false` fire-and-forget (fastest, weaker durability). |
+
+Throughput is dominated by ClickHouse merge/CPU, not client batching — the
+native batch path already sends large blocks, so the biggest wins are dedicated
+ClickHouse cores/disk plus more `writer_workers`. See
+`deploy/clickhouse/` for a server tuning profile and guidance, and
+`deploy/grafana/natflow-dashboard.json` for a **queue-pressure dashboard**
+(ingest rates, per-worker queue depth, insert-latency percentiles, drops,
+backpressure, device-registry activity).
 
 ## S3 archive
 

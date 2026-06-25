@@ -72,6 +72,13 @@ type ClickHouseConfig struct {
 	RetryBackoffMS   int    `yaml:"retry_backoff_ms"`
 	ShutdownDrainMS  int    `yaml:"shutdown_drain_ms"`
 	QueueCapacity    int    `yaml:"queue_capacity"` // deprecated alias for max_queue_rows
+
+	// Tuning (v0.4.0).
+	Compression              string `yaml:"compression"`           // lz4 | lz4hc | zstd | none (native protocol)
+	MaxOpenConns             int    `yaml:"max_open_conns"`        // 0 = auto (writer_workers*2+2, min 8)
+	AsyncInsert              bool   `yaml:"async_insert"`          // use ClickHouse server-side async inserts
+	WaitForAsyncInsert       *bool  `yaml:"wait_for_async_insert"` // nil => true (durable); false => fire-and-forget
+	AsyncInsertBusyTimeoutMS int    `yaml:"async_insert_busy_timeout_ms"`
 }
 
 // RulesConfig toggles the skip filters.
@@ -173,6 +180,10 @@ type Live struct {
 	Backpressure     BackpressureMode
 	UnknownMode      device.UnknownMode
 
+	AsyncInsert              bool
+	WaitForAsyncInsert       bool
+	AsyncInsertBusyTimeoutMS int
+
 	S3Enabled          bool
 	S3ArchiveAfterDays int
 }
@@ -188,13 +199,16 @@ func (c *Config) Live() Live {
 			SkipPrivateToPrivate: c.Rules.SkipPrivateToPrivate,
 			SkipZeroBytes:        c.Rules.SkipZeroBytes,
 		},
-		BatchSize:          c.ClickHouse.BatchSize,
-		FlushInterval:      c.ClickHouse.FlushInterval(),
-		RetryMaxAttempts:   c.ClickHouse.RetryMaxAttempts,
-		RetryBackoff:       c.ClickHouse.RetryBackoff(),
-		Backpressure:       mode,
-		S3Enabled:          c.S3.Enabled,
-		S3ArchiveAfterDays: c.S3.ArchiveAfterDays,
+		BatchSize:                c.ClickHouse.BatchSize,
+		FlushInterval:            c.ClickHouse.FlushInterval(),
+		RetryMaxAttempts:         c.ClickHouse.RetryMaxAttempts,
+		RetryBackoff:             c.ClickHouse.RetryBackoff(),
+		Backpressure:             mode,
+		AsyncInsert:              c.ClickHouse.AsyncInsert,
+		WaitForAsyncInsert:       c.ClickHouse.WaitForAsyncInsert == nil || *c.ClickHouse.WaitForAsyncInsert,
+		AsyncInsertBusyTimeoutMS: c.ClickHouse.AsyncInsertBusyTimeoutMS,
+		S3Enabled:                c.S3.Enabled,
+		S3ArchiveAfterDays:       c.S3.ArchiveAfterDays,
 	}
 }
 
@@ -232,6 +246,8 @@ func NonReloadableChanges(old, next *Config) []string {
 	add("clickhouse.database", old.ClickHouse.Database != next.ClickHouse.Database)
 	add("clickhouse.username", old.ClickHouse.Username != next.ClickHouse.Username)
 	add("clickhouse.password", old.ClickHouse.Password != next.ClickHouse.Password)
+	add("clickhouse.compression", old.ClickHouse.Compression != next.ClickHouse.Compression)
+	add("clickhouse.max_open_conns", old.ClickHouse.MaxOpenConns != next.ClickHouse.MaxOpenConns)
 	add("metrics.bind", old.Metrics.Bind != next.Metrics.Bind)
 	return changed
 }
@@ -309,6 +325,9 @@ func (c *Config) applyDefaults() {
 	if c.ClickHouse.ShutdownDrainMS <= 0 {
 		c.ClickHouse.ShutdownDrainMS = 15000
 	}
+	if c.ClickHouse.Compression == "" {
+		c.ClickHouse.Compression = "lz4"
+	}
 	if c.Pipeline.BackpressureMode == "" {
 		c.Pipeline.BackpressureMode = "drop_new"
 	}
@@ -356,6 +375,12 @@ func (c *Config) validate() error {
 	if c.ClickHouse.MaxQueueRows < c.ClickHouse.BatchSize {
 		return fmt.Errorf("clickhouse.max_queue_rows (%d) must be >= batch_size (%d)",
 			c.ClickHouse.MaxQueueRows, c.ClickHouse.BatchSize)
+	}
+	switch c.ClickHouse.Compression {
+	case "lz4", "lz4hc", "zstd", "none":
+	default:
+		// gzip is HTTP-only; the native protocol supports lz4/lz4hc/zstd/none.
+		return fmt.Errorf("clickhouse.compression %q must be lz4|lz4hc|zstd|none", c.ClickHouse.Compression)
 	}
 	if _, err := ParseBackpressure(c.Pipeline.BackpressureMode); err != nil {
 		return err

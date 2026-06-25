@@ -1,0 +1,111 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "type": "datasource",
+      "pluginId": "prometheus"
+    }
+  ],
+  "title": "NATFlow Dataplane",
+  "uid": "natflow-dataplane",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ingest pipeline (flows/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "fps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(packets_received_total[1m])", "legendFormat": "packets/s" },
+        { "refId": "B", "expr": "rate(flows_decoded_total[1m])", "legendFormat": "decoded" },
+        { "refId": "C", "expr": "rate(flows_skipped_total[1m])", "legendFormat": "skipped" },
+        { "refId": "D", "expr": "rate(flows_inserted_total[1m])", "legendFormat": "inserted" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Drops & errors (/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "cps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(flows_dropped_total[1m])", "legendFormat": "flows dropped (queue/shutdown)" },
+        { "refId": "B", "expr": "sum(rate(writer_queue_dropped_total[1m]))", "legendFormat": "backpressure drops" },
+        { "refId": "C", "expr": "rate(insert_errors_total[1m])", "legendFormat": "insert errors" },
+        { "refId": "D", "expr": "rate(flows_rejected_total[1m])", "legendFormat": "row rejections" },
+        { "refId": "E", "expr": "rate(packets_dropped_total[1m])", "legendFormat": "malformed packets" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Writer queue depth (pressure)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "current_queue_size", "legendFormat": "total queued" },
+        { "refId": "B", "expr": "writer_queue_size", "legendFormat": "worker {{worker}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Insert latency (ms)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, rate(writer_insert_latency_ms_bucket[5m]))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, rate(writer_insert_latency_ms_bucket[5m]))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, rate(writer_insert_latency_ms_bucket[5m]))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Writer batches",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(writer_batches_total[1m])", "legendFormat": "batches/s" },
+        { "refId": "B", "expr": "rate(writer_batch_rows_total[1m])", "legendFormat": "rows/s" },
+        { "refId": "C", "expr": "rate(writer_retries_total[1m])", "legendFormat": "retries/s" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Device registry & exporters (/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "device_registry_entries", "legendFormat": "registered devices" },
+        { "refId": "B", "expr": "rate(device_matched_packets_total[1m])", "legendFormat": "matched pkts/s" },
+        { "refId": "C", "expr": "rate(device_rejected_packets_total[1m])", "legendFormat": "rejected pkts/s" },
+        { "refId": "D", "expr": "rate(unknown_exporter_packets_total[1m])", "legendFormat": "unknown pkts/s" }
+      ]
+    }
+  ]
+}

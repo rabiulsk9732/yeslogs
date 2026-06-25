@@ -1,0 +1,26 @@
+<!--
+  ClickHouse server tuning profile for high-rate flow ingest.
+  Install to: /etc/clickhouse-server/config.d/natflow-tuning.xml
+  then: systemctl restart clickhouse-server
+
+  These are conservative, broadly-compatible settings. Adjust to your hardware.
+  async_insert itself is driven per-INSERT by the collector
+  (clickhouse.async_insert in collector.yaml); the asynchronous_insert_log below
+  lets you observe it via system.asynchronous_insert_log.
+-->
+<clickhouse>
+    <merge_tree>
+        <!-- Tolerate more in-flight parts during ingest bursts before ClickHouse
+             delays/throws inserts; raise if you see "Too many parts". -->
+        <parts_to_delay_insert>2000</parts_to_delay_insert>
+        <parts_to_throw_insert>6000</parts_to_throw_insert>
+        <max_parts_in_total>200000</max_parts_in_total>
+    </merge_tree>
+
+    <!-- Surface async insert activity for the dashboard / debugging. -->
+    <asynchronous_insert_log>
+        <database>system</database>
+        <table>asynchronous_insert_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </asynchronous_insert_log>
+</clickhouse>

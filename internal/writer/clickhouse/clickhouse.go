@@ -69,17 +69,34 @@ type Manager struct {
 	aggWG    sync.WaitGroup
 }
 
+// compressionMethod maps the config string to a clickhouse compression method.
+func compressionMethod(s string) clickhouse.CompressionMethod {
+	switch s {
+	case "none":
+		return clickhouse.CompressionNone
+	case "zstd":
+		return clickhouse.CompressionZSTD
+	case "lz4hc":
+		return clickhouse.CompressionLZ4HC
+	default:
+		return clickhouse.CompressionLZ4
+	}
+}
+
 // Connect opens and pings a ClickHouse connection. Exported for reuse by the
 // archive exporter.
 func Connect(ch config.ClickHouseConfig) (driver.Conn, error) {
-	maxConns := ch.WriterWorkers*2 + 2
-	if maxConns < 8 {
-		maxConns = 8
+	maxConns := ch.MaxOpenConns
+	if maxConns <= 0 {
+		maxConns = ch.WriterWorkers*2 + 2
+		if maxConns < 8 {
+			maxConns = 8
+		}
 	}
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr:         []string{ch.Addr},
 		Auth:         clickhouse.Auth{Database: ch.Database, Username: ch.Username, Password: ch.Password},
-		Compression:  &clickhouse.Compression{Method: clickhouse.CompressionLZ4},
+		Compression:  &clickhouse.Compression{Method: compressionMethod(ch.Compression)},
 		DialTimeout:  5 * time.Second,
 		MaxOpenConns: maxConns,
 		MaxIdleConns: ch.WriterWorkers,
@@ -430,9 +447,30 @@ func (s *shard) salvage(batch []normalizer.FlowRecord) {
 	}
 }
 
+// insertSettings returns the per-INSERT ClickHouse settings for async inserts,
+// or nil when async inserts are disabled.
+func insertSettings(live *config.Live) clickhouse.Settings {
+	if !live.AsyncInsert {
+		return nil
+	}
+	s := clickhouse.Settings{"async_insert": 1}
+	if live.WaitForAsyncInsert {
+		s["wait_for_async_insert"] = 1
+	} else {
+		s["wait_for_async_insert"] = 0
+	}
+	if live.AsyncInsertBusyTimeoutMS > 0 {
+		s["async_insert_busy_timeout_ms"] = live.AsyncInsertBusyTimeoutMS
+	}
+	return s
+}
+
 func (s *shard) send(batch []normalizer.FlowRecord) error {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
+	if set := insertSettings(s.mgr.live.Load()); set != nil {
+		ctx = clickhouse.Context(ctx, clickhouse.WithSettings(set))
+	}
 	b, err := s.mgr.conn.PrepareBatch(ctx, s.mgr.insert)
 	if err != nil {
 		return fmt.Errorf("prepare batch: %w", err)

@@ -25,6 +25,30 @@ func TestDefaultsAndValidate(t *testing.T) {
 	if c.S3.ExportFormat != "csvgz" {
 		t.Errorf("export_format default = %q", c.S3.ExportFormat)
 	}
+	if c.ClickHouse.Compression != "lz4" {
+		t.Errorf("compression default = %q", c.ClickHouse.Compression)
+	}
+}
+
+func TestTuningDefaultsAndValidation(t *testing.T) {
+	// wait_for_async_insert defaults to true (durable) when unset.
+	c := base()
+	if !c.Live().WaitForAsyncInsert {
+		t.Error("wait_for_async_insert should default to true")
+	}
+	f := false
+	c.ClickHouse.WaitForAsyncInsert = &f
+	c.ClickHouse.AsyncInsert = true
+	l := c.Live()
+	if l.WaitForAsyncInsert || !l.AsyncInsert {
+		t.Errorf("async/wait mapping wrong: async=%v wait=%v", l.AsyncInsert, l.WaitForAsyncInsert)
+	}
+
+	bad := base()
+	bad.ClickHouse.Compression = "snappy"
+	if err := bad.validate(); err == nil {
+		t.Error("want error for invalid compression")
+	}
 }
 
 func TestQueueCapacityLegacyAlias(t *testing.T) {
@@ -96,8 +120,13 @@ func TestNonReloadableChanges(t *testing.T) {
 	next.Receiver.BindIP = "10.0.0.1"
 	next.ClickHouse.Addr = "other:9000"
 	next.Receiver.Ports.NetFlow5 = 3055
+	next.ClickHouse.Compression = "zstd"
+	next.ClickHouse.MaxOpenConns = 99
 	c := NonReloadableChanges(old, next)
-	want := map[string]bool{"receiver.bind_ip": true, "clickhouse.addr": true, "receiver.ports": true}
+	want := map[string]bool{
+		"receiver.bind_ip": true, "clickhouse.addr": true, "receiver.ports": true,
+		"clickhouse.compression": true, "clickhouse.max_open_conns": true,
+	}
 	for _, name := range c {
 		delete(want, name)
 	}

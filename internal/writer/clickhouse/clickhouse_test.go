@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/natflow/natflow-dataplane/internal/config"
@@ -99,6 +100,35 @@ func TestBackpressureDropOld(t *testing.T) {
 // TestReloadEnqueueNoRace exercises concurrent Enqueue (pool.Load) against
 // Reload-style pool swaps (pool.Store) so `go test -race` validates the atomic
 // pool pointer. Pools are not started (no ClickHouse connection needed).
+func TestInsertSettings(t *testing.T) {
+	if s := insertSettings(&config.Live{AsyncInsert: false}); s != nil {
+		t.Errorf("async off should yield nil settings, got %v", s)
+	}
+	s := insertSettings(&config.Live{AsyncInsert: true, WaitForAsyncInsert: true})
+	if s["async_insert"] != 1 || s["wait_for_async_insert"] != 1 {
+		t.Errorf("async+wait settings wrong: %v", s)
+	}
+	s = insertSettings(&config.Live{AsyncInsert: true, WaitForAsyncInsert: false, AsyncInsertBusyTimeoutMS: 200})
+	if s["wait_for_async_insert"] != 0 {
+		t.Errorf("fire-and-forget should set wait=0, got %v", s["wait_for_async_insert"])
+	}
+	if s["async_insert_busy_timeout_ms"] != 200 {
+		t.Errorf("busy timeout not set: %v", s["async_insert_busy_timeout_ms"])
+	}
+}
+
+func TestCompressionMethod(t *testing.T) {
+	if compressionMethod("none") != clickhouse.CompressionNone {
+		t.Error("none")
+	}
+	if compressionMethod("zstd") != clickhouse.CompressionZSTD {
+		t.Error("zstd")
+	}
+	if compressionMethod("") != clickhouse.CompressionLZ4 {
+		t.Error("default lz4")
+	}
+}
+
 func TestReloadEnqueueNoRace(t *testing.T) {
 	mgr, _ := testManager(config.DropNew)
 	mgr.pool.Store(newPool(mgr, 2, 4))

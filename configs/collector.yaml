@@ -32,6 +32,12 @@ clickhouse:
   retry_max_attempts: 3
   retry_backoff_ms: 250
   shutdown_drain_ms: 15000
+  # Tuning (see deploy/clickhouse/README.md). compression/max_open_conns need a
+  # restart; async_insert/wait_for_async_insert are hot-reloadable.
+  compression: "lz4"            # lz4 | lz4hc | zstd | none
+  max_open_conns: 0             # 0 = auto (writer_workers*2+2, min 8)
+  async_insert: false           # ClickHouse server-side async inserts
+  wait_for_async_insert: true   # false = fire-and-forget (higher tput, weaker durability)
 
 pipeline:
   backpressure_mode: "drop_new"   # block | drop_new | drop_old
