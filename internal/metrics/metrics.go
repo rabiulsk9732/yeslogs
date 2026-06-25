@@ -27,7 +27,26 @@ type Metrics struct {
 	InsertErrors       prometheus.Counter
 	TemplatesReceived  prometheus.Counter // NetFlow v9/IPFIX templates parsed
 	TemplateUnknown    prometheus.Counter // data flowsets referencing an unknown template
-	QueueSize          prometheus.Gauge
+	QueueSize          prometheus.Gauge   // aggregate writer queue depth
+
+	// Runtime config reload.
+	ConfigReloads      prometheus.Counter
+	ConfigReloadErrors prometheus.Counter
+
+	// Sharded writer pool.
+	WriterBatches       prometheus.Counter
+	WriterBatchRows     prometheus.Counter
+	WriterRetries       prometheus.Counter
+	WriterInsertLatency prometheus.Histogram
+	WriterQueueSize     *prometheus.GaugeVec   // labeled by worker
+	WriterQueueDropped  *prometheus.CounterVec // labeled by worker
+
+	// Archive.
+	ArchiveRuns          prometheus.Counter
+	ArchiveRows          prometheus.Counter
+	ArchiveBytes         prometheus.Counter
+	ArchiveErrors        prometheus.Counter
+	ArchiveUploadLatency prometheus.Histogram
 
 	reg *prometheus.Registry
 }
@@ -56,9 +75,43 @@ func New() *Metrics {
 	}
 	m.QueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "current_queue_size",
-		Help: "Flow records currently buffered in the writer queue.",
+		Help: "Flow records currently buffered across all writer queues.",
 	})
 	reg.MustRegister(m.QueueSize)
+
+	m.ConfigReloads = counter("config_reloads_total", "Successful runtime config reloads.")
+	m.ConfigReloadErrors = counter("config_reload_errors_total", "Failed runtime config reloads.")
+
+	m.WriterBatches = counter("writer_batches_total", "Batches sent to ClickHouse across all writers.")
+	m.WriterBatchRows = counter("writer_batch_rows_total", "Rows sent to ClickHouse in batches.")
+	m.WriterRetries = counter("writer_retries_total", "Writer batch send retries.")
+	m.WriterInsertLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "writer_insert_latency_ms",
+		Help:    "ClickHouse batch insert latency in milliseconds.",
+		Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000},
+	})
+	reg.MustRegister(m.WriterInsertLatency)
+	m.WriterQueueSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "writer_queue_size",
+		Help: "Flow records currently buffered in each writer queue.",
+	}, []string{"worker"})
+	reg.MustRegister(m.WriterQueueSize)
+	m.WriterQueueDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "writer_queue_dropped_total",
+		Help: "Flow records dropped by each writer queue due to backpressure.",
+	}, []string{"worker"})
+	reg.MustRegister(m.WriterQueueDropped)
+
+	m.ArchiveRuns = counter("archive_runs_total", "Archive export runs.")
+	m.ArchiveRows = counter("archive_rows_total", "Rows exported by archive runs.")
+	m.ArchiveBytes = counter("archive_bytes_total", "Bytes uploaded by archive runs.")
+	m.ArchiveErrors = counter("archive_errors_total", "Archive export/upload failures.")
+	m.ArchiveUploadLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "archive_upload_latency_ms",
+		Help:    "Archive upload latency in milliseconds.",
+		Buckets: []float64{10, 50, 100, 250, 500, 1000, 5000, 30000, 120000},
+	})
+	reg.MustRegister(m.ArchiveUploadLatency)
 	// Go runtime + process metrics are handy for ops dashboards.
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))

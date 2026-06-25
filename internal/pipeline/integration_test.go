@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/natflow/natflow-dataplane/internal/config"
 	"github.com/natflow/natflow-dataplane/internal/decoder"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
@@ -19,6 +20,12 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/receiver"
 	"github.com/natflow/natflow-dataplane/internal/rules"
 )
+
+func liveStore() *config.Store {
+	return config.NewStore(config.Live{
+		Rules: rules.RuleSet{SkipDNS: true, SkipPrivateToPrivate: true, SkipZeroBytes: true},
+	})
+}
 
 // captureWriter stands in for the ClickHouse writer at the pipeline boundary.
 type captureWriter struct {
@@ -76,7 +83,7 @@ func TestEndToEndNetFlow5(t *testing.T) {
 	p := pipeline.New(
 		netflow5.New(),
 		normalizer.New(42, 7),
-		rules.New(true, true, true), // skip DNS / private->private / zero-byte
+		liveStore(), // skip DNS / private->private / zero-byte
 		w, m, log,
 	)
 
@@ -152,7 +159,7 @@ func TestUnsupportedProtocolCounted(t *testing.T) {
 	m := metrics.New()
 	w := &captureWriter{}
 
-	p := pipeline.New(unsupportedDecoder{}, normalizer.New(1, 0), rules.New(true, true, true), w, m, log)
+	p := pipeline.New(unsupportedDecoder{}, normalizer.New(1, 0), liveStore(), w, m, log)
 	rcv, err := receiver.New("fake", "127.0.0.1", 0, 1, 0, p, m, log)
 	if err != nil {
 		t.Fatalf("receiver.New: %v", err)

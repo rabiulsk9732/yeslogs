@@ -9,6 +9,8 @@ Type=simple
 User=root
 WorkingDirectory=/opt/natflow-dataplane
 ExecStart=/opt/natflow-dataplane/bin/natflow-collector --config /opt/natflow-dataplane/configs/collector.yaml
+# `systemctl reload natflow-collector` hot-reloads config without dropping flows.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=3
 

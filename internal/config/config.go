@@ -1,17 +1,19 @@
 // Package config loads, defaults and validates the collector's YAML
-// configuration.
+// configuration, and exposes the hot-reloadable subset via an atomic Store.
 package config
 
 import (
 	"bytes"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
-	"os"
-
 	"gopkg.in/yaml.v3"
+
+	"github.com/natflow/natflow-dataplane/internal/rules"
 )
 
 // Config is the top-level configuration, mirroring configs/collector.yaml.
@@ -20,6 +22,8 @@ type Config struct {
 	Receiver   ReceiverConfig   `yaml:"receiver"`
 	ClickHouse ClickHouseConfig `yaml:"clickhouse"`
 	Rules      RulesConfig      `yaml:"rules"`
+	Pipeline   PipelineConfig   `yaml:"pipeline"`
+	S3         S3Config         `yaml:"s3"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
 	Logging    LoggingConfig    `yaml:"logging"`
 }
@@ -46,16 +50,20 @@ type ReceiverConfig struct {
 	Workers         int         `yaml:"workers"`
 }
 
-// ClickHouseConfig configures the batching writer.
+// ClickHouseConfig configures the sharded batching writer pool.
 type ClickHouseConfig struct {
-	Addr            string `yaml:"addr"`
-	Database        string `yaml:"database"`
-	Username        string `yaml:"username"`
-	Password        string `yaml:"password"`
-	BatchSize       int    `yaml:"batch_size"`
-	FlushIntervalMS int    `yaml:"flush_interval_ms"`
-	QueueCapacity   int    `yaml:"queue_capacity"`
-	ShutdownDrainMS int    `yaml:"shutdown_drain_ms"`
+	Addr             string `yaml:"addr"`
+	Database         string `yaml:"database"`
+	Username         string `yaml:"username"`
+	Password         string `yaml:"password"`
+	BatchSize        int    `yaml:"batch_size"`
+	FlushIntervalMS  int    `yaml:"flush_interval_ms"`
+	WriterWorkers    int    `yaml:"writer_workers"`
+	MaxQueueRows     int    `yaml:"max_queue_rows"` // per-writer queue capacity
+	RetryMaxAttempts int    `yaml:"retry_max_attempts"`
+	RetryBackoffMS   int    `yaml:"retry_backoff_ms"`
+	ShutdownDrainMS  int    `yaml:"shutdown_drain_ms"`
+	QueueCapacity    int    `yaml:"queue_capacity"` // deprecated alias for max_queue_rows
 }
 
 // RulesConfig toggles the skip filters.
@@ -63,6 +71,24 @@ type RulesConfig struct {
 	SkipDNS              bool `yaml:"skip_dns"`
 	SkipPrivateToPrivate bool `yaml:"skip_private_to_private"`
 	SkipZeroBytes        bool `yaml:"skip_zero_bytes"`
+}
+
+// PipelineConfig configures pipeline behavior.
+type PipelineConfig struct {
+	BackpressureMode string `yaml:"backpressure_mode"` // block | drop_new | drop_old
+}
+
+// S3Config configures the S3-compatible archive target.
+type S3Config struct {
+	Enabled          bool   `yaml:"enabled"`
+	Endpoint         string `yaml:"endpoint"`
+	Region           string `yaml:"region"`
+	Bucket           string `yaml:"bucket"`
+	AccessKey        string `yaml:"access_key"`
+	SecretKey        string `yaml:"secret_key"`
+	PathPrefix       string `yaml:"path_prefix"`
+	ArchiveAfterDays int    `yaml:"archive_after_days"`
+	ExportFormat     string `yaml:"export_format"` // csvgz | parquet
 }
 
 // MetricsConfig configures the Prometheus endpoint.
@@ -81,9 +107,122 @@ func (c ClickHouseConfig) FlushInterval() time.Duration {
 	return time.Duration(c.FlushIntervalMS) * time.Millisecond
 }
 
-// ShutdownDrain returns the maximum time to drain the writer queue on shutdown.
+// RetryBackoff returns the base retry backoff as a duration.
+func (c ClickHouseConfig) RetryBackoff() time.Duration {
+	return time.Duration(c.RetryBackoffMS) * time.Millisecond
+}
+
+// ShutdownDrain returns the maximum time to drain the writer queues on shutdown.
 func (c ClickHouseConfig) ShutdownDrain() time.Duration {
 	return time.Duration(c.ShutdownDrainMS) * time.Millisecond
+}
+
+// BackpressureMode selects how a full writer queue sheds load.
+type BackpressureMode int
+
+const (
+	// DropNew drops the incoming record when the queue is full (default).
+	DropNew BackpressureMode = iota
+	// DropOld evicts the oldest queued record to make room for the new one.
+	DropOld
+	// Block applies back-pressure by blocking the producer until there is room.
+	Block
+)
+
+func (m BackpressureMode) String() string {
+	switch m {
+	case DropOld:
+		return "drop_old"
+	case Block:
+		return "block"
+	default:
+		return "drop_new"
+	}
+}
+
+// ParseBackpressure parses a backpressure mode string.
+func ParseBackpressure(s string) (BackpressureMode, error) {
+	switch s {
+	case "", "drop_new":
+		return DropNew, nil
+	case "drop_old":
+		return DropOld, nil
+	case "block":
+		return Block, nil
+	default:
+		return DropNew, fmt.Errorf("invalid backpressure_mode %q (block|drop_new|drop_old)", s)
+	}
+}
+
+// Live is the hot-reloadable subset of configuration, read atomically by the
+// running pipeline and writers.
+type Live struct {
+	Rules            rules.RuleSet
+	BatchSize        int
+	FlushInterval    time.Duration
+	RetryMaxAttempts int
+	RetryBackoff     time.Duration
+	Backpressure     BackpressureMode
+
+	S3Enabled          bool
+	S3ArchiveAfterDays int
+}
+
+// Live extracts the reloadable subset from the full config.
+func (c *Config) Live() Live {
+	mode, _ := ParseBackpressure(c.Pipeline.BackpressureMode)
+	return Live{
+		Rules: rules.RuleSet{
+			SkipDNS:              c.Rules.SkipDNS,
+			SkipPrivateToPrivate: c.Rules.SkipPrivateToPrivate,
+			SkipZeroBytes:        c.Rules.SkipZeroBytes,
+		},
+		BatchSize:          c.ClickHouse.BatchSize,
+		FlushInterval:      c.ClickHouse.FlushInterval(),
+		RetryMaxAttempts:   c.ClickHouse.RetryMaxAttempts,
+		RetryBackoff:       c.ClickHouse.RetryBackoff(),
+		Backpressure:       mode,
+		S3Enabled:          c.S3.Enabled,
+		S3ArchiveAfterDays: c.S3.ArchiveAfterDays,
+	}
+}
+
+// Store holds the current Live config behind an atomic pointer.
+type Store struct {
+	v atomic.Pointer[Live]
+}
+
+// NewStore creates a Store seeded with l.
+func NewStore(l Live) *Store {
+	s := &Store{}
+	s.v.Store(&l)
+	return s
+}
+
+// Load returns the current Live config (read-only; do not mutate).
+func (s *Store) Load() *Live { return s.v.Load() }
+
+// Store atomically replaces the current Live config.
+func (s *Store) Store(l Live) { s.v.Store(&l) }
+
+// NonReloadableChanges returns the names of immutable fields that differ between
+// old and next. A non-empty result means a reload cannot fully apply.
+func NonReloadableChanges(old, next *Config) []string {
+	var changed []string
+	add := func(name string, differs bool) {
+		if differs {
+			changed = append(changed, name)
+		}
+	}
+	add("receiver.bind_ip", old.Receiver.BindIP != next.Receiver.BindIP)
+	add("receiver.ports", old.Receiver.Ports != next.Receiver.Ports)
+	add("receiver.workers", old.Receiver.Workers != next.Receiver.Workers)
+	add("clickhouse.addr", old.ClickHouse.Addr != next.ClickHouse.Addr)
+	add("clickhouse.database", old.ClickHouse.Database != next.ClickHouse.Database)
+	add("clickhouse.username", old.ClickHouse.Username != next.ClickHouse.Username)
+	add("clickhouse.password", old.ClickHouse.Password != next.ClickHouse.Password)
+	add("metrics.bind", old.Metrics.Bind != next.Metrics.Bind)
+	return changed
 }
 
 // Load reads, parses, defaults and validates the config at path. Unknown YAML
@@ -140,12 +279,33 @@ func (c *Config) applyDefaults() {
 	if c.ClickHouse.FlushIntervalMS <= 0 {
 		c.ClickHouse.FlushIntervalMS = 1000
 	}
-	if c.ClickHouse.QueueCapacity <= 0 {
-		// Buffer roughly ten batches in flight before back-pressure/drop.
-		c.ClickHouse.QueueCapacity = c.ClickHouse.BatchSize * 10
+	if c.ClickHouse.WriterWorkers <= 0 {
+		c.ClickHouse.WriterWorkers = 4
+	}
+	if c.ClickHouse.MaxQueueRows <= 0 {
+		if c.ClickHouse.QueueCapacity > 0 {
+			c.ClickHouse.MaxQueueRows = c.ClickHouse.QueueCapacity // legacy alias
+		} else {
+			c.ClickHouse.MaxQueueRows = 100000
+		}
+	}
+	if c.ClickHouse.RetryMaxAttempts <= 0 {
+		c.ClickHouse.RetryMaxAttempts = 3
+	}
+	if c.ClickHouse.RetryBackoffMS <= 0 {
+		c.ClickHouse.RetryBackoffMS = 250
 	}
 	if c.ClickHouse.ShutdownDrainMS <= 0 {
 		c.ClickHouse.ShutdownDrainMS = 15000
+	}
+	if c.Pipeline.BackpressureMode == "" {
+		c.Pipeline.BackpressureMode = "drop_new"
+	}
+	if c.S3.ExportFormat == "" {
+		c.S3.ExportFormat = "csvgz"
+	}
+	if c.S3.Region == "" {
+		c.S3.Region = "us-east-1"
 	}
 	if c.Metrics.Bind == "" {
 		c.Metrics.Bind = "127.0.0.1:9101"
@@ -174,9 +334,28 @@ func (c *Config) validate() error {
 		}
 		seen[p] = name
 	}
-	if c.ClickHouse.QueueCapacity < c.ClickHouse.BatchSize {
-		return fmt.Errorf("clickhouse.queue_capacity (%d) must be >= batch_size (%d)",
-			c.ClickHouse.QueueCapacity, c.ClickHouse.BatchSize)
+	if c.ClickHouse.WriterWorkers < 1 || c.ClickHouse.WriterWorkers > 256 {
+		return fmt.Errorf("clickhouse.writer_workers (%d) out of range 1-256", c.ClickHouse.WriterWorkers)
+	}
+	if c.ClickHouse.MaxQueueRows < c.ClickHouse.BatchSize {
+		return fmt.Errorf("clickhouse.max_queue_rows (%d) must be >= batch_size (%d)",
+			c.ClickHouse.MaxQueueRows, c.ClickHouse.BatchSize)
+	}
+	if _, err := ParseBackpressure(c.Pipeline.BackpressureMode); err != nil {
+		return err
+	}
+	switch c.S3.ExportFormat {
+	case "csvgz", "parquet":
+	default:
+		return fmt.Errorf("s3.export_format %q must be csvgz or parquet", c.S3.ExportFormat)
+	}
+	if c.S3.Enabled {
+		if c.S3.Bucket == "" {
+			return fmt.Errorf("s3.enabled but s3.bucket is empty")
+		}
+		if c.S3.Endpoint == "" {
+			return fmt.Errorf("s3.enabled but s3.endpoint is empty")
+		}
 	}
 	return nil
 }

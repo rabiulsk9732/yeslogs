@@ -1,26 +1,32 @@
-// Package clickhouse implements a batching, retrying writer that inserts
-// FlowRecords into the ClickHouse flow_logs table. Rows are always written in
-// batches on the hot path; a single rejected row triggers a best-effort
-// row-by-row salvage so it cannot discard the whole batch.
+// Package clickhouse implements a sharded, batching, retrying writer pool that
+// inserts FlowRecords into the ClickHouse flow_logs table. Records are sharded
+// by (exporter_ip, device_id) across N independent writers, each building its
+// own batches; rows are always written in batches, never one-by-one.
 //
-// Delivery is at-least-once: a batch whose acknowledgement is lost (e.g. a
-// timeout while reading the server response after the data was already
-// committed) is retried and may produce duplicate rows. See migrations and the
-// README "Delivery semantics" section for how to make inserts idempotent.
+// The pool is hot-swappable: a config reload that changes the worker count or
+// queue capacity builds a fresh pool, atomically swaps it in, and drains the old
+// one in the background. Per-worker queues shed load according to the configured
+// backpressure mode so the collector never blocks fatally or crashes under load.
+//
+// Delivery is at-least-once (see migrations and the README "Delivery semantics").
 package clickhouse
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/natflow/natflow-dataplane/internal/config"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 )
@@ -31,61 +37,52 @@ const insertStmt = `INSERT INTO %s.flow_logs
 	 flow_start, flow_end, flow_type, exporter_ip)`
 
 const (
-	maxAttempts            = 3
-	sendTimeout            = 30 * time.Second
-	defaultShutdownTimeout = 15 * time.Second
+	sendTimeout = 30 * time.Second
+	tickEvery   = 100 * time.Millisecond
+	// drainGrace is how long a retiring shard keeps consuming after its quit
+	// signal once its queue looks empty, so an enqueue that straddled a reload
+	// pool-swap is still flushed rather than stranded in the retired channel.
+	drainGrace = 200 * time.Millisecond
 )
 
-// Config configures the writer.
-type Config struct {
-	Addr            string
-	Database        string
-	Username        string
-	Password        string
-	BatchSize       int
-	FlushInterval   time.Duration
-	QueueCapacity   int
-	ShutdownTimeout time.Duration // max time to drain the queue on Stop
-}
-
-// appendError marks a failure that occurred while appending a row to a batch.
-// Such errors are deterministic (bad/incompatible data), so they are not worth
-// retrying; the batch is salvaged row-by-row instead.
+// appendError marks a deterministic per-row append failure (not worth retrying).
 type appendError struct{ err error }
 
 func (e *appendError) Error() string { return e.err.Error() }
 func (e *appendError) Unwrap() error { return e.err }
 
-// Writer buffers FlowRecords and flushes them to ClickHouse in batches.
-type Writer struct {
-	cfg     Config
-	conn    driver.Conn
-	queue   chan normalizer.FlowRecord
-	metrics *metrics.Metrics
-	log     *slog.Logger
-	insert  string
+// Manager owns the ClickHouse connection and the current writer pool, exposing a
+// stable Enqueue across pool rebuilds.
+type Manager struct {
+	conn            driver.Conn
+	live            *config.Store
+	metrics         *metrics.Metrics
+	log             *slog.Logger
+	insert          string
+	shutdownTimeout time.Duration
 
-	wg   sync.WaitGroup
-	done chan struct{}
+	mu   sync.Mutex // serializes Reload/Stop pool swaps
+	pool atomic.Pointer[pool]
+
+	retireWG sync.WaitGroup // background drains of pools retired by Reload
+	aggStop  chan struct{}
+	aggWG    sync.WaitGroup
 }
 
-// New connects to ClickHouse (verifying connectivity with a ping) and returns a
-// ready writer. Call Start to begin the flush loop.
-func New(cfg Config, m *metrics.Metrics, log *slog.Logger) (*Writer, error) {
-	if cfg.ShutdownTimeout <= 0 {
-		cfg.ShutdownTimeout = defaultShutdownTimeout
+// Connect opens and pings a ClickHouse connection. Exported for reuse by the
+// archive exporter.
+func Connect(ch config.ClickHouseConfig) (driver.Conn, error) {
+	maxConns := ch.WriterWorkers*2 + 2
+	if maxConns < 8 {
+		maxConns = 8
 	}
 	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{cfg.Addr},
-		Auth: clickhouse.Auth{
-			Database: cfg.Database,
-			Username: cfg.Username,
-			Password: cfg.Password,
-		},
+		Addr:         []string{ch.Addr},
+		Auth:         clickhouse.Auth{Database: ch.Database, Username: ch.Username, Password: ch.Password},
 		Compression:  &clickhouse.Compression{Method: clickhouse.CompressionLZ4},
 		DialTimeout:  5 * time.Second,
-		MaxOpenConns: 4,
-		MaxIdleConns: 2,
+		MaxOpenConns: maxConns,
+		MaxIdleConns: ch.WriterWorkers,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open clickhouse: %w", err)
@@ -94,165 +91,351 @@ func New(cfg Config, m *metrics.Metrics, log *slog.Logger) (*Writer, error) {
 	defer cancel()
 	if err := conn.Ping(ctx); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("ping clickhouse %s: %w", cfg.Addr, err)
+		return nil, fmt.Errorf("ping clickhouse %s: %w", ch.Addr, err)
 	}
-	return &Writer{
-		cfg:     cfg,
-		conn:    conn,
-		queue:   make(chan normalizer.FlowRecord, cfg.QueueCapacity),
-		metrics: m,
-		log:     log.With("component", "clickhouse"),
-		insert:  fmt.Sprintf(insertStmt, cfg.Database),
-		done:    make(chan struct{}),
-	}, nil
+	return conn, nil
 }
 
-// Enqueue submits rec for insertion without ever blocking. If the queue is full
-// it returns false and the caller should count a drop.
-func (w *Writer) Enqueue(rec normalizer.FlowRecord) bool {
-	select {
-	case w.queue <- rec:
-		w.metrics.QueueSize.Set(float64(len(w.queue)))
-		return true
-	default:
-		return false
+// NewManager connects to ClickHouse (verifying with a ping) and starts the
+// initial writer pool with the configured worker count and queue capacity.
+func NewManager(ch config.ClickHouseConfig, live *config.Store, m *metrics.Metrics, log *slog.Logger) (*Manager, error) {
+	conn, err := Connect(ch)
+	if err != nil {
+		return nil, err
 	}
+
+	mgr := &Manager{
+		conn:            conn,
+		live:            live,
+		metrics:         m,
+		log:             log.With("component", "clickhouse"),
+		insert:          fmt.Sprintf(insertStmt, ch.Database),
+		shutdownTimeout: ch.ShutdownDrain(),
+		aggStop:         make(chan struct{}),
+	}
+	p := newPool(mgr, ch.WriterWorkers, ch.MaxQueueRows)
+	p.start()
+	mgr.pool.Store(p)
+	mgr.aggWG.Add(1)
+	go mgr.aggregate()
+	return mgr, nil
 }
 
-// QueueLen returns the number of records currently buffered.
-func (w *Writer) QueueLen() int { return len(w.queue) }
-
-// Start launches the background flush loop and returns immediately.
-func (w *Writer) Start() {
-	w.wg.Add(1)
-	go w.loop()
+// Enqueue submits rec to its shard, returning false if it was dropped.
+func (mgr *Manager) Enqueue(rec normalizer.FlowRecord) bool {
+	return mgr.pool.Load().enqueue(rec)
 }
 
-func (w *Writer) loop() {
-	defer w.wg.Done()
-	ticker := time.NewTicker(w.cfg.FlushInterval)
-	defer ticker.Stop()
+// QueueLen returns the total records buffered across all writer queues.
+func (mgr *Manager) QueueLen() int { return mgr.pool.Load().queueLen() }
 
-	batch := make([]normalizer.FlowRecord, 0, w.cfg.BatchSize)
+// Reload rebuilds the pool if the worker count or queue capacity changed: a new
+// pool is started and swapped in atomically, and the old one drains in the
+// background. Batch size, flush interval, retries and backpressure are read live
+// and need no rebuild.
+func (mgr *Manager) Reload(workers, queueRows int) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	cur := mgr.pool.Load()
+	if cur.n == workers && cur.queueRows == queueRows {
+		return
+	}
+	np := newPool(mgr, workers, queueRows)
+	np.start()
+	mgr.pool.Store(np)
+	mgr.log.Info("writer pool rebuilt", "workers", workers, "queue_rows", queueRows)
+	// Drain the retired pool off the hot path; Stop waits for these so the
+	// ClickHouse connection is not closed underneath an in-flight flush.
+	mgr.retireWG.Add(1)
+	go func() {
+		defer mgr.retireWG.Done()
+		cur.drain(mgr.shutdownTimeout)
+	}()
+}
+
+// Stop drains all writer queues (bounded by ShutdownTimeout) and closes the
+// ClickHouse connection. Callers must stop the producers (receivers) first.
+func (mgr *Manager) Stop() {
+	mgr.mu.Lock()
+	p := mgr.pool.Load()
+	mgr.mu.Unlock()
+	close(mgr.aggStop)
+	mgr.aggWG.Wait()
+	p.drain(mgr.shutdownTimeout)
+	mgr.retireWG.Wait() // let any pools retired by Reload finish flushing
+	_ = mgr.conn.Close()
+}
+
+// aggregate periodically publishes the aggregate queue depth.
+func (mgr *Manager) aggregate() {
+	defer mgr.aggWG.Done()
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
 	for {
 		select {
-		case rec := <-w.queue:
+		case <-mgr.aggStop:
+			mgr.metrics.QueueSize.Set(0)
+			return
+		case <-t.C:
+			mgr.metrics.QueueSize.Set(float64(mgr.pool.Load().queueLen()))
+		}
+	}
+}
+
+// pool is a fixed set of shard writers.
+type pool struct {
+	mgr       *Manager
+	n         int
+	queueRows int
+	shards    []*shard
+	wg        sync.WaitGroup
+}
+
+func newPool(mgr *Manager, n, queueRows int) *pool {
+	p := &pool{mgr: mgr, n: n, queueRows: queueRows, shards: make([]*shard, n)}
+	for i := 0; i < n; i++ {
+		p.shards[i] = &shard{
+			mgr:   mgr,
+			id:    i,
+			label: strconv.Itoa(i),
+			ch:    make(chan normalizer.FlowRecord, queueRows),
+			quit:  make(chan struct{}),
+		}
+	}
+	return p
+}
+
+func (p *pool) start() {
+	for _, s := range p.shards {
+		p.wg.Add(1)
+		go func(s *shard) {
+			defer p.wg.Done()
+			s.run()
+		}(s)
+	}
+}
+
+func (p *pool) enqueue(rec normalizer.FlowRecord) bool {
+	return p.shards[shardIndex(rec, p.n)].enqueue(rec)
+}
+
+func (p *pool) queueLen() int {
+	total := 0
+	for _, s := range p.shards {
+		total += len(s.ch)
+	}
+	return total
+}
+
+// drain signals every shard to stop, then waits up to timeout for them to flush.
+func (p *pool) drain(timeout time.Duration) {
+	for _, s := range p.shards {
+		close(s.quit)
+	}
+	done := make(chan struct{})
+	go func() { p.wg.Wait(); close(done) }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		p.mgr.log.Error("writer drain timed out", "buffered", p.queueLen(), "timeout", timeout)
+	}
+}
+
+// shard is a single writer with its own queue.
+type shard struct {
+	mgr   *Manager
+	id    int
+	label string
+	ch    chan normalizer.FlowRecord // never closed; lifecycle signaled via quit
+	quit  chan struct{}
+}
+
+func (s *shard) enqueue(rec normalizer.FlowRecord) bool {
+	switch s.mgr.live.Load().Backpressure {
+	case config.Block:
+		select {
+		case s.ch <- rec:
+			s.publishSize()
+			return true
+		case <-s.quit:
+			s.drop()
+			return false
+		}
+	case config.DropOld:
+		select {
+		case s.ch <- rec:
+			s.publishSize()
+			return true
+		case <-s.quit:
+			s.drop()
+			return false
+		default:
+			select { // evict oldest to make room
+			case <-s.ch:
+				s.drop()
+			default:
+			}
+			select {
+			case s.ch <- rec:
+				s.publishSize()
+				return true
+			default:
+				s.drop()
+				return false
+			}
+		}
+	default: // DropNew
+		select {
+		case s.ch <- rec:
+			s.publishSize()
+			return true
+		case <-s.quit:
+			s.drop()
+			return false
+		default:
+			s.drop()
+			return false
+		}
+	}
+}
+
+func (s *shard) drop() {
+	s.mgr.metrics.WriterQueueDropped.WithLabelValues(s.label).Inc()
+	s.mgr.metrics.FlowsDropped.Inc()
+}
+
+func (s *shard) publishSize() {
+	s.mgr.metrics.WriterQueueSize.WithLabelValues(s.label).Set(float64(len(s.ch)))
+}
+
+func (s *shard) run() {
+	ticker := time.NewTicker(tickEvery)
+	defer ticker.Stop()
+	batch := make([]normalizer.FlowRecord, 0, 1024)
+	lastFlush := time.Now()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		s.flush(batch)
+		batch = batch[:0]
+		lastFlush = time.Now()
+		s.publishSize()
+	}
+
+	for {
+		select {
+		case rec := <-s.ch:
 			batch = append(batch, rec)
-			w.metrics.QueueSize.Set(float64(len(w.queue)))
-			if len(batch) >= w.cfg.BatchSize {
-				w.flush(context.Background(), batch)
-				batch = batch[:0]
+			if len(batch) >= s.mgr.live.Load().BatchSize {
+				flush()
 			}
 		case <-ticker.C:
-			if len(batch) > 0 {
-				w.flush(context.Background(), batch)
-				batch = batch[:0]
+			if live := s.mgr.live.Load(); len(batch) > 0 && time.Since(lastFlush) >= live.FlushInterval {
+				flush()
 			}
-		case <-w.done:
-			w.drain(batch)
-			return
+			s.publishSize()
+		case <-s.quit:
+			// Keep consuming until the queue stays empty for drainGrace, so an
+			// enqueue that straddled a reload pool-swap is still flushed, then
+			// flush and exit.
+			idle := time.NewTimer(drainGrace)
+			for {
+				select {
+				case rec := <-s.ch:
+					batch = append(batch, rec)
+					if len(batch) >= s.mgr.live.Load().BatchSize {
+						flush()
+					}
+					if !idle.Stop() {
+						select {
+						case <-idle.C:
+						default:
+						}
+					}
+					idle.Reset(drainGrace)
+				case <-idle.C:
+					flush()
+					idle.Stop()
+					return
+				}
+			}
 		}
 	}
 }
 
-// drain flushes the in-flight batch and everything still queued, bounded by the
-// configured shutdown timeout. Anything still buffered when the deadline passes
-// is dropped (and counted) so process exit cannot hang on a dead backend.
-func (w *Writer) drain(batch []normalizer.FlowRecord) {
-	ctx, cancel := context.WithTimeout(context.Background(), w.cfg.ShutdownTimeout)
-	defer cancel()
-
-	for {
-		if ctx.Err() != nil {
-			if lost := len(batch) + len(w.queue); lost > 0 {
-				w.metrics.FlowsDropped.Add(float64(lost))
-				w.log.Error("shutdown drain deadline exceeded; dropping buffered records",
-					"dropped", lost, "timeout", w.cfg.ShutdownTimeout)
-			}
-			w.metrics.QueueSize.Set(0)
-			return
-		}
-		select {
-		case rec := <-w.queue:
-			batch = append(batch, rec)
-			if len(batch) >= w.cfg.BatchSize {
-				w.flush(ctx, batch)
-				batch = batch[:0]
-			}
-		default:
-			if len(batch) > 0 {
-				w.flush(ctx, batch)
-			}
-			w.metrics.QueueSize.Set(0)
-			return
-		}
+func (s *shard) flush(batch []normalizer.FlowRecord) {
+	live := s.mgr.live.Load()
+	attempts := live.RetryMaxAttempts
+	if attempts < 1 {
+		attempts = 1
 	}
-}
-
-// flush inserts batch, retrying transient errors until ctx is done or attempts
-// are exhausted. A deterministic append error is not retried; instead the batch
-// is salvaged row-by-row so one bad row cannot lose the rest.
-func (w *Writer) flush(ctx context.Context, batch []normalizer.FlowRecord) {
+	start := time.Now()
 	var err error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if err = w.sendBatch(ctx, batch); err == nil {
-			w.metrics.FlowsInserted.Add(float64(len(batch)))
-			w.metrics.QueueSize.Set(float64(len(w.queue)))
+	for a := 1; a <= attempts; a++ {
+		if err = s.send(batch); err == nil {
+			s.mgr.metrics.WriterInsertLatency.Observe(float64(time.Since(start).Milliseconds()))
+			s.mgr.metrics.WriterBatches.Inc()
+			s.mgr.metrics.WriterBatchRows.Add(float64(len(batch)))
+			s.mgr.metrics.FlowsInserted.Add(float64(len(batch)))
 			return
 		}
 		var ae *appendError
 		if errors.As(err, &ae) {
-			w.salvage(ctx, batch) // deterministic: don't waste retries
+			s.salvage(batch)
 			return
 		}
-		w.log.Warn("batch insert failed", "attempt", attempt, "rows", len(batch), "error", err)
-		if attempt < maxAttempts {
-			select {
-			case <-time.After(backoff(attempt)):
-			case <-ctx.Done():
-				w.metrics.InsertErrors.Inc()
-				w.metrics.FlowsDropped.Add(float64(len(batch)))
-				w.log.Error("aborting insert retries due to shutdown deadline", "rows", len(batch))
-				return
-			}
+		s.mgr.metrics.WriterRetries.Inc()
+		s.mgr.log.Warn("batch insert failed", "worker", s.id, "attempt", a, "rows", len(batch), "error", err)
+		if a < attempts {
+			time.Sleep(backoff(a, live.RetryBackoff))
 		}
 	}
-	w.metrics.InsertErrors.Inc()
-	w.metrics.FlowsDropped.Add(float64(len(batch)))
-	w.log.Error("dropping batch after exhausting retries", "rows", len(batch), "error", err)
+	s.mgr.metrics.InsertErrors.Inc()
+	s.mgr.metrics.FlowsDropped.Add(float64(len(batch)))
+	s.mgr.log.Error("dropping batch after exhausting retries", "worker", s.id, "rows", len(batch), "error", err)
 }
 
-// salvage re-inserts a rejected batch one row at a time, keeping the good rows
-// and dropping (counting) only the rows ClickHouse rejects. This is the slow
-// error-recovery path, not the hot path.
-func (w *Writer) salvage(ctx context.Context, batch []normalizer.FlowRecord) {
-	w.log.Warn("batch rejected on append; salvaging row-by-row", "rows", len(batch))
-	kept, dropped := 0, 0
+// salvage re-inserts a rejected batch one row at a time, keeping the good rows.
+func (s *shard) salvage(batch []normalizer.FlowRecord) {
+	kept, rejected, dropped := 0, 0, 0
 	for i := range batch {
-		if err := w.sendBatch(ctx, batch[i:i+1]); err != nil {
-			dropped++
-			w.log.Debug("dropping rejected row", "error", err)
+		err := s.send(batch[i : i+1])
+		if err == nil {
+			kept++
 			continue
 		}
-		kept++
+		var ae *appendError
+		if errors.As(err, &ae) {
+			rejected++ // genuine per-row rejection (bad/incompatible data)
+		} else {
+			dropped++ // transient prepare/send failure, not a rejection
+		}
 	}
 	if kept > 0 {
-		w.metrics.FlowsInserted.Add(float64(kept))
+		s.mgr.metrics.FlowsInserted.Add(float64(kept))
+		s.mgr.metrics.WriterBatchRows.Add(float64(kept))
+	}
+	if rejected > 0 {
+		s.mgr.metrics.FlowsRejected.Add(float64(rejected))
 	}
 	if dropped > 0 {
-		w.metrics.FlowsRejected.Add(float64(dropped))
-		w.log.Error("salvage complete", "kept", kept, "rejected", dropped)
+		s.mgr.metrics.FlowsDropped.Add(float64(dropped))
 	}
-	w.metrics.QueueSize.Set(float64(len(w.queue)))
+	if rejected+dropped > 0 {
+		s.mgr.log.Error("salvage incomplete", "worker", s.id, "kept", kept, "rejected", rejected, "dropped", dropped)
+	}
 }
 
-func (w *Writer) sendBatch(ctx context.Context, batch []normalizer.FlowRecord) error {
-	cctx, cancel := context.WithTimeout(ctx, sendTimeout)
+func (s *shard) send(batch []normalizer.FlowRecord) error {
+	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
-
-	b, err := w.conn.PrepareBatch(cctx, w.insert)
+	b, err := s.mgr.conn.PrepareBatch(ctx, s.mgr.insert)
 	if err != nil {
-		return fmt.Errorf("prepare batch: %w", err) // transient: retryable
+		return fmt.Errorf("prepare batch: %w", err)
 	}
 	for i := range batch {
 		r := &batch[i]
@@ -268,29 +451,44 @@ func (w *Writer) sendBatch(ctx context.Context, batch []normalizer.FlowRecord) e
 		}
 	}
 	if err := b.Send(); err != nil {
-		return fmt.Errorf("send batch: %w", err) // transient: retryable
+		return fmt.Errorf("send batch: %w", err)
 	}
 	return nil
 }
 
-// Stop signals the flush loop to drain and stop (bounded by ShutdownTimeout),
-// waits for it, then closes the ClickHouse connection.
-func (w *Writer) Stop() {
-	close(w.done)
-	w.wg.Wait()
-	_ = w.conn.Close()
+// shardIndex routes a record to a shard by hashing (exporter_ip, device_id) so a
+// given exporter/device always lands on the same writer.
+func shardIndex(rec normalizer.FlowRecord, n int) int {
+	if n <= 1 {
+		return 0
+	}
+	h := fnv.New32a()
+	if v4 := rec.ExporterIP.To4(); v4 != nil {
+		_, _ = h.Write(v4)
+	} else if rec.ExporterIP != nil {
+		_, _ = h.Write(rec.ExporterIP)
+	}
+	var d [4]byte
+	d[0] = byte(rec.DeviceID)
+	d[1] = byte(rec.DeviceID >> 8)
+	d[2] = byte(rec.DeviceID >> 16)
+	d[3] = byte(rec.DeviceID >> 24)
+	_, _ = h.Write(d[:])
+	// Lemire multiply-shift reduction uses the well-mixed high bits of the hash;
+	// plain `% n` would key off the low bits, which barely vary when the trailing
+	// (device high) bytes are constant zero — clustering records onto few shards.
+	return int((uint64(h.Sum32()) * uint64(n)) >> 32)
 }
 
-func backoff(attempt int) time.Duration {
-	d := time.Duration(attempt) * 250 * time.Millisecond
-	if d > 2*time.Second {
-		d = 2 * time.Second
+func backoff(attempt int, base time.Duration) time.Duration {
+	d := time.Duration(attempt) * base
+	if max := 2 * time.Second; d > max {
+		d = max
 	}
 	return d
 }
 
-// ip4 returns a 4-byte IPv4 address, substituting 0.0.0.0 for nil or non-IPv4
-// values so the IPv4 ClickHouse columns always receive a valid value.
+// ip4 returns a 4-byte IPv4 address, substituting 0.0.0.0 for nil/non-IPv4.
 func ip4(ip net.IP) net.IP {
 	if v4 := ip.To4(); v4 != nil {
 		return v4

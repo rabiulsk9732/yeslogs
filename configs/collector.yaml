@@ -1,5 +1,10 @@
 # NATFlow Dataplane Collector configuration.
 # Unknown keys are rejected on load, so typos fail fast.
+#
+# Hot-reloadable on SIGHUP (or with --watch-config): rules.*, clickhouse.batch_size,
+# flush_interval_ms, writer_workers, max_queue_rows, retry_*, pipeline.backpressure_mode,
+# logging.level, s3.enabled, s3.archive_after_days. Changing receiver.* or
+# clickhouse.addr/database/username requires a restart (logged as a warning).
 
 server:
   name: "dp-india-01"
@@ -12,10 +17,7 @@ receiver:
     netflow5: 2055
     netflow9: 9995
     ipfix: 4739
-  # Kernel UDP receive buffer (SO_RCVBUF). Raising this needs a matching
-  # net.core.rmem_max sysctl (see README), otherwise the kernel silently caps it.
   udp_read_buffer_mb: 128
-  # Number of reader goroutines per listener. Defaults to NumCPU when 0.
   workers: 6
 
 clickhouse:
@@ -25,17 +27,30 @@ clickhouse:
   password: ""
   batch_size: 10000
   flush_interval_ms: 1000
-  # In-memory buffer (records) between the pipeline and the flush loop. Must be
-  # >= batch_size. Defaults to batch_size * 10 when 0.
-  queue_capacity: 100000
-  # Max time to drain the queue into ClickHouse on shutdown before giving up so
-  # process exit cannot hang on an unreachable backend. Defaults to 15000.
+  writer_workers: 4          # sharded writers (records sharded by exporter_ip+device_id)
+  max_queue_rows: 100000     # per-writer queue capacity
+  retry_max_attempts: 3
+  retry_backoff_ms: 250
   shutdown_drain_ms: 15000
+
+pipeline:
+  backpressure_mode: "drop_new"   # block | drop_new | drop_old
 
 rules:
   skip_dns: true
   skip_private_to_private: true
   skip_zero_bytes: true
+
+s3:
+  enabled: false
+  endpoint: "https://s3.wasabisys.com"   # or http://127.0.0.1:9000 for MinIO
+  region: "us-east-1"
+  bucket: "natflow-archive"
+  access_key: ""
+  secret_key: ""
+  path_prefix: "natflow"
+  archive_after_days: 7
+  export_format: "csvgz"   # csvgz | parquet (parquet falls back to csvgz in v0.3.1)
 
 metrics:
   bind: "127.0.0.1:9101"

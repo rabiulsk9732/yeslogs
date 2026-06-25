@@ -9,10 +9,10 @@ import (
 	"net"
 	"sync"
 
+	"github.com/natflow/natflow-dataplane/internal/config"
 	"github.com/natflow/natflow-dataplane/internal/decoder"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
-	"github.com/natflow/natflow-dataplane/internal/rules"
 )
 
 // maxPooledFlows caps the capacity of decode scratch buffers retained in the
@@ -31,7 +31,7 @@ type Writer interface {
 type Pipeline struct {
 	dec     decoder.Decoder
 	norm    *normalizer.Normalizer
-	rules   *rules.RuleSet
+	live    *config.Store
 	writer  Writer
 	metrics *metrics.Metrics
 	log     *slog.Logger
@@ -42,12 +42,13 @@ type Pipeline struct {
 	pool sync.Pool
 }
 
-// New builds a Pipeline for dec.
-func New(dec decoder.Decoder, norm *normalizer.Normalizer, rs *rules.RuleSet, w Writer, m *metrics.Metrics, log *slog.Logger) *Pipeline {
+// New builds a Pipeline for dec. Skip rules are read live from the config store
+// so they can be changed by a config reload without a restart.
+func New(dec decoder.Decoder, norm *normalizer.Normalizer, live *config.Store, w Writer, m *metrics.Metrics, log *slog.Logger) *Pipeline {
 	p := &Pipeline{
 		dec:     dec,
 		norm:    norm,
-		rules:   rs,
+		live:    live,
 		writer:  w,
 		metrics: m,
 		log:     log.With("component", "pipeline", "proto", dec.Kind()),
@@ -82,10 +83,11 @@ func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
 		return
 	}
 
+	live := p.live.Load()
 	for i := range flows {
 		rec := p.norm.Normalize(flows[i], p.kind)
 		p.metrics.FlowsDecoded.Inc()
-		if skip, _ := p.rules.ShouldSkip(&rec); skip {
+		if skip, _ := live.Rules.ShouldSkip(&rec); skip {
 			p.metrics.FlowsSkipped.Inc()
 			continue
 		}

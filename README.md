@@ -29,8 +29,9 @@ their template are counted under `template_unknown_total` until it is learned.
 ## Layout
 
 ```
-cmd/collector            entrypoint + wiring + graceful shutdown
-internal/config          YAML load, defaults, validation
+cmd/collector            entrypoint + wiring + reload + graceful shutdown
+cmd/benchgen             NetFlow v5/v9/IPFIX load generator
+internal/config          YAML load, defaults, validation, atomic live Store
 internal/receiver        UDP listeners + worker pool
 internal/decoder         common Flow type + Decoder interface
 internal/decoder/netflow5 NetFlow v5 decoder (complete)
@@ -39,13 +40,16 @@ internal/decoder/ipfix    IPFIX decoder (templates + varlen + enterprise)
 internal/normalizer      decoder.Flow -> canonical FlowRecord
 internal/rules           skip filters (DNS / private->private / zero-byte)
 internal/pipeline        decode -> normalize -> rules -> enqueue
-internal/writer/clickhouse batching, retrying ClickHouse writer
+internal/writer/clickhouse sharded, batching, retrying writer pool (reloadable)
+internal/archive         ClickHouse -> CSV.gz day export
+internal/archive/s3      S3-compatible upload client
 internal/metrics         Prometheus metrics + HTTP server
-internal/logger          structured JSON logging (slog)
+internal/logger          structured JSON logging (slog, reloadable level)
 configs/collector.yaml   configuration
 migrations/clickhouse.sql flow_logs schema
 systemd/                 service unit
-scripts/                 build / install / test-send
+deploy/                  logrotate + firewall example
+scripts/                 build / install / test-send / benchmark / healthcheck / backup / archive-day
 ```
 
 ## Requirements
@@ -95,8 +99,80 @@ unknown keys are rejected. Key settings:
 - `receiver.workers` — reader goroutines per listener (default: CPU count).
 - `receiver.udp_read_buffer_mb` — kernel socket buffer; see sysctl note below.
 - `clickhouse.batch_size` / `flush_interval_ms` — flush on whichever comes first.
-- `clickhouse.queue_capacity` — in-memory backlog before flows are dropped.
+- `clickhouse.writer_workers` — number of sharded writers (see Writer tuning).
+- `clickhouse.max_queue_rows` — per-writer queue capacity before backpressure.
+- `clickhouse.retry_max_attempts` / `retry_backoff_ms` — batch send retry policy.
+- `pipeline.backpressure_mode` — `block` | `drop_new` | `drop_old` (see below).
 - `rules.*` — toggle the skip filters.
+- `s3.*` — S3 archive target (see S3 archive).
+
+## Runtime config reload
+
+The collector reloads configuration **without a restart**:
+
+```bash
+sudo systemctl reload natflow-collector     # or:
+kill -HUP "$(pidof natflow-collector)"
+# or run with --watch-config to reload automatically when the file changes
+natflow-collector --config configs/collector.yaml --watch-config
+```
+
+The live config is held behind an atomic pointer, so reloads never interrupt
+ingest. **Reloadable** fields take effect immediately:
+
+`rules.*`, `clickhouse.batch_size`, `flush_interval_ms`, `writer_workers`,
+`max_queue_rows`, `retry_max_attempts`, `retry_backoff_ms`,
+`pipeline.backpressure_mode`, `logging.level`, `s3.enabled`,
+`s3.archive_after_days`.
+
+Changing `writer_workers` or `max_queue_rows` rebuilds the writer pool (a new
+pool is swapped in atomically and the old one drains in the background).
+
+**Non-reloadable** fields (`receiver.bind_ip`/`ports`/`workers`,
+`clickhouse.addr`/`database`/`username`, `metrics.bind`) require a restart; a
+reload logs a warning listing them and keeps the running values. Reloads are
+counted by `config_reloads_total` / `config_reload_errors_total` (a bad config
+file is rejected and the collector keeps running on the previous config).
+
+## Writer tuning & backpressure
+
+Records are sharded by `(exporter_ip, device_id)` across `writer_workers`
+independent writers, each building and flushing its own batches (a batch flushes
+when it reaches `batch_size` or `flush_interval_ms` elapses; rows are never
+inserted one at a time). A single bad row is salvaged row-by-row rather than
+discarding its batch (`flows_rejected_total`).
+
+Each writer has a bounded queue (`max_queue_rows`). When a queue is full,
+`pipeline.backpressure_mode` decides what happens — the collector never crashes
+under overload:
+
+- `drop_new` (default) — drop the incoming flow (`writer_queue_dropped_total`).
+- `drop_old` — evict the oldest queued flow to admit the new one.
+- `block` — apply back-pressure to the reader (ultimately the kernel drops UDP).
+
+Start with `writer_workers` ≈ CPU cores and a `batch_size` of 10k–50k. If
+`writer_queue_size{worker=...}` climbs and `writer_queue_dropped_total` rises,
+ClickHouse insert is the bottleneck — add ClickHouse resources or raise
+`batch_size`. `writer_insert_latency_ms` shows per-batch insert latency.
+
+## S3 archive
+
+Archive cold flow data to any S3-compatible store (AWS S3, Wasabi, MinIO). Set
+the `s3.*` block in the config, then:
+
+```bash
+# prove connectivity — uploads <path_prefix>/_health/<server-name>/<ts>.txt
+natflow-collector --s3-check --config configs/collector.yaml
+
+# export one day and upload it (cron-friendly)
+scripts/archive-day.sh 2026-06-25
+# -> <path_prefix>/isp_id=<id>/year=YYYY/month=MM/day=DD/part-000.csv.gz
+```
+
+`export_format` may be `csvgz` (default) or `parquet`; parquet currently falls
+back to gzip-CSV (the config field is honored for forward compatibility). For a
+local MinIO test target: `endpoint: "http://127.0.0.1:9000"`, matching
+`access_key`/`secret_key`, and create the bucket first (`mc mb local/<bucket>`).
 
 ### Kernel tuning (recommended for high PPS)
 
@@ -139,6 +215,7 @@ Helper scripts live in `scripts/` and `deploy/`:
 | `scripts/benchmark.sh`      | Run the benchgen load ladder (1k→20k pps) against a collector  |
 | `scripts/healthcheck.sh`    | Check systemd service + metrics endpoint + today's CH rows     |
 | `scripts/backup-daily.sh`   | Write a daily summary snapshot of `flow_logs` (cron-friendly)  |
+| `scripts/archive-day.sh`    | Export one day from ClickHouse and upload to S3 (cron-friendly) |
 | `deploy/logrotate/natflow`  | logrotate rules for `/var/log/natflow/*.log`                   |
 | `deploy/ufw-example.sh`     | Restrict the UDP ports to a single exporter IP (safe by default) |
 
@@ -206,7 +283,15 @@ Prometheus metrics are served at `http://127.0.0.1:9101/metrics`, with a
 | `insert_errors_total`        | batch inserts that failed after retries             |
 | `templates_received_total`   | NetFlow v9/IPFIX templates parsed                   |
 | `template_unknown_total`     | data flowsets dropped (template not yet known)      |
-| `current_queue_size`         | flows currently buffered in the writer queue        |
+| `current_queue_size`         | flows buffered across all writer queues (aggregate) |
+| `writer_queue_size{worker}`  | flows buffered in each writer queue                 |
+| `writer_queue_dropped_total{worker}` | flows dropped per writer (backpressure)     |
+| `writer_batches_total`       | batches sent to ClickHouse                          |
+| `writer_batch_rows_total`    | rows sent in batches                                |
+| `writer_insert_latency_ms`   | per-batch insert latency (histogram)                |
+| `writer_retries_total`       | batch send retries                                  |
+| `config_reloads_total` / `config_reload_errors_total` | runtime reloads      |
+| `archive_runs_total` / `archive_rows_total` / `archive_bytes_total` | S3 archive |
 
 > A brief rise in `template_unknown_total` at startup is normal — NetFlow
 > v9/IPFIX data that arrives before its template is dropped until the template
