@@ -33,6 +33,9 @@ cmd/collector            entrypoint + wiring + reload + graceful shutdown
 cmd/benchgen             NetFlow v5/v9/IPFIX load generator
 cmd/pcapreplay           replay a pcap's UDP payloads to a collector
 cmd/pcapsanitize         rewrite IPs in a pcap (headers + flow records)
+cmd/director             multi-tenant control plane (ISPs/devices/dashboards/agent API)
+internal/director        Director server, auth, flows, agent config (+ store, agentcfg)
+internal/managed         collector managed-mode client (pulls config from Director)
 internal/config          YAML load, defaults, validation, atomic live Store
 internal/receiver        UDP listeners + worker pool
 internal/decoder         common Flow type + Decoder interface
@@ -477,6 +480,27 @@ Takeaways: the ingest path (receive → decode → normalize → rules) sustaine
 queue fills and sheds load (no errors, no crash). Clean sustained sweet spot on
 this box: **≤20k pps**. To go higher, give ClickHouse more resources — the Go
 dataplane has large headroom.
+
+## Control plane (Director)
+
+`cmd/director` is the multi-tenant control plane: the **Director** (software
+owner) onboards **ISPs** (tenants); each ISP manages its **devices** in its own
+panel; collectors run in **managed mode** and pull their device registry +
+exporter policy from the Director (full dataplane control from the control
+plane); flow dashboards are **ISP-scoped** (Director sees all, each ISP sees only
+its own). Metadata is stored in **MariaDB/MySQL**; flows stay in ClickHouse.
+
+```bash
+go build -o bin/director ./cmd/director
+director --config configs/director.yaml --migrate
+director --config configs/director.yaml --create-admin --email admin@you.com --password '...'
+director --config configs/director.yaml --create-agent --name dp-india-01   # token shown once
+director --config configs/director.yaml
+```
+
+Then point a collector at it (`director:` in `collector.yaml`) and it pulls its
+registry live via the existing hot-reload. Full guide:
+[`docs/control-plane.md`](docs/control-plane.md).
 
 ## Real-device validation (pcap capture / sanitize / replay)
 

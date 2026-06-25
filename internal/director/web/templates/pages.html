@@ -1,0 +1,102 @@
+{{define "login"}}{{template "header" .}}
+<h1>Sign in</h1>
+<div class="card" style="max-width:340px">
+<form method="post" action="/login">
+ <div><input name="email" type="email" placeholder="email" required style="width:100%"></div>
+ <div><input name="password" type="password" placeholder="password" required style="width:100%"></div>
+ <button type="submit">Sign in</button>
+</form>
+</div>
+{{template "footer" .}}{{end}}
+
+{{define "home"}}{{template "header" .}}
+<h1>Dashboard</h1>
+<div class="card">
+ {{if .ID.IsDirector}}<span class="kpi">ISPs<b>{{or (index .Data "ISPs") 0}}</b></span>{{end}}
+ <span class="kpi">Devices<b>{{or (index .Data "Devices") 0}}</b></span>
+ {{with index .Data "Flows"}}
+ <span class="kpi">Flows (24h)<b>{{.Rows}}</b></span>
+ <span class="kpi">Traffic<b>{{bytes .Bytes}}</b></span>
+ <span class="kpi">Active devices<b>{{.Devices}}</b></span>
+ {{end}}
+</div>
+<p>{{if .ID.IsDirector}}You are the Director — you see all ISPs.{{else}}You are scoped to your ISP.{{end}}
+Manage <a href="/devices">devices</a> and view <a href="/flows">flows</a>.</p>
+{{template "footer" .}}{{end}}
+
+{{define "isps"}}{{template "header" .}}
+<h1>ISPs</h1>
+<div class="card">
+<h3>Create ISP</h3>
+<form method="post" action="/isps">
+ <input type="hidden" name="csrf" value="{{.CSRF}}">
+ <input name="name" placeholder="ISP name" required>
+ <input name="admin_email" type="email" placeholder="ISP admin email (optional)">
+ <input name="admin_password" type="password" placeholder="ISP admin password (optional)">
+ <button type="submit">Create</button>
+</form>
+</div>
+<table><tr><th>ID (isp_id)</th><th>Name</th><th>Status</th><th>Created</th><th></th></tr>
+{{range .Data}}
+<tr><td>{{.ID}}</td><td>{{.Name}}</td>
+ <td>{{if .Enabled}}<span class="pill">enabled</span>{{else}}<span class="pill off">disabled</span>{{end}}</td>
+ <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+ <td><form class="inline" method="post" action="/isps/{{.ID}}/toggle"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="sec">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form></td></tr>
+{{end}}
+</table>
+{{template "footer" .}}{{end}}
+
+{{define "devices"}}{{template "header" .}}
+<h1>Devices</h1>
+<div class="card">
+<h3>Add device</h3>
+<form method="post" action="/devices">
+ <input type="hidden" name="csrf" value="{{.CSRF}}">
+ {{if .ID.IsDirector}}
+ <select name="isp_id" required><option value="">— ISP —</option>{{range index .Data "ISPs"}}<option value="{{.ID}}">{{.Name}} (#{{.ID}})</option>{{end}}</select>
+ {{end}}
+ <input name="name" placeholder="device name" required>
+ <input name="exporter_ip" placeholder="exporter IP" required>
+ <input name="device_id" type="number" min="1" placeholder="device_id" required>
+ <select name="protocol"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select>
+ <select name="profile"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select>
+ <label><input type="checkbox" name="skip_dns" checked> dns</label>
+ <label><input type="checkbox" name="skip_private" checked> priv→priv</label>
+ <label><input type="checkbox" name="skip_zero" checked> zero</label>
+ <button type="submit">Add</button>
+</form>
+</div>
+<table><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>device_id</th><th>Proto</th><th>Profile</th><th>Rules</th><th>Status</th><th></th></tr>
+{{range index .Data "Devices"}}
+<tr><td>{{.ISPID}}</td><td>{{.Name}}</td><td>{{.ExporterIP}}</td><td>{{.DeviceID}}</td><td>{{.Protocol}}</td><td>{{.Profile}}</td>
+ <td>{{if .SkipDNS}}dns {{end}}{{if .SkipPrivate}}priv {{end}}{{if .SkipZero}}zero{{end}}</td>
+ <td>{{if .Enabled}}<span class="pill">enabled</span>{{else}}<span class="pill off">disabled</span>{{end}}</td>
+ <td>
+  <form class="inline" method="post" action="/devices/{{.ID}}/toggle"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="sec">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form>
+  <form class="inline" method="post" action="/devices/{{.ID}}/delete" onsubmit="return confirm('Delete device?')"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="danger">Delete</button></form>
+ </td></tr>
+{{end}}
+</table>
+{{template "footer" .}}{{end}}
+
+{{define "flows"}}{{template "header" .}}
+<h1>Flows <small>(last {{or (index .Data "Days") 1}}d{{if .ID.IsDirector}}, all ISPs{{else}}, your ISP{{end}})</small></h1>
+{{with index .Data "Summary"}}
+<div class="card">
+ <span class="kpi">Flows<b>{{.Rows}}</b></span>
+ <span class="kpi">Traffic<b>{{bytes .Bytes}}</b></span>
+ <span class="kpi">Packets<b>{{.Packets}}</b></span>
+ <span class="kpi">Devices<b>{{.Devices}}</b></span>
+</div>
+{{end}}
+<div class="card"><h3>Top talkers</h3><table><tr><th>Source</th><th>Traffic</th><th>Flows</th></tr>
+{{range index .Data "Talkers"}}<tr><td>{{.SrcIP}}</td><td>{{bytes .Bytes}}</td><td>{{.Flows}}</td></tr>{{end}}</table></div>
+<div class="card"><h3>Per device</h3><table><tr><th>ISP</th><th>device_id</th><th>Flows</th><th>Traffic</th></tr>
+{{range index .Data "PerDevice"}}<tr><td>{{.ISPID}}</td><td>{{.DeviceID}}</td><td>{{.Flows}}</td><td>{{bytes .Bytes}}</td></tr>{{end}}</table></div>
+<div class="card"><h3>Recent flows</h3><table><tr><th>Time</th><th>ISP</th><th>dev</th><th>src</th><th>dst</th><th>proto</th><th>bytes</th><th>type</th></tr>
+{{range index .Data "Recent"}}<tr><td>{{.FlowStart.Format "15:04:05"}}</td><td>{{.ISPID}}</td><td>{{.DeviceID}}</td><td>{{.SrcIP}}:{{.SrcPort}}</td><td>{{.DstIP}}:{{.DstPort}}</td><td>{{.Protocol}}</td><td>{{bytes .Bytes}}</td><td>{{.FlowType}}</td></tr>{{end}}</table></div>
+{{template "footer" .}}{{end}}
+
+{{define "error"}}{{template "header" .}}
+<h1>Error</h1><div class="err">{{.Err}}</div>
+{{template "footer" .}}{{end}}

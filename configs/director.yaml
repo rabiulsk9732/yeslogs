@@ -1,0 +1,29 @@
+# NATFlow Director (control plane) configuration.
+#
+# Bootstrap once:
+#   director --config configs/director.yaml --migrate
+#   director --config configs/director.yaml --create-admin --email you@example.com --password '...'
+#   director --config configs/director.yaml --create-agent --name dp-india-01   # prints the agent token ONCE
+# Then run: director --config configs/director.yaml
+
+bind: "127.0.0.1:8080"
+
+# REQUIRED: a long random secret (>= 16 chars) used to sign session cookies.
+# CHANGE THIS and keep it secret; rotating it logs everyone out.
+session_key: "CHANGE-ME-to-a-long-random-secret-string"
+
+# Set true when the Director is served over HTTPS (marks cookies Secure).
+cookie_secure: false
+
+# MariaDB/MySQL DSN for control-plane metadata (ISPs, users, devices, agents).
+mysql_dsn: "natflow:natflow@tcp(127.0.0.1:3306)/natflow_cp?parseTime=true&loc=UTC"
+
+# ClickHouse (read-only) for the flow dashboards. Leave addr empty to disable them.
+clickhouse:
+  addr: "127.0.0.1:9000"
+  database: "natlogs"
+  username: "default"
+  password: ""
+
+# Dashboard query window in days.
+flow_days: 1

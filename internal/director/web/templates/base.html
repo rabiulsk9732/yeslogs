@@ -1,0 +1,46 @@
+{{define "header"}}<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · NATFlow Director</title>
+<style>
+:root{font-family:system-ui,sans-serif}
+body{margin:0;color:#1a1a1a;background:#f6f7f9}
+header.top{background:#0b2138;color:#fff;padding:.6rem 1rem;display:flex;gap:1rem;align-items:center}
+header.top a{color:#cfe3ff;text-decoration:none;font-size:.95rem}
+header.top a:hover{color:#fff}
+header.top .sp{flex:1}
+header.top .who{font-size:.85rem;color:#9fc0e8}
+main{max-width:1000px;margin:1.2rem auto;padding:0 1rem}
+h1{font-size:1.25rem}
+table{border-collapse:collapse;width:100%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid #eee;font-size:.9rem}
+th{background:#eef2f7}
+form.inline{display:inline}
+input,select,button{padding:.4rem .5rem;font-size:.9rem;margin:.15rem 0}
+button{background:#1763b6;color:#fff;border:0;border-radius:4px;cursor:pointer}
+button.sec{background:#888}
+button.danger{background:#b63131}
+.card{background:#fff;border-radius:6px;padding:1rem;margin:.8rem 0;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.err{background:#fde8e8;color:#9b1c1c;padding:.5rem .8rem;border-radius:4px;margin:.6rem 0}
+.kpi{display:inline-block;min-width:9rem;margin:.3rem 1rem .3rem 0}
+.kpi b{display:block;font-size:1.5rem}
+.pill{font-size:.75rem;padding:.1rem .4rem;border-radius:10px;background:#e3eefb;color:#1763b6}
+.off{background:#eee;color:#888}
+</style></head><body>
+{{if .ID.Email}}
+<header class="top">
+ <strong>NATFlow Director</strong>
+ <a href="/">Dashboard</a>
+ {{if .ID.IsDirector}}<a href="/isps">ISPs</a>{{end}}
+ <a href="/devices">Devices</a>
+ <a href="/flows">Flows</a>
+ <span class="sp"></span>
+ <span class="who">{{.ID.Email}} ({{.ID.Role}})</span>
+ <form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="sec">Logout</button></form>
+</header>
+{{end}}
+<main>
+{{if .Err}}<div class="err">{{.Err}}</div>{{end}}
+{{end}}
+
+{{define "footer"}}</main></body></html>{{end}}

@@ -24,6 +24,7 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow9"
 	devreg "github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/logger"
+	"github.com/natflow/natflow-dataplane/internal/managed"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
@@ -102,6 +103,21 @@ func run() (err error) {
 	log.Info("device registry loaded",
 		"entries", registry.Len(), "unknown_exporter_mode", cfg.Security.UnknownExporterMode)
 
+	// Managed mode: pull the device registry + policy from the Director.
+	var mc *managed.Client
+	managedCtx, managedCancel := context.WithCancel(context.Background())
+	defer managedCancel()
+	if cfg.Director.Managed() {
+		mc = managed.New(cfg.Director, devices, live, cfg.Live().Rules, m, log)
+		pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if perr := mc.PollOnce(pctx); perr != nil {
+			log.Warn("initial director pull failed; starting with local/empty registry", "error", perr)
+		}
+		pcancel()
+		go mc.Run(managedCtx, time.Duration(cfg.Director.PollIntervalS)*time.Second)
+		log.Info("managed mode enabled", "director", cfg.Director.URL, "poll_s", cfg.Director.PollIntervalS)
+	}
+
 	bindings := []struct {
 		name string
 		port int
@@ -172,9 +188,16 @@ func run() (err error) {
 		levelVar.Set(logger.ParseLevel(next.Logging.Level))
 		manager.Reload(next.ClickHouse.WriterWorkers, next.ClickHouse.MaxQueueRows)
 
-		// Rebuild the device registry (effective device rules depend on the
-		// possibly-changed global rules, so always rebuild).
-		if reg, rerr := devreg.Build(next.Devices, next.Live().Rules); rerr != nil {
+		// Refresh the device registry. In managed mode it comes from the
+		// Director (re-pull); otherwise rebuild from local config.
+		if mc != nil {
+			if perr := mc.PollOnce(context.Background()); perr != nil {
+				m.DeviceRegistryReloadErrors.Inc()
+				log.Error("director pull on reload failed; keeping previous registry", "error", perr)
+			} else {
+				m.DeviceRegistryReloads.Inc()
+			}
+		} else if reg, rerr := devreg.Build(next.Devices, next.Live().Rules); rerr != nil {
 			m.DeviceRegistryReloadErrors.Inc()
 			log.Error("device registry reload failed; keeping previous registry", "error", rerr)
 		} else {

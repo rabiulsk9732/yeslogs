@@ -27,9 +27,21 @@ type Config struct {
 	S3         S3Config         `yaml:"s3"`
 	Security   SecurityConfig   `yaml:"security"`
 	Devices    []device.Spec    `yaml:"devices"`
+	Director   DirectorConfig   `yaml:"director"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
 	Logging    LoggingConfig    `yaml:"logging"`
 }
+
+// DirectorConfig enables managed mode: the collector pulls its device registry
+// and exporter policy from the Director control plane instead of local config.
+type DirectorConfig struct {
+	URL           string `yaml:"url"`             // e.g. http://director:8080
+	Token         string `yaml:"token"`           // agent bearer token
+	PollIntervalS int    `yaml:"poll_interval_s"` // default 30
+}
+
+// Managed reports whether the collector should pull config from the Director.
+func (c DirectorConfig) Managed() bool { return c.URL != "" && c.Token != "" }
 
 // SecurityConfig holds exporter-trust settings.
 type SecurityConfig struct {
@@ -336,6 +348,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.S3.Region == "" {
 		c.S3.Region = "us-east-1"
+	}
+	if c.Director.PollIntervalS <= 0 {
+		c.Director.PollIntervalS = 30
 	}
 	if c.Security.UnknownExporterMode == "" {
 		// Default to allow so existing configs without a device registry keep
