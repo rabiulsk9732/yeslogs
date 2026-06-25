@@ -31,6 +31,8 @@ their template are counted under `template_unknown_total` until it is learned.
 ```
 cmd/collector            entrypoint + wiring + reload + graceful shutdown
 cmd/benchgen             NetFlow v5/v9/IPFIX load generator
+cmd/pcapreplay           replay a pcap's UDP payloads to a collector
+cmd/pcapsanitize         rewrite IPs in a pcap (headers + flow records)
 internal/config          YAML load, defaults, validation, atomic live Store
 internal/receiver        UDP listeners + worker pool
 internal/decoder         common Flow type + Decoder interface
@@ -44,6 +46,9 @@ internal/pipeline        decode -> normalize -> rules -> enqueue
 internal/writer/clickhouse sharded, batching, retrying writer pool (reloadable)
 internal/archive         ClickHouse -> CSV.gz day export
 internal/archive/s3      S3-compatible upload client
+internal/pcapio          dependency-free libpcap read/write + UDP framing
+internal/sanitize        template-aware IPv4 sanitization for captures
+internal/replay          pcap UDP-payload replay core
 internal/metrics         Prometheus metrics + HTTP server
 internal/logger          structured JSON logging (slog, reloadable level)
 configs/collector.yaml   configuration
@@ -51,7 +56,9 @@ migrations/clickhouse.sql flow_logs schema
 systemd/                 service unit
 deploy/                  logrotate, firewall, ClickHouse tuning, Grafana dashboard
 docs/devices/            per-vendor onboarding guides
-scripts/                 build / install / test-send / benchmark / healthcheck / backup / archive-day
+docs/field-validation.md real-device capture/sanitize/replay workflow
+testdata/pcap/           pcap fixtures (sanitized/synthetic only)
+scripts/                 build / install / test-send / benchmark / healthcheck / backup / archive-day / capture-device / replay-pcap
 ```
 
 ## Requirements
@@ -470,6 +477,35 @@ Takeaways: the ingest path (receive → decode → normalize → rules) sustaine
 queue fills and sheds load (no errors, no crash). Clean sustained sweet spot on
 this box: **≤20k pps**. To go higher, give ClickHouse more resources — the Go
 dataplane has large headroom.
+
+## Real-device validation (pcap capture / sanitize / replay)
+
+Validate the decoders against real exporters by capturing their traffic,
+**sanitizing** it, and replaying it into a collector — no live device or
+production database needed for the replay. Full per-vendor guide:
+[`docs/field-validation.md`](docs/field-validation.md).
+
+```bash
+# 1. capture from a device (root); captures UDP 2055/9995/4739
+sudo scripts/capture-device.sh eth0 real.pcap 60
+
+# 2. SANITIZE before sharing — rewrites every IPv4 (headers + flow records,
+#    template-aware for v9/IPFIX) into 10.0.0.0/8; drops un-decodable records.
+pcapsanitize --in real.pcap --out safe.pcap        # --key <hex> for reproducible output
+
+# 3. replay into a running collector (preserves capture timing; 10x to speed up)
+scripts/replay-pcap.sh safe.pcap 127.0.0.1:9995 1x netflow9
+```
+
+`pcapsanitize` never prints original addresses and drops any v9/IPFIX data packet
+whose template it has not seen, so a real address can never leak through an
+undecodable record. **Never commit an unsanitized capture of customer traffic**
+(see `testdata/pcap/README.md`).
+
+`pcapreplay` flags: `--pcap`, `--target`, `--speed` (`1x`/`10x`/`max`), `--loop`,
+`--proto` (`auto`|`netflow5`|`netflow9`|`ipfix`). The pcap reader is
+dependency-free (no libpcap/cgo) and handles Ethernet, raw IP and Linux SLL/SLL2
+captures.
 
 ## Delivery semantics
 
