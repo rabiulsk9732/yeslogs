@@ -186,6 +186,69 @@ clickhouse-client -q "SELECT src_ip, dst_ip, dst_port, bytes, flow_type FROM nat
 curl -s 127.0.0.1:9101/metrics | grep -E 'flows_(decoded|skipped|inserted)_total'
 ```
 
+## Benchmarking
+
+`cmd/benchgen` is a NetFlow v5 load generator for stress-testing the collector.
+
+```bash
+go build -o bin/benchgen ./cmd/benchgen
+```
+
+It emits valid v5 datagrams at a target packet rate, with a configurable mix of
+DNS / private / zero-byte flows so the skip rules are exercised under load. Each
+packet carries `--flows-per-packet` flows (v5 max 30), so flows/sec = pps ×
+flows-per-packet. It prints packets/s, flows/s, Mbps and send_errors every second.
+
+Flags: `--target`, `--pps`, `--flows-per-packet`, `--duration`, `--dns-percent`,
+`--private-percent`, `--zero-byte-percent`, `--senders` (concurrent sockets;
+raise for high pps), `--ring-size`.
+
+Ramp the rate (collector + ClickHouse must be running):
+
+```bash
+bin/benchgen --target 127.0.0.1:2055 --pps 1000  --flows-per-packet 30 --duration 60s --dns-percent 30 --private-percent 20 --zero-byte-percent 5
+bin/benchgen --target 127.0.0.1:2055 --pps 5000  --flows-per-packet 30 --duration 60s --dns-percent 30 --private-percent 20 --zero-byte-percent 5
+bin/benchgen --target 127.0.0.1:2055 --pps 10000 --senders 2 --flows-per-packet 30 --duration 60s --dns-percent 30 --private-percent 20 --zero-byte-percent 5
+bin/benchgen --target 127.0.0.1:2055 --pps 50000 --senders 3 --flows-per-packet 30 --duration 60s --dns-percent 30 --private-percent 20 --zero-byte-percent 5
+```
+
+Watch the collector side in another terminal:
+
+```bash
+watch -n1 "curl -s 127.0.0.1:9101/metrics | grep -E '^(packets_received|flows_decoded|flows_inserted|flows_dropped|current_queue_size)'"
+```
+
+How to read it:
+
+- **`packets_received` < packets sent** → kernel UDP loss; raise
+  `receiver.udp_read_buffer_mb` and `net.core.rmem_max`, or add workers.
+- **`current_queue_size` climbing + `flows_dropped_total` rising** → ClickHouse
+  insert can't keep up; scale ClickHouse (cores/nodes, async inserts) or raise
+  `batch_size`. The queue caps and sheds load rather than crashing.
+- **`insert_errors_total` > 0** → ClickHouse erroring/rejecting batches.
+
+### Reference results
+
+Single **6-core VPS** with generator + collector + ClickHouse all on the same
+box (worst case — they compete for CPU), 30 flows/packet, mix 30% DNS / 20%
+private / 5% zero-byte (≈55% skipped), 10s per rung, queue cap 1,000,000:
+
+| offered pps | flows/s in | UDP loss | decoded/s | inserted/s | queue peak | dropped |
+| ----------- | ---------- | -------- | --------- | ---------- | ---------- | ------- |
+| 10,000      | 300k       | 0.0%     | 300k      | 134k       | 12k        | 0       |
+| 15,000      | 450k       | 0.0%     | 450k      | 201k       | 26k        | 0       |
+| 20,000      | 600k       | 0.0%     | 599k      | 257k       | 591k       | 0       |
+| 25,000      | 750k       | 0.0%     | 750k      | 263k       | full       | 558k    |
+| 50,000      | 1.5M       | 0.0%     | 1.5M      | 297k       | full       | 3.9M    |
+| 100,000     | 3.0M       | 0.0%     | 3.0M      | 291k       | full       | 10.5M   |
+
+Takeaways: the ingest path (receive → decode → normalize → rules) sustained
+**3M flows/s with 0% UDP loss** even on a shared box. The bottleneck is
+**ClickHouse insert throughput (~260–300k flows/s here)**; beyond it the writer
+queue fills and sheds load (no errors, no crash). Clean sustained sweet spot on
+this box: **≤20k pps**. To go higher, give ClickHouse more resources — the Go
+dataplane has large headroom.
+
 ## Delivery semantics
 
 Inserts are **at-least-once**. The writer batches flows and retries transient
