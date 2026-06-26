@@ -7,41 +7,84 @@
 <link rel="stylesheet" href="/assets/fontawesome/css/all.min.css">
 <script src="/assets/js/jquery.min.js"></script>
 <style>
-:root{--pri:#0077b6;--pri6:#0285c9;--dark:#02507e;--cyan:#00a3c4;--ok:#2a9d8f;--warn:#ffb703;--bad:#e63946;--ink:#2c3a47;--slate:#7b8794;--bd:#dde3e9;--bg:#f4f6f9}
+:root{
+  --pri:#1366d6;--pri-d:#0f52ab;--pri6:#2a7ae4;--dark:#0c3b73;--cyan:#0891b2;
+  --ok:#16a34a;--ok-bg:#e7f6ec;--warn:#d97706;--warn-bg:#fdf3e3;--bad:#dc2626;--bad-bg:#fdecec;--info:#1366d6;--info-bg:#e9f2fd;
+  --ink:#1b2733;--ink2:#415061;--slate:#64748b;--mut:#94a3b8;--bd:#e3e9f0;--bd2:#eef2f6;--bg:#eef2f7;--card:#fff;
+  --sh-sm:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.07);
+  --sh:0 4px 14px rgba(16,24,40,.07),0 2px 5px rgba(16,24,40,.04);
+  --sh-lg:0 16px 40px rgba(16,24,40,.16);
+  --r:11px;--r-sm:8px;--grad:linear-gradient(135deg,#1a6fe0,#0f52ab)
+}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;height:100%}
-body{font-family:'Source Sans 3',sans-serif;color:var(--ink);background:var(--bg)}
-.mono{font-family:'JetBrains Mono',monospace}
-::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#c2ccd6;border-radius:5px}
-@keyframes pulseDot{0%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}100%{opacity:1;transform:scale(1)}}
-a{text-decoration:none}
-.card{background:#fff;border-radius:5px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
-.ch{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid #eef1f4}
-.ch h2{margin:0;font-size:17px;font-weight:600;color:var(--ink)}
-.btn{height:38px;padding:0 16px;border:none;border-radius:5px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;color:#fff;background:var(--pri);display:inline-flex;align-items:center;gap:8px}
-.btn:hover{background:#02628f}
-.btn.out{background:#fff;color:#4a5560;border:1px solid #ced4da}.btn.out:hover{background:#f1f4f7}
-.inp{width:100%;height:38px;border:1px solid #ced4da;border-radius:5px;padding:0 12px;font-size:14px;color:#495057;outline:none;font-family:inherit}
-.inp:focus{border-color:var(--pri);box-shadow:0 0 0 3px rgba(0,119,182,.15)}
-.lbl{display:block;font-size:13px;font-weight:600;color:#4a5560;margin-bottom:6px}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{text-align:left;padding:11px 14px;border-bottom:2px solid #e2e8ee;color:#3f4b57;font-weight:700;cursor:pointer;white-space:nowrap;user-select:none}
-th:hover{background:#eef3f8}
-td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
-.menua{display:flex;align-items:center;gap:8px;padding:0 17px;height:46px;font-size:14px;font-weight:600;white-space:nowrap;cursor:pointer;color:#4a5560;border-bottom:3px solid transparent}
-.menua:hover{background:#f3f9fd;color:var(--pri)}
-.menua.on{color:var(--pri);background:#eef7fc;border-bottom-color:var(--pri)}
-.pill{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:700}
-.modal-bg{position:fixed;inset:0;background:rgba(11,33,56,.45);display:flex;align-items:center;justify-content:center;z-index:50}
-.modal{background:#fff;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.25);width:520px;max-width:94vw;max-height:90vh;overflow:auto}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--bd);margin-bottom:18px;flex-wrap:wrap}
-.tab{padding:9px 16px;font-size:14px;font-weight:600;color:#4a5560;cursor:pointer;border-bottom:3px solid transparent}
-.tab:hover{color:var(--pri)}
-.tab.on{color:var(--pri);border-bottom-color:var(--pri)}
-.gauge{height:8px;background:#eef1f4;border-radius:5px;overflow:hidden;margin-top:8px}
-.gauge>div{height:100%;border-radius:5px}
-.fgrid{display:grid;grid-template-columns:200px 1fr;gap:12px 16px;align-items:center;padding:4px 0}
-.toast{position:fixed;bottom:20px;right:20px;background:#1e7e34;color:#fff;padding:11px 18px;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.2);z-index:60;font-size:14px;font-weight:600}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45}
+.mono{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+::-webkit-scrollbar{width:11px;height:11px}::-webkit-scrollbar-thumb{background:#c8d2de;border-radius:7px;border:3px solid var(--bg)}::-webkit-scrollbar-thumb:hover{background:#9fb0c2}
+a{text-decoration:none;color:inherit}
+@keyframes pulseDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.6)}}
+@keyframes shimmer{100%{background-position:-200% 0}}
+@keyframes slideIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);transition:box-shadow .2s;animation:fadeUp .26s ease both}
+.card:hover{box-shadow:var(--sh)}
+.ch{display:flex;align-items:center;gap:11px;padding:15px 18px;border-bottom:1px solid var(--bd2)}
+.ch h2{margin:0;font-size:16px;font-weight:700;color:var(--ink);letter-spacing:-.01em}
+.ci{width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;background:var(--info-bg);color:var(--pri);font-size:14px;flex:0 0 auto}
+.btn{height:39px;padding:0 17px;border:none;border-radius:var(--r-sm);font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;color:#fff;background:var(--pri);display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:.15s;box-shadow:var(--sh-sm);white-space:nowrap}
+.btn:hover{background:var(--pri-d);transform:translateY(-1px);box-shadow:var(--sh)}
+.btn:active{transform:translateY(0)}
+.btn:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}
+.btn.out{background:#fff;color:var(--ink2);border:1px solid var(--bd);box-shadow:none}.btn.out:hover{background:#f6f9fc;border-color:#c8d2de;color:var(--pri)}
+.btn.ghost{background:transparent;color:var(--pri);box-shadow:none}.btn.ghost:hover{background:var(--info-bg)}
+.btn.danger{background:var(--bad)}.btn.danger:hover{background:#b91c1c}
+.btn.sm{height:31px;padding:0 11px;font-size:12.5px;border-radius:7px}
+.inp{width:100%;height:40px;border:1px solid var(--bd);border-radius:var(--r-sm);padding:0 12px;font-size:14px;color:var(--ink);outline:none;font-family:inherit;background:#fff;transition:.15s}
+.inp:hover{border-color:#c8d2de}
+.inp:focus{border-color:var(--pri);box-shadow:0 0 0 3.5px rgba(19,102,214,.13)}
+.inp::placeholder{color:#b3bfcd}
+select.inp{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
+.lbl{display:block;font-size:12.5px;font-weight:600;color:var(--ink2);margin-bottom:6px}
+.hint{font-size:12px;color:var(--mut);margin-top:5px;line-height:1.5}
+.req{color:var(--bad);margin-left:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:11px 16px;border-bottom:1px solid var(--bd);color:var(--slate);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.045em;white-space:nowrap;user-select:none;background:#fafbfd;cursor:pointer}
+th:hover{color:var(--pri)}
+td{padding:12px 16px;border-bottom:1px solid var(--bd2);white-space:nowrap;color:var(--ink2)}
+tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:last-child td{border-bottom:none}
+.menua{display:flex;align-items:center;gap:8px;padding:0 15px;height:49px;font-size:13.5px;font-weight:600;white-space:nowrap;cursor:pointer;color:var(--slate);border-bottom:2.5px solid transparent;transition:.15s}
+.menua i{font-size:14px;opacity:.75}
+.menua:hover{color:var(--pri);background:#f6f9fc}
+.menua.on{color:var(--pri);border-bottom-color:var(--pri)}.menua.on i{opacity:1}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;line-height:1.6}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.warn{background:var(--warn-bg);color:var(--warn)}.pill.bad{background:var(--bad-bg);color:var(--bad)}.pill.info{background:var(--info-bg);color:var(--info)}.pill.mut{background:#eef2f6;color:var(--slate)}
+.modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:50;animation:fadeUp .15s}
+.modal{background:#fff;border-radius:14px;box-shadow:var(--sh-lg);width:560px;max-width:94vw;max-height:90vh;overflow:auto;animation:slideIn .2s}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:18px;flex-wrap:wrap}
+.tab{padding:10px 17px;font-size:13.5px;font-weight:600;color:var(--slate);cursor:pointer;border-bottom:2.5px solid transparent;transition:.15s}
+.tab:hover{color:var(--pri)}.tab.on{color:var(--pri);border-bottom-color:var(--pri)}
+.gauge{height:7px;background:#eef2f6;border-radius:6px;overflow:hidden;margin-top:10px}
+.gauge>div{height:100%;border-radius:6px;transition:width .5s ease}
+.fgrid{display:grid;grid-template-columns:240px 1fr;gap:3px 20px;align-items:start;padding:13px 0;border-bottom:1px solid var(--bd2)}
+.fgrid:last-of-type{border-bottom:none}.fgrid .lbl{margin:0;padding-top:10px}
+.toast{position:fixed;bottom:22px;right:22px;color:#fff;padding:13px 18px;border-radius:11px;box-shadow:var(--sh-lg);z-index:60;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:10px;animation:slideIn .2s;background:var(--ok)}
+.toast.err{background:var(--bad)}.toast.info{background:var(--pri)}
+.kpi{padding:17px 18px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.kpi .kl{font-size:11px;color:var(--slate);font-weight:600;text-transform:uppercase;letter-spacing:.045em}
+.kpi .kv{font-size:27px;font-weight:700;color:var(--ink);margin-top:6px;letter-spacing:-.025em;line-height:1.05}
+.kpi .ks{font-size:12px;color:var(--mut);margin-top:3px}
+.kpi .ki{width:44px;height:44px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:18px;flex:0 0 auto}
+.empty{padding:48px 24px;text-align:center;color:var(--slate)}
+.empty .ei{width:62px;height:62px;border-radius:17px;background:var(--info-bg);color:var(--pri);display:inline-flex;align-items:center;justify-content:center;font-size:25px;margin-bottom:15px}
+.empty .et{font-size:15px;font-weight:700;color:var(--ink2);margin-bottom:5px}
+.empty .ed{font-size:13px;max-width:430px;margin:0 auto;line-height:1.6}
+.skel{background:linear-gradient(90deg,#eef2f6 25%,#f7f9fb 37%,#eef2f6 63%);background-size:200% 100%;animation:shimmer 1.3s infinite;border-radius:7px}
+.note{display:flex;gap:11px;align-items:flex-start;padding:13px 16px;background:var(--info-bg);border:1px solid #d3e4fb;border-radius:11px;font-size:13px;color:var(--ink2);line-height:1.55}
+.note i{color:var(--pri);margin-top:1px;font-size:14px}
+.note.amber{background:var(--warn-bg);border-color:#f5e3c4}.note.amber i{color:var(--warn)}
+.chk{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;color:var(--ink2);user-select:none}
+.chk input{width:16px;height:16px;accent-color:var(--pri);cursor:pointer}
+.sect{display:flex;align-items:center;gap:9px;margin:2px 0 13px;font-size:13px;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.04em}
 </style>
 </head>
 <body>
@@ -161,12 +204,24 @@ const api = (p,o) => fetch(p,Object.assign({headers:{'Content-Type':'application
 const apiJSON = (p,method,body) => fetch(p,{method:method||'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':S.csrf},body:body?JSON.stringify(body):undefined});
 function modal(html){ closeModal(); const $m=$('<div class="modal-bg"><div class="modal">'+html+'</div></div>'); $m.on('click',e=>{if(e.target===$m[0])closeModal();}); $('body').append($m); return $m; }
 function closeModal(){ $('.modal-bg').remove(); }
-function toast(msg){ const $t=$('<div class="toast"></div>').text(msg); $('body').append($t); setTimeout(()=>$t.fadeOut(300,()=>$t.remove()),1800); }
+function toast(msg,type){ const ic={ok:'fa-circle-check',err:'fa-circle-exclamation',info:'fa-circle-info'}[type||'ok'];
+  const $t=$('<div class="toast '+(type==='err'?'err':type==='info'?'info':'')+'"><i class="fas '+ic+'"></i><span></span></div>'); $t.find('span').text(msg);
+  $('body').append($t); setTimeout(()=>$t.fadeOut(300,()=>$t.remove()),2400); }
+// ---- UI builders (premium, reusable) ----
+function chead(icon,title,extra){ return `<div class="ch"><span class="ci"><i class="fas ${icon}"></i></span><h2>${esc(title)}</h2>${extra||''}</div>`; }
+function pill(text,variant){ return `<span class="pill ${variant||'mut'}">${esc(text)}</span>`; }
+function emptyRow(cols,icon,title,desc){ return `<tr><td colspan="${cols}"><div class="empty"><div class="ei"><i class="fas ${icon}"></i></div><div class="et">${esc(title)}</div><div class="ed">${desc||''}</div></div></td></tr>`; }
+function note(text,icon,cls){ return `<div class="note ${cls||''}"><i class="fas ${icon||'fa-circle-info'}"></i><div>${text}</div></div>`; }
+function hint(t){ return `<div class="hint">${t}</div>`; }
+function loadingCard(t){ return `<div class="card"><div style="padding:20px;display:flex;flex-direction:column;gap:10px">${'<div class="skel" style="height:14px;width:'+[60,90,75,85][0]+'%"></div>'}${[90,72,84].map(w=>'<div class="skel" style="height:14px;width:'+w+'%"></div>').join('')}<div style="color:var(--mut);font-size:12.5px;margin-top:4px">${t||'Loading…'}</div></div></div>`; }
+function kpiCard(label,value,sub,icon,color){ return `<div class="card kpi"><div style="min-width:0"><div class="kl">${esc(label)}</div><div class="kv">${value}</div><div class="ks">${sub||''}</div></div><div class="ki" style="background:${color}1a;color:${color}"><i class="fas ${icon}"></i></div></div>`; }
+// labelled form field with optional what/why hint
+function fld(label,ctrl,hintTxt,req){ return `<div style="flex:1 1 var(--fw,180px);min-width:140px"><label class="lbl">${esc(label)}${req?'<span class="req">*</span>':''}</label>${ctrl}${hintTxt?hint(hintTxt):''}</div>`; }
 
 // ---- auth ----
 function showLogin(){ $('#login').css('display','block'); $('#app').css('display','none'); }
 function showApp(){ $('#login').css('display','none'); $('#app').css('display','flex'); }
-function initials(email){ const n=(email||'?').split('@')[0].split(/[.\-_]/); return ((n[0]||'?')[0]+(n[1]||'')[0]||'').toUpperCase(); }
+function initials(email){ const n=(email||'?').split('@')[0].split(/[.\-_]/); const a=(n[0]||'?')[0]||'?', b=(n[1]||'')[0]||''; return (a+b).toUpperCase(); }
 
 async function boot(){
   const r = await api('/api/v1/me');
@@ -188,7 +243,7 @@ async function doLogin(){
   else { const e=await r.json().catch(()=>({})); $('#login-err').text(e.error||'Sign in failed').show(); }
 }
 $('#logout').on('click', async ()=>{ await api('/api/v1/logout',{method:'POST',headers:{'X-CSRF-Token':S.csrf}}); location.reload(); });
-$('#globalSearch').on('input', function(){ S.search=this.value; S.page=1; if(S.view==='Dashboard') renderPage(); });
+$('#globalSearch').on('input', function(){ S.search=this.value; S.page=1; if(S.view==='Overview'){ $('#tsearch').val(this.value); if($('#tbody').length) renderTable(); } });
 
 // ---- data ----
 async function loadData(){
@@ -225,15 +280,14 @@ function renderPage(){
 async function pgOverview(b){
   b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
   const r=await api('/api/v1/overview'); const cards=(r.status===200?((await r.json()).cards||[]):[]);
-  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:18px">';
-  cards.forEach(c=>{ h+=`<div class="card" style="padding:16px;display:flex;justify-content:space-between;align-items:flex-start">
-    <div style="min-width:0"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${esc(c.label)}</div>
-    <div style="font-size:26px;font-weight:700;color:#2c3a47;margin-top:4px">${esc(c.value)}</div>
-    <div style="font-size:12px;color:#a7b1bc">${esc(c.sub)}</div>
-    ${c.pct?`<div class="gauge"><div style="width:${c.pct}%;background:${c.color}"></div></div>`:''}</div>
-    <i class="fas ${c.icon}" style="font-size:24px;color:${c.color};opacity:.85"></i></div>`; });
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px;margin-bottom:18px">';
+  cards.forEach(c=>{ h+=`<div class="card kpi" style="flex-direction:column;align-items:stretch">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div style="min-width:0"><div class="kl">${esc(c.label)}</div><div class="kv">${esc(c.value)}</div><div class="ks">${esc(c.sub)}</div></div>
+      <div class="ki" style="background:${c.color}1a;color:${c.color}"><i class="fas ${c.icon}"></i></div></div>
+    ${c.pct?`<div class="gauge"><div style="width:${c.pct}%;background:${c.color}"></div></div>`:''}</div>`; });
   h+='</div>';
-  if(!cards.length) h='<div class="card" style="padding:24px;color:#7b8794">No data yet. Add an exporter device and point it at this dataplane to start ingesting flow logs.</div>';
+  if(!cards.length) h=`<div class="card"><div class="empty"><div class="ei"><i class="fas fa-satellite-dish"></i></div><div class="et">No flows yet</div><div class="ed">Add an <b>Exporter Device</b> (Devices tab) and point your router's NetFlow/IPFIX export at this collector — flows will appear here within seconds.</div></div></div>`;
   // recent flow logs
   h+=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>Recent Flow Logs</h2></div>
     <div style="display:flex;gap:10px;align-items:center"><input id="tsearch" class="inp" placeholder="filter…" style="width:200px;height:32px" value="${esc(S.search)}"><button id="refresh" class="btn out" style="height:32px"><i class="fas fa-arrows-rotate"></i></button></div></div>
@@ -288,8 +342,9 @@ async function pgLogs(b){
   const dr=await api('/api/v1/devices'); if(dr.status===200){ const d=await dr.json(); devs=d.devices||[]; isps=d.isps||[]; }
   const dir=S.me&&S.me.isDirector;
   const ispOpts = dir? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="s-isp" class="inp"><option value="0">All ISPs</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>`:'';
-  b.html(`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-magnifying-glass" style="color:var(--pri)"></i><h2>Logs Search</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">audited</span></div>
-  <div style="padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+  b.html(`<div class="card" style="margin-bottom:18px">${chead('fa-magnifying-glass','Logs Search',pill('audited','mut'))}
+  <div style="padding:16px 18px 4px">${note("Resolve a NAT mapping by Public IP+port (and time) → subscriber, or filter by Private/Destination IP or device. Recent data is served from hot storage; older days are pulled transparently from the S3 cold archive. Every search is recorded in the audit trail.",'fa-circle-info')}</div>
+  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
     ${ispOpts}
     <div style="flex:1 1 120px"><label class="lbl">Dataplane</label><select id="s-dp" class="inp"><option>All</option></select></div>
     <div style="flex:1 1 150px"><label class="lbl">Device</label><select id="s-dev" class="inp"><option value="0">Any device</option>${devs.map(d=>`<option value="${d.DeviceID}">${esc(d.Name)} (#${d.DeviceID})</option>`).join('')}</select></div>
@@ -324,7 +379,7 @@ function renderLogResults(rows,count,truncated,body){
     <a class="btn out" style="height:32px" href="/api/v1/report?format=xlsx&${qs}"><i class="fas fa-file-excel"></i> Excel</a>
     <a class="btn out" style="height:32px" href="/api/v1/report?format=pdf&${qs}"><i class="fas fa-file-pdf"></i> PDF</a></div></div>
     <div style="overflow-x:auto"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Private (NAT)</th><th>Public (NAT)</th><th>Proto</th><th>Destination</th><th>Type</th></tr></thead><tbody>`;
-  if(!rows.length) h+='<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:30px">No flow logs match these filters / time window.</td></tr>';
+  if(!rows.length) h+=emptyRow(7,'fa-magnifying-glass','No matching flow logs','Nothing matched these filters and time window. Widen the time range, or check the IP/device — months-old searches also include the S3 cold archive.');
   rows.forEach((r,i)=>{const pb=PB[r.proto]||PB.OTH;
     h+=`<tr style="background:${i%2?'#fbfcfd':'#fff'}"><td class="mono"><span style="color:#9aa5b1;font-size:11px">${esc(r.date)}</span><br>${esc(r.clock)}</td>
     <td class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</td>
@@ -408,7 +463,7 @@ async function pgRetention(b){
   b.html(h);
   $('.arch-run').on('click', async function(){ const day=$(this).data('d'); const btn=$(this); btn.prop('disabled',true).text('…');
     const r=await apiJSON('/api/v1/archive/'+day,'POST'); const e=await r.json().catch(()=>({}));
-    if(r.status===200){ btn.replaceWith('<span class="pill" style="background:#e6f4ea;color:#1e7e34">'+(e.rows||0)+' rows → S3</span>'); } else { btn.prop('disabled',false).text('retry'); alert(e.error||'archive failed'); }
+    if(r.status===200){ btn.replaceWith('<span class="pill" style="background:#e6f4ea;color:#1e7e34">'+(e.rows||0)+' rows → S3</span>'); } else { btn.prop('disabled',false).text('retry'); toast(e.error||'archive failed','err'); }
   });
   $('#sweep-now').on('click', async function(){ const btn=$(this); btn.prop('disabled',true).html('<i class="fas fa-spinner fa-spin"></i> sweeping…'); $('#sweep-msg').text('');
     const r=await apiJSON('/api/v1/archive/sweep','POST'); const e=await r.json().catch(()=>({}));
@@ -423,19 +478,20 @@ async function pgISPs(b){
   const r=await api('/api/v1/isps');
   if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load ISPs (Director only).</div>'); return; }
   const {isps=[]}=await r.json();
-  let h=`<div class="card" style="margin-bottom:20px"><div class="ch"><i class="fas fa-building" style="color:var(--pri)"></i><h2>Onboard ISP (tenant)</h2></div>
-  <div style="padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
-    <div style="flex:1 1 200px"><label class="lbl">ISP name</label><input id="isp-name" class="inp" placeholder="Acme Networks"></div>
-    <div style="flex:1 1 200px"><label class="lbl">ISP admin email (optional)</label><input id="isp-email" class="inp" placeholder="admin@acme.net"></div>
-    <div style="flex:1 1 160px"><label class="lbl">ISP admin password</label><input id="isp-pass" type="password" class="inp" placeholder="••••••"></div>
-    <button id="isp-add" class="btn"><i class="fas fa-plus"></i> Create ISP</button>
-  </div><div id="isp-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>`;
-  h+='<div class="card"><div class="ch"><i class="fas fa-list" style="color:var(--pri)"></i><h2>ISPs</h2></div><div style="overflow-x:auto"><table><thead><tr><th>isp_id</th><th>Name</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>';
-  if(!isps.length) h+='<tr><td colspan="5" style="text-align:center;color:#9aa5b1;padding:24px">No ISPs yet — create one above.</td></tr>';
-  isps.forEach(i=>{ h+=`<tr><td class="mono">${i.ID}</td><td>${esc(i.Name)}</td>
-    <td><span class="pill" style="background:${i.Enabled?'#e6f4ea':'#f0f0f3'};color:${i.Enabled?'#1e7e34':'#6c757d'}">${i.Enabled?'enabled':'disabled'}</span></td>
-    <td class="mono" style="color:#7b8794">${(i.CreatedAt||'').replace('T',' ').slice(0,16)}</td>
-    <td><button class="btn out isp-tog" data-id="${i.ID}" style="height:30px">${i.Enabled?'Disable':'Enable'}</button></td></tr>`; });
+  let h=`<div class="card" style="margin-bottom:20px">${chead('fa-building','Onboard ISP (tenant)')}
+  <div style="padding:16px 18px 4px">${note("Each ISP is an isolated tenant — its users only ever see their own devices, flows and reports. Optionally create the ISP's first admin login now; you can add more users later.",'fa-circle-info')}</div>
+  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
+    <div style="flex:1 1 220px"><label class="lbl">ISP name<span class="req">*</span></label><input id="isp-name" class="inp" placeholder="Wadhai Online Multi Services">${hint('Shown across the console; also the tenant scope')}</div>
+    <div style="flex:1 1 220px"><label class="lbl">ISP admin email</label><input id="isp-email" class="inp" placeholder="admin@wadhai.in">${hint('Optional — the tenant login (leave blank to add later)')}</div>
+    <div style="flex:1 1 170px"><label class="lbl">ISP admin password</label><input id="isp-pass" type="password" class="inp" placeholder="••••••••">${hint('Min 8 chars; share securely')}</div>
+    <div style="padding-top:23px"><button id="isp-add" class="btn"><i class="fas fa-plus"></i> Create ISP</button></div>
+  </div><div id="isp-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>`;
+  h+='<div class="card">'+chead('fa-list-check','ISPs',pill(isps.length+' tenant'+(isps.length===1?'':'s'),'mut'))+'<div style="overflow-x:auto"><table><thead><tr><th>isp_id</th><th>Name</th><th>Status</th><th>Created (IST)</th><th></th></tr></thead><tbody>';
+  if(!isps.length) h+=emptyRow(5,'fa-building','No ISPs yet','Onboard your first ISP tenant above to start collecting their NAT/NetFlow logs.');
+  isps.forEach(i=>{ h+=`<tr><td class="mono">${i.ID}</td><td style="font-weight:600;color:var(--ink)">${esc(i.Name)}</td>
+    <td>${i.Enabled?pill('enabled','ok'):pill('disabled','mut')}</td>
+    <td class="mono" style="color:var(--slate)">${(i.CreatedAt||'').replace('T',' ').slice(0,16)}</td>
+    <td style="text-align:right"><button class="btn out sm isp-tog" data-id="${i.ID}">${i.Enabled?'Disable':'Enable'}</button></td></tr>`; });
   h+='</tbody></table></div></div>';
   b.html(h);
   $('#isp-add').on('click', async ()=>{
@@ -455,32 +511,33 @@ async function pgDevices(b){
   const data=await r.json(); const devs=data.devices||[], isps=data.isps||[], dir=data.isDirector;
   const pols=await loadPolicies();
   const ispSel = dir ? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="d-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>` : '';
-  let h=`<div class="card" style="margin-bottom:20px"><div class="ch"><i class="fas fa-server" style="color:var(--pri)"></i><h2>Add Exporter Device</h2></div>
-  <div style="padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+  let h=`<div class="card" style="margin-bottom:20px">${chead('fa-server','Add Exporter Device')}
+  <div style="padding:16px 18px 4px">${note("An <b>exporter device</b> is a router/NAS that sends NetFlow/IPFIX to this collector. Only registered exporters are accepted — the <b>Exporter IP</b> must match the source IP the device sends from. Point the device's flow export at this server's collector port (NetFlow v9 → <span class='mono'>:9995</span>, IPFIX → <span class='mono'>:4739</span>, v5 → <span class='mono'>:2055</span>).",'fa-circle-info')}</div>
+  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
     ${ispSel}
     <div style="flex:1 1 110px"><label class="lbl">Dataplane</label><select id="d-dp" class="inp"><option>local</option></select></div>
-    <div style="flex:1 1 150px"><label class="lbl">Device name</label><input id="d-name" class="inp" placeholder="edge-router-01"></div>
-    <div style="flex:1 1 130px"><label class="lbl">Exporter IP</label><input id="d-ip" class="inp mono" placeholder="10.0.0.1"></div>
-    <div style="flex:1 1 90px"><label class="lbl">device_id</label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1"></div>
-    <div style="flex:1 1 120px"><label class="lbl">Protocol</label><select id="d-proto" class="inp"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select></div>
+    <div style="flex:1 1 150px"><label class="lbl">Device name<span class="req">*</span></label><input id="d-name" class="inp" placeholder="edge-router-01">${hint('A friendly label')}</div>
+    <div style="flex:1 1 140px"><label class="lbl">Exporter IP<span class="req">*</span></label><input id="d-ip" class="inp mono" placeholder="103.187.167.154">${hint('Source IP the router exports from')}</div>
+    <div style="flex:1 1 95px"><label class="lbl">device_id<span class="req">*</span></label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1">${hint('Stamped on every flow')}</div>
+    <div style="flex:1 1 120px"><label class="lbl">Protocol</label><select id="d-proto" class="inp"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select>${hint('auto = detect')}</div>
     <div style="flex:1 1 120px"><label class="lbl">Vendor profile</label><select id="d-profile" class="inp"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select></div>
-    <div style="flex:1 1 140px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select></div>
-    <button id="d-add" class="btn"><i class="fas fa-plus"></i> Add Device</button>
+    <div style="flex:1 1 150px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select>${hint('Overrides custom rules →')}</div>
+    <div style="align-self:flex-start;padding-top:23px"><button id="d-add" class="btn"><i class="fas fa-plus"></i> Add Device</button></div>
   </div>
-  <div id="d-custom" style="padding:0 18px 14px;display:flex;gap:18px;font-size:13px;color:#4a5560;align-items:center;flex-wrap:wrap">
-    <span style="color:#9aa5b1">Custom skip rules (used when no capture policy):</span>
-    <label><input type="checkbox" id="d-dns" checked> skip DNS</label>
-    <label><input type="checkbox" id="d-priv" checked> skip priv→priv</label>
-    <label><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
-    <span id="d-msg" style="color:#c0392b"></span>
+  <div id="d-custom" style="padding:4px 18px 16px;display:flex;gap:18px;font-size:13px;color:var(--ink2);align-items:center;flex-wrap:wrap">
+    <span style="color:var(--mut)">Custom skip rules (used only when no capture policy is selected):</span>
+    <label class="chk"><input type="checkbox" id="d-dns" checked> skip DNS</label>
+    <label class="chk"><input type="checkbox" id="d-priv" checked> skip priv→priv</label>
+    <label class="chk"><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
+    <span id="d-msg" style="color:var(--bad);font-weight:600"></span>
   </div></div>`;
-  h+='<div class="card"><div class="ch"><i class="fas fa-list" style="color:var(--pri)"></i><h2>Exporter Devices</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">unregistered exporters are rejected</span></div><div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>device_id</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Rules</th><th>Status</th><th></th></tr></thead><tbody>';
-  if(!devs.length) h+='<tr><td colspan="10" style="text-align:center;color:#9aa5b1;padding:24px">No exporter devices yet — add one above.</td></tr>';
-  devs.forEach(d=>{ h+=`<tr><td class="mono">${d.ISPID}</td><td>${esc(d.Name)}</td><td class="mono">${esc(d.ExporterIP)}</td><td class="mono">${d.DeviceID}</td><td>${esc(d.Protocol)}</td><td>${esc(d.Profile)}</td>
-    <td>${d.CapturePolicy?`<span class="pill" style="background:#eef7fc;color:#0077b6">${esc(d.CapturePolicy)}</span>`:'<span style="color:#9aa5b1">custom</span>'}</td>
-    <td style="font-size:12px;color:#7b8794">${d.SkipDNS?'dns ':''}${d.SkipPrivate?'priv ':''}${d.SkipZero?'zero':''}</td>
-    <td><span class="pill" style="background:${d.Enabled?'#e6f4ea':'#f0f0f3'};color:${d.Enabled?'#1e7e34':'#6c757d'}">${d.Enabled?'enabled':'disabled'}</span></td>
-    <td style="white-space:nowrap"><button class="btn out d-edit" data-id="${d.ID}" style="height:30px"><i class="fas fa-pen"></i></button> <button class="btn out d-tog" data-id="${d.ID}" style="height:30px">${d.Enabled?'Disable':'Enable'}</button> <button class="btn d-del" data-id="${d.ID}" style="height:30px;background:#e63946">Del</button></td></tr>`; });
+  h+='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn'))+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>device_id</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Rules</th><th>Status</th><th></th></tr></thead><tbody>';
+  if(!devs.length) h+=emptyRow(10,'fa-server','No exporter devices yet','Add your first exporter above, then point its NetFlow/IPFIX export at this collector to start ingesting flows.');
+  devs.forEach(d=>{ h+=`<tr><td class="mono">${d.ISPID}</td><td style="font-weight:600;color:var(--ink)">${esc(d.Name)}</td><td class="mono">${esc(d.ExporterIP)}</td><td class="mono">${d.DeviceID}</td><td>${esc(d.Protocol)}</td><td>${esc(d.Profile)}</td>
+    <td>${d.CapturePolicy?pill(d.CapturePolicy,'info'):'<span style="color:var(--mut)">custom</span>'}</td>
+    <td style="font-size:12px;color:var(--slate)">${d.SkipDNS?'dns ':''}${d.SkipPrivate?'priv ':''}${d.SkipZero?'zero':''}${!d.SkipDNS&&!d.SkipPrivate&&!d.SkipZero?'—':''}</td>
+    <td>${d.Enabled?pill('enabled','ok'):pill('disabled','mut')}</td>
+    <td style="white-space:nowrap;text-align:right"><button class="btn out sm d-edit" data-id="${d.ID}" title="Edit"><i class="fas fa-pen"></i></button> <button class="btn out sm d-tog" data-id="${d.ID}">${d.Enabled?'Disable':'Enable'}</button> <button class="btn danger sm d-del" data-id="${d.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`; });
   h+='</tbody></table></div></div>';
   b.html(h);
   $('#d-pol').on('change',function(){ $('#d-custom').css('opacity', this.value?'.4':'1'); });
@@ -496,9 +553,9 @@ async function pgDevices(b){
 
 // ==================== SETTINGS (Director) ====================
 const opts=(arr,sel)=>arr.map(o=>`<option ${o===sel?'selected':''}>${o}</option>`).join('');
-const srow=(label,ctrl)=>`<div class="fgrid"><label class="lbl" style="margin:0">${label}</label><div>${ctrl}</div></div>`;
-const chk=(id,v)=>`<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="${id}" ${v?'checked':''}> enabled</label>`;
-function saveSetting(section,body){ apiJSON('/api/v1/settings/'+section,'PUT',body).then(async r=>{ if(r.status===200){ toast('Saved · applied to dataplane'); } else { const e=await r.json().catch(()=>({})); alert(e.error||'save failed'); } }); }
+const srow=(label,ctrl,h)=>`<div class="fgrid"><label class="lbl">${label}</label><div>${ctrl}${h?hint(h):''}</div></div>`;
+const chk=(id,v,lbl)=>`<label class="chk"><input type="checkbox" id="${id}" ${v?'checked':''}> ${lbl||'enabled'}</label>`;
+function saveSetting(section,body){ apiJSON('/api/v1/settings/'+section,'PUT',body).then(async r=>{ if(r.status===200){ toast('Saved · applied to dataplane'); } else { const e=await r.json().catch(()=>({})); toast(e.error||'save failed','err'); } }); }
 async function pgSettings(b){
   b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading settings…</div>');
   const r=await api('/api/v1/settings'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load settings (Director only).</div>'); return; }
@@ -509,38 +566,47 @@ async function pgSettings(b){
   $('.tab').on('click',function(){open(+$(this).data('i'));}); open(0);
 }
 function dpTab(cfg){ const d=cfg.dataplane||{};
-  $('#set-body').html(srow('Batch size',`<input id="dp-batch" class="inp mono" value="${d.batchSize||5000}">`)+
-    srow('Flush interval (ms)',`<input id="dp-flush" class="inp mono" value="${d.flushIntervalMs||300}">`)+
-    srow('Writer workers',`<input id="dp-workers" class="inp mono" value="${d.writerWorkers||2}">`)+
-    srow('Max queue rows',`<input id="dp-queue" class="inp mono" value="${d.maxQueueRows||200000}">`)+
-    srow('Backpressure',`<select id="dp-bp" class="inp">${opts(['block','drop_new','drop_old'],d.backpressureMode)}</select>`)+
-    srow('Unknown exporter',`<select id="dp-unk" class="inp">${opts(['reject','observe','allow'],d.unknownExporterMode)}</select>`)+
-    `<div style="margin-top:14px"><button class="btn" id="dp-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#set-body').html('<div class="sect"><i class="fas fa-gauge-high"></i> Ingest pipeline tuning</div>'+
+    note('These control how fast flows are written to ClickHouse. Changes apply <b>live</b> — no restart. The validated 50k-subscriber baseline is <b>6 workers / 25k batch / 500k queue / block</b>.','fa-bolt')+'<div style="height:14px"></div>'+
+    srow('Batch size',`<input id="dp-batch" class="inp mono" value="${d.batchSize||5000}">`,'Rows per ClickHouse insert. The #1 throughput lever — larger batches insert far more efficiently. 25,000–50,000 recommended.')+
+    srow('Flush interval (ms)',`<input id="dp-flush" class="inp mono" value="${d.flushIntervalMs||300}">`,'Max time a partial batch waits before being flushed. Lower = fresher data but more, smaller inserts. 300 ms is a good balance.')+
+    srow('Writer workers',`<input id="dp-workers" class="inp mono" value="${d.writerWorkers||2}">`,'Parallel insert workers. Scale roughly with CPU cores; too many causes contention. 6 on this 6-vCPU box.')+
+    srow('Max queue rows',`<input id="dp-queue" class="inp mono" value="${d.maxQueueRows||200000}">`,'In-memory buffer that absorbs ingest bursts. Bigger soaks up spikes; backpressure engages only when it fills.')+
+    srow('Backpressure',`<select id="dp-bp" class="inp">${opts(['block','drop_new','drop_old'],d.backpressureMode)}</select>`,'When the queue is full: <b>block</b> = never drop (receiver slows) — safest. <b>drop_new</b>/<b>drop_old</b> = shed load to stay real-time.')+
+    srow('Unknown exporter',`<select id="dp-unk" class="inp">${opts(['reject','observe','allow'],d.unknownExporterMode)}</select>`,'Flows from IPs not registered as devices: <b>reject</b> = secure default. <b>observe</b> = count but drop. <b>allow</b> = accept all (open).')+
+    `<div style="margin-top:16px"><button class="btn" id="dp-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
   $('#dp-save').on('click',()=>saveSetting('dataplane',{batchSize:+$('#dp-batch').val(),flushIntervalMs:+$('#dp-flush').val(),writerWorkers:+$('#dp-workers').val(),maxQueueRows:+$('#dp-queue').val(),backpressureMode:$('#dp-bp').val(),unknownExporterMode:$('#dp-unk').val()}));
 }
 function skipTab(cfg){ const s=cfg.skiprules||{};
-  $('#set-body').html(srow('Skip DNS (port 53)',chk('sk-dns',s.skipDns))+srow('Skip private→private',chk('sk-priv',s.skipPrivate))+srow('Skip zero-byte flows',chk('sk-zero',s.skipZero))+
-    `<div style="font-size:12px;color:#9aa5b1;margin:8px 0">Global skip rules + default for new devices. Per-device overrides live on the Devices page.</div><div style="margin-top:8px"><button class="btn" id="sk-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#set-body').html('<div class="sect"><i class="fas fa-filter"></i> Global skip rules</div>'+
+    note('Skip rules drop low-value flows <b>before</b> storage to cut volume &amp; cost. These are the global defaults + the default for new devices — each device can override them on the <b>Devices</b> page or via a <b>Capture Policy</b>.','fa-filter')+'<div style="height:14px"></div>'+
+    srow('Skip DNS (port 53)',chk('sk-dns',s.skipDns,'skip'),'Drops DNS lookups — very high volume, low value for NAT mapping. Big storage saver.')+
+    srow('Skip private → private',chk('sk-priv',s.skipPrivate,'skip'),'Drops internal-only flows (both ends private) — not subscriber↔internet traffic, rarely needed for IPDR.')+
+    srow('Skip zero-byte flows',chk('sk-zero',s.skipZero,'skip'),'Drops empty/keepalive flows with no payload bytes.')+
+    `<div style="margin-top:16px"><button class="btn" id="sk-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
   $('#sk-save').on('click',()=>saveSetting('skiprules',{skipDns:$('#sk-dns').is(':checked'),skipPrivate:$('#sk-priv').is(':checked'),skipZero:$('#sk-zero').is(':checked')}));
 }
 function retTab(cfg){ const r=cfg.retention||{};
-  $('#set-body').html(srow('Retention (days)',`<input id="rt-days" type="number" min="1" class="inp mono" value="${r.days||180}">`)+
-    `<div style="font-size:12px;color:#9aa5b1;margin:8px 0">Sets the ClickHouse hot-storage TTL (how long flow logs are kept on disk before drop/archive).</div><div style="margin-top:8px"><button class="btn" id="rt-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#set-body').html('<div class="sect"><i class="fas fa-database"></i> Hot-storage retention</div>'+
+    note('How long flow logs stay in ClickHouse (hot) before the TTL drops them. <b>180 days</b> matches India CERT-In retention norms. With S3 auto-archive on, data older than the hot window is moved to cold storage first and stays searchable.','fa-clock')+'<div style="height:14px"></div>'+
+    srow('Retention (days)',`<input id="rt-days" type="number" min="1" class="inp mono" value="${r.days||180}">`,'ClickHouse table TTL. Data past this age is removed from hot storage (after archival, if enabled).')+
+    `<div style="margin-top:16px"><button class="btn" id="rt-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
   $('#rt-save').on('click',()=>saveSetting('retention',{days:+$('#rt-days').val()}));
 }
 function s3Tab(cfg,secretSet){ const s=cfg.s3||{};
-  $('#set-body').html(srow('Enabled',chk('s3-en',s.enabled))+
-    srow('Endpoint',`<input id="s3-ep" class="inp mono" placeholder="https://s3.ap-south-1.amazonaws.com" value="${esc(s.endpoint||'')}">`)+
-    srow('Region',`<input id="s3-rg" class="inp mono" value="${esc(s.region||'us-east-1')}">`)+
-    srow('Bucket',`<input id="s3-bk" class="inp mono" value="${esc(s.bucket||'')}">`)+
-    srow('Access key',`<input id="s3-ak" class="inp mono" value="${esc(s.accessKey||'')}">`)+
-    srow('Secret key',`<input id="s3-sk" type="password" class="inp mono" placeholder="${secretSet?'•••••••• (unchanged — leave blank to keep)':'(none)'}">`)+
-    srow('Path prefix',`<input id="s3-pp" class="inp mono" value="${esc(s.pathPrefix||'natlog')}">`)+
-    srow('Export format',`<select id="s3-fmt" class="inp">${opts(['csvgz','parquet'],s.exportFormat)}</select>`)+
-    srow('Auto-archive',chk('s3-auto',s.autoArchive))+
-    srow('Archive after (days)',`<input id="s3-after" type="number" min="1" class="inp mono" value="${s.archiveAfterDays||7}">`)+
-    `<div style="font-size:12px;color:#9aa5b1;margin:8px 0">When auto-archive is ON, days older than this hot window are moved to S3 automatically (every 6h) and dropped from hot storage. Director-only; runs centrally.</div>`+
-    `<div style="margin-top:14px"><button class="btn" id="s3-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#set-body').html('<div class="sect"><i class="fas fa-box-archive"></i> S3 cold archive &amp; auto-tiering</div>'+
+    note('Aged days are streamed from ClickHouse straight to S3 (Parquet) and dropped from hot storage, keeping hot bounded while older data stays searchable via cold search. Works with any S3-compatible store (Zata, AWS, Wasabi, MinIO). <b>Director-only.</b>','fa-cloud-arrow-up')+'<div style="height:14px"></div>'+
+    srow('Enabled',chk('s3-en',s.enabled,'enable S3 archive'),'Master switch for cold archiving. Hot storage &amp; search work fine without it.')+
+    srow('Endpoint',`<input id="s3-ep" class="inp mono" placeholder="https://idr01.zata.ai" value="${esc(s.endpoint||'')}">`,'S3-compatible endpoint URL including https://.')+
+    srow('Region',`<input id="s3-rg" class="inp mono" placeholder="us-east-1" value="${esc(s.region||'us-east-1')}">`,'Signing region. <b>us-east-1</b> works for most S3-compatible providers.')+
+    srow('Bucket',`<input id="s3-bk" class="inp mono" placeholder="yeslogs-archive" value="${esc(s.bucket||'')}">`,'Target bucket — auto-created if it does not exist.')+
+    srow('Access key',`<input id="s3-ak" class="inp mono" placeholder="access key id" value="${esc(s.accessKey||'')}">`,'')+
+    srow('Secret key',`<input id="s3-sk" type="password" class="inp mono" placeholder="${secretSet?'•••••••• (unchanged — leave blank to keep)':'secret access key'}">`,'Stored encrypted-at-rest in the DB; never shown again after saving. Leave blank to keep the current one.')+
+    srow('Path prefix',`<input id="s3-pp" class="inp mono" placeholder="natlog" value="${esc(s.pathPrefix||'natlog')}">`,'Folder prefix inside the bucket. Objects land at <span class="mono">prefix/isp_id=…/year=…/month=…/day=…</span>.')+
+    srow('Export format',`<select id="s3-fmt" class="inp">${opts(['parquet','csvgz'],s.exportFormat)}</select>`,'<b>parquet</b> = columnar, smaller, fast cold-search with pushdown (recommended). <b>csvgz</b> = portable gzip CSV.')+
+    srow('Auto-archive',chk('s3-auto',s.autoArchive,'move aged days to S3 automatically'),'When on, a sweep runs every 6 h moving days older than the hot window to S3 and dropping them from hot.')+
+    srow('Archive after (days)',`<input id="s3-after" type="number" min="1" class="inp mono" value="${s.archiveAfterDays||7}">`,'Hot window length. Days older than this are archived &amp; dropped from hot storage. 7 is typical; lower it if hot disk fills under heavy load.')+
+    `<div style="margin-top:16px"><button class="btn" id="s3-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
   $('#s3-save').on('click',()=>saveSetting('s3',{enabled:$('#s3-en').is(':checked'),endpoint:$('#s3-ep').val(),region:$('#s3-rg').val(),bucket:$('#s3-bk').val(),accessKey:$('#s3-ak').val(),secretKey:$('#s3-sk').val(),pathPrefix:$('#s3-pp').val(),exportFormat:$('#s3-fmt').val(),autoArchive:$('#s3-auto').is(':checked'),archiveAfterDays:+$('#s3-after').val()}));
 }
 
@@ -590,20 +656,21 @@ async function pgPolicies(b){
   b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
   const r=await api('/api/v1/policies'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load capture policies.</div>'); return; }
   const j=await r.json(); const pols=j.policies||[];
-  let h=`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-shield-halved" style="color:var(--pri)"></i><h2>Create Capture Policy</h2></div>
-  <div style="padding:18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end">
-    <div style="flex:1 1 220px"><label class="lbl">Policy name</label><input id="p-name" class="inp" placeholder="e.g. default, full-capture"></div>
-    <label style="display:flex;align-items:center;gap:7px"><input type="checkbox" id="p-dns" checked> skip DNS</label>
-    <label style="display:flex;align-items:center;gap:7px"><input type="checkbox" id="p-priv" checked> skip priv→priv</label>
-    <label style="display:flex;align-items:center;gap:7px"><input type="checkbox" id="p-zero" checked> skip zero-byte</label>
-    <button id="p-add" class="btn"><i class="fas fa-plus"></i> Create</button>
-  </div><div id="p-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>`;
-  h+='<div class="card"><div class="ch"><i class="fas fa-list" style="color:var(--pri)"></i><h2>Capture Policies</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">applied to exporter devices</span></div><div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Scope</th><th>Skip rules</th><th></th></tr></thead><tbody>';
-  if(!pols.length) h+='<tr><td colspan="4" style="text-align:center;color:#9aa5b1;padding:24px">No capture policies yet — create one above, then assign it on the Devices page.</td></tr>';
+  let h=`<div class="card" style="margin-bottom:18px">${chead('fa-shield-halved','Create Capture Policy')}
+  <div style="padding:16px 18px 4px">${note("A capture policy is a reusable named set of skip rules. Assign it to exporter devices instead of setting rules one by one — change the policy once and every device using it updates. Tick nothing for <b>full capture</b> (store everything).",'fa-circle-info')}</div>
+  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end">
+    <div style="flex:1 1 240px"><label class="lbl">Policy name<span class="req">*</span></label><input id="p-name" class="inp" placeholder="e.g. default, full-capture">${hint('Referenced on the Devices page')}</div>
+    <label class="chk" style="padding-bottom:10px"><input type="checkbox" id="p-dns" checked> skip DNS</label>
+    <label class="chk" style="padding-bottom:10px"><input type="checkbox" id="p-priv" checked> skip priv→priv</label>
+    <label class="chk" style="padding-bottom:10px"><input type="checkbox" id="p-zero" checked> skip zero-byte</label>
+    <button id="p-add" class="btn" style="margin-bottom:1px"><i class="fas fa-plus"></i> Create</button>
+  </div><div id="p-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>`;
+  h+='<div class="card">'+chead('fa-list-check','Capture Policies',pill('applied to devices','mut'))+'<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Scope</th><th>Skip rules</th><th></th></tr></thead><tbody>';
+  if(!pols.length) h+=emptyRow(4,'fa-shield-halved','No capture policies yet','Create one above, then assign it to exporter devices on the Devices page.');
   pols.forEach(p=>{ const none=!p.SkipDNS&&!p.SkipPrivate&&!p.SkipZero;
-    h+=`<tr><td style="font-weight:600">${esc(p.Name)}</td><td>${p.ISPID===0?'<span class="pill" style="background:#eef7fc;color:#0077b6">global</span>':'ISP #'+p.ISPID}</td>
-    <td style="font-size:12px;color:#7b8794">${p.SkipDNS?'dns ':''}${p.SkipPrivate?'priv ':''}${p.SkipZero?'zero':''}${none?'capture everything':''}</td>
-    <td><button class="btn p-del" data-id="${p.ID}" style="height:28px;background:#e63946"><i class="fas fa-trash"></i></button></td></tr>`;});
+    h+=`<tr><td style="font-weight:600;color:var(--ink)">${esc(p.Name)}</td><td>${p.ISPID===0?pill('global','info'):pill('ISP #'+p.ISPID,'mut')}</td>
+    <td style="font-size:12px;color:var(--slate)">${none?'<span style="color:var(--ok);font-weight:600">capture everything</span>':((p.SkipDNS?'skip dns · ':'')+(p.SkipPrivate?'skip priv→priv · ':'')+(p.SkipZero?'skip zero':'')).replace(/ · $/,'')}</td>
+    <td style="text-align:right"><button class="btn danger sm p-del" data-id="${p.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`;});
   h+='</tbody></table></div></div>';
   b.html(h);
   $('#p-add').on('click', async ()=>{
