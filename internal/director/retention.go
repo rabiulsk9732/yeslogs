@@ -129,7 +129,9 @@ func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64,
 		if done, _ := s.store.IsDayArchived(ctx, day); done {
 			continue
 		}
-		pd, perr := time.ParseInLocation("2006-01-02", day, istLoc)
+		// Parse as UTC midnight: ExportDay/ArchiveRel key off day.UTC(), so an
+		// IST-midnight time would shift the queried date back a day (data loss).
+		pd, perr := time.Parse("2006-01-02", day)
 		if perr != nil {
 			continue
 		}
@@ -151,6 +153,12 @@ func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64,
 		}
 		if !ok {
 			continue // leave hot data for the next sweep
+		}
+		// Safety: daysOlderThan only returns days that HAVE rows, so exporting 0
+		// rows means a mismatch (or rows belong to a deleted ISP) — never drop then.
+		if dRows == 0 {
+			s.log.Error("auto-archive: candidate day exported 0 rows; NOT dropping from hot", "day", day)
+			continue
 		}
 		if derr := s.flows.DropDay(ctx, day); derr != nil {
 			s.log.Error("auto-archive drop partition", "day", day, "error", derr)
