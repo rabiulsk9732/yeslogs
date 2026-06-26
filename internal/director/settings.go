@@ -37,14 +37,16 @@ type RetentionSettings struct {
 }
 
 type S3Settings struct {
-	Enabled      bool   `json:"enabled"`
-	Endpoint     string `json:"endpoint"`
-	Region       string `json:"region"`
-	Bucket       string `json:"bucket"`
-	AccessKey    string `json:"accessKey"`
-	SecretKey    string `json:"secretKey"`
-	PathPrefix   string `json:"pathPrefix"`
-	ExportFormat string `json:"exportFormat"`
+	Enabled          bool   `json:"enabled"`
+	Endpoint         string `json:"endpoint"`
+	Region           string `json:"region"`
+	Bucket           string `json:"bucket"`
+	AccessKey        string `json:"accessKey"`
+	SecretKey        string `json:"secretKey"`
+	PathPrefix       string `json:"pathPrefix"`
+	ExportFormat     string `json:"exportFormat"`
+	AutoArchive      bool   `json:"autoArchive"`      // move hot days to S3 automatically
+	ArchiveAfterDays int    `json:"archiveAfterDays"` // hot window in days (e.g. 7 or 30)
 }
 
 const secretMask = "••••••••"

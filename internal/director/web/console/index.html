@@ -156,6 +156,7 @@ const MENU = [
   ['Settings','fa-sliders','Dataplane, skip rules, retention & S3','director'],
 ];
 const esc = s => $('<div>').text(s==null?'':s).html();
+const humanBytes = n => { n=Number(n)||0; const u=['B','KiB','MiB','GiB','TiB','PiB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i?n.toFixed(1):n)+' '+u[i]; };
 const api = (p,o) => fetch(p,Object.assign({headers:{'Content-Type':'application/json'}},o||{}));
 const apiJSON = (p,method,body) => fetch(p,{method:method||'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':S.csrf},body:body?JSON.stringify(body):undefined});
 function modal(html){ closeModal(); const $m=$('<div class="modal-bg"><div class="modal">'+html+'</div></div>'); $m.on('click',e=>{if(e.target===$m[0])closeModal();}); $('body').append($m); return $m; }
@@ -384,8 +385,18 @@ async function pgRetention(b){
   h+=kpi('Data window', (win.from||'—'), 'to '+(win.to||'—'), 'fa-calendar-days', '#e76f51');
   h+='</div>';
   // S3 archive card
-  h+=`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-box-archive" style="color:var(--pri)"></i><h2>S3 Cold Archive</h2>${arch.enabled?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">enabled · ${esc(arch.bucket)}</span>`:'<span class="pill" style="background:#fff4e0;color:#a86700">not configured</span>'}</div>
-    <div style="padding:16px 18px;font-size:13.5px;color:#4a5560">${arch.enabled?'Export a day to S3 (gzip CSV) for long-term cold storage beyond the hot window. Director-only.':'Enable S3 in <b>Settings → S3 Archive</b> (endpoint, bucket, keys) for off-box cold storage. Hot storage + search work without it.'}</div></div>`;
+  const autoPill = arch.auto?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">auto-archive ON · after ${arch.afterDays||7}d</span>`:`<span class="pill" style="background:#f1f4f7;color:#9aa5b1">auto-archive OFF</span>`;
+  h+=`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-box-archive" style="color:var(--pri)"></i><h2>S3 Cold Archive</h2>${arch.enabled?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">enabled · ${esc(arch.bucket)}</span>`:'<span class="pill" style="background:#fff4e0;color:#a86700">not configured</span>'}${arch.enabled?autoPill:''}</div>
+    <div style="padding:16px 18px;font-size:13.5px;color:#4a5560">${arch.enabled?`Days older than the hot window (<b>${arch.afterDays||7} days</b>) ${arch.auto?'are <b>automatically moved to S3</b> and dropped from hot storage':'can be archived to S3 manually below'}. Configure in <b>Settings → S3 Archive</b>.`:'Enable S3 in <b>Settings → S3 Archive</b> (endpoint, bucket, keys) for off-box cold storage. Hot storage + search work without it.'}
+    ${(arch.canRun&&arch.auto)?'<div style="margin-top:12px"><button class="btn" id="sweep-now"><i class="fas fa-cloud-arrow-up"></i> Run auto-archive now</button> <span id="sweep-msg" style="font-size:12.5px;color:#7b8794"></span></div>':''}</div>`;
+  // archived days (director)
+  const ad = arch.archivedDays||[];
+  if(arch.canRun){
+    h+='<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-clock-rotate-left" style="color:var(--pri)"></i><h2>Archived to S3</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">'+ad.length+' days</span></div><div style="overflow-x:auto"><table><thead><tr><th>Day</th><th>Objects</th><th>Rows</th><th>Bytes</th><th>Archived at (IST)</th></tr></thead><tbody>';
+    if(!ad.length) h+='<tr><td colspan="5" style="text-align:center;color:#9aa5b1;padding:18px">Nothing archived yet.</td></tr>';
+    ad.forEach(a=>{ h+=`<tr><td class="mono">${esc(a.Day)}</td><td class="mono">${a.Objects||0}</td><td class="mono">${Number(a.Rows||0).toLocaleString()}</td><td class="mono">${humanBytes(a.Bytes||0)}</td><td class="mono">${esc((a.ArchivedAt||'').replace('T',' ').slice(0,19))}</td></tr>`;});
+    h+='</tbody></table></div></div>';
+  }
   // per-day table
   h+='<div class="card"><div class="ch"><i class="fas fa-calendar-week" style="color:var(--pri)"></i><h2>Records by day (last 30)</h2></div><div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Records</th><th>Coverage</th>'+(arch.canRun?'<th>Archive</th>':'')+'</tr></thead><tbody>';
   const days=d.perDay||[]; const max=days.reduce((m,x)=>Math.max(m,x.count),0)||1;
@@ -398,6 +409,11 @@ async function pgRetention(b){
   $('.arch-run').on('click', async function(){ const day=$(this).data('d'); const btn=$(this); btn.prop('disabled',true).text('…');
     const r=await apiJSON('/api/v1/archive/'+day,'POST'); const e=await r.json().catch(()=>({}));
     if(r.status===200){ btn.replaceWith('<span class="pill" style="background:#e6f4ea;color:#1e7e34">'+(e.rows||0)+' rows → S3</span>'); } else { btn.prop('disabled',false).text('retry'); alert(e.error||'archive failed'); }
+  });
+  $('#sweep-now').on('click', async function(){ const btn=$(this); btn.prop('disabled',true).html('<i class="fas fa-spinner fa-spin"></i> sweeping…'); $('#sweep-msg').text('');
+    const r=await apiJSON('/api/v1/archive/sweep','POST'); const e=await r.json().catch(()=>({}));
+    if(r.status===200){ $('#sweep-msg').css('color','#1e7e34').text(`archived ${e.days||0} day(s), ${Number(e.rows||0).toLocaleString()} rows → S3`); setTimeout(()=>pgRetention(b),1200); }
+    else { btn.prop('disabled',false).html('<i class="fas fa-cloud-arrow-up"></i> Run auto-archive now'); $('#sweep-msg').css('color','#c0392b').text(e.error||'sweep failed'); }
   });
 }
 
@@ -521,8 +537,11 @@ function s3Tab(cfg,secretSet){ const s=cfg.s3||{};
     srow('Secret key',`<input id="s3-sk" type="password" class="inp mono" placeholder="${secretSet?'•••••••• (unchanged — leave blank to keep)':'(none)'}">`)+
     srow('Path prefix',`<input id="s3-pp" class="inp mono" value="${esc(s.pathPrefix||'natlog')}">`)+
     srow('Export format',`<select id="s3-fmt" class="inp">${opts(['csvgz','parquet'],s.exportFormat)}</select>`)+
+    srow('Auto-archive',chk('s3-auto',s.autoArchive))+
+    srow('Archive after (days)',`<input id="s3-after" type="number" min="1" class="inp mono" value="${s.archiveAfterDays||7}">`)+
+    `<div style="font-size:12px;color:#9aa5b1;margin:8px 0">When auto-archive is ON, days older than this hot window are moved to S3 automatically (every 6h) and dropped from hot storage. Director-only; runs centrally.</div>`+
     `<div style="margin-top:14px"><button class="btn" id="s3-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
-  $('#s3-save').on('click',()=>saveSetting('s3',{enabled:$('#s3-en').is(':checked'),endpoint:$('#s3-ep').val(),region:$('#s3-rg').val(),bucket:$('#s3-bk').val(),accessKey:$('#s3-ak').val(),secretKey:$('#s3-sk').val(),pathPrefix:$('#s3-pp').val(),exportFormat:$('#s3-fmt').val()}));
+  $('#s3-save').on('click',()=>saveSetting('s3',{enabled:$('#s3-en').is(':checked'),endpoint:$('#s3-ep').val(),region:$('#s3-rg').val(),bucket:$('#s3-bk').val(),accessKey:$('#s3-ak').val(),secretKey:$('#s3-sk').val(),pathPrefix:$('#s3-pp').val(),exportFormat:$('#s3-fmt').val(),autoArchive:$('#s3-auto').is(':checked'),archiveAfterDays:+$('#s3-after').val()}));
 }
 
 // ==================== SYSTEM (Director) ====================

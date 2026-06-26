@@ -296,6 +296,35 @@ func run() (err error) {
 		}
 	}()
 
+	// ---- auto-archival scheduler ----
+	// Periodically moves hot days older than the configured window to S3 and drops
+	// them from hot storage. No-op unless S3 + auto-archive are enabled in Settings.
+	go func() {
+		first := time.NewTimer(30 * time.Second)
+		defer first.Stop()
+		tick := time.NewTicker(6 * time.Hour)
+		defer tick.Stop()
+		sweep := func() {
+			sctx, sc := context.WithTimeout(managedCtx, 30*time.Minute)
+			defer sc()
+			if days, rows, _, err := dirSrv.ArchiveSweep(sctx); err != nil {
+				log.Error("auto-archive sweep failed", "error", err)
+			} else if days > 0 {
+				log.Info("auto-archive sweep done", "days", days, "rows", rows)
+			}
+		}
+		for {
+			select {
+			case <-managedCtx.Done():
+				return
+			case <-first.C:
+				sweep()
+			case <-tick.C:
+				sweep()
+			}
+		}
+	}()
+
 	log.Info("natlog running; SIGINT/SIGTERM to stop",
 		"receivers", len(receivers), "metrics", cfg.Metrics.Bind)
 

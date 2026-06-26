@@ -142,6 +142,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/report", s.handleReport)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/v1/retention", s.handleRetention)
+	mux.HandleFunc("POST /api/v1/archive/sweep", s.handleArchiveSweep) // literal beats {date}
 	mux.HandleFunc("POST /api/v1/archive/{date}", s.handleArchive)
 	mux.HandleFunc("PUT /api/v1/devices/{id}", s.apiUpdateDevice)
 	mux.HandleFunc("GET /api/v1/settings", s.handleGetSettings)

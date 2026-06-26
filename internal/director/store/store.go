@@ -135,5 +135,20 @@ type Store interface {
 	ListPolicies(ctx context.Context, ispID uint32) ([]CapturePolicy, error)
 	DeletePolicy(ctx context.Context, id int64) error
 
+	// Archived days: tracks which hot-storage days have been moved to S3 (so the
+	// auto-archival sweep never re-uploads or re-drops a day).
+	IsDayArchived(ctx context.Context, day string) (bool, error)
+	MarkDayArchived(ctx context.Context, a ArchivedDay) error
+	ListArchivedDays(ctx context.Context, limit int) ([]ArchivedDay, error)
+
 	Close() error
+}
+
+// ArchivedDay records a day that was exported to S3 and dropped from hot storage.
+type ArchivedDay struct {
+	Day        string // YYYY-MM-DD (event_date / partition)
+	Objects    int    // S3 objects written (one per ISP with data)
+	Rows       int64
+	Bytes      int64
+	ArchivedAt time.Time
 }

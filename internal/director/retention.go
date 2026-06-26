@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/natflow/natflow-dataplane/internal/director/store"
 )
 
 // ---- flow-store retention/storage queries ----
@@ -74,6 +76,95 @@ func (r *FlowReader) SetTTLDays(ctx context.Context, days int) error {
 	return r.conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s.flow_logs MODIFY TTL event_date + INTERVAL %d DAY`, r.db, days))
 }
 
+// daysOlderThan returns the distinct hot-storage days (YYYY-MM-DD) older than the
+// hot window — candidates for cold-archival to S3.
+func (r *FlowReader) daysOlderThan(ctx context.Context, afterDays int) []string {
+	if afterDays < 0 {
+		afterDays = 0
+	}
+	q := fmt.Sprintf(`SELECT DISTINCT toString(event_date) FROM %s.flow_logs WHERE event_date < today() - %d ORDER BY event_date`, r.db, afterDays)
+	rows, err := r.conn.Query(ctx, q)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var d string
+		if rows.Scan(&d) == nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// DropDay drops one day's partition from hot storage (instant — the table is
+// PARTITION BY event_date). Only called after the day is safely in S3.
+func (r *FlowReader) DropDay(ctx context.Context, day string) error {
+	if _, err := time.Parse("2006-01-02", day); err != nil { // day is code-controlled; validate anyway
+		return fmt.Errorf("bad partition day %q", day)
+	}
+	return r.conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s.flow_logs DROP PARTITION '%s'`, r.db, day))
+}
+
+// ArchiveSweep moves every hot day older than the configured hot window to S3
+// (all ISPs, one object per ISP), then drops it from hot storage. Idempotent: a
+// day already recorded as archived is skipped, and a day whose upload fails is
+// left in hot storage to retry on the next sweep. Director/central only.
+func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64, err error) {
+	set := s.CurrentSettings().S3
+	arch, _, format := s.archInfo()
+	if arch == nil || !set.AutoArchive || s.flows == nil {
+		return 0, 0, 0, nil
+	}
+	after := set.ArchiveAfterDays
+	if after < 1 {
+		after = 7
+	}
+	isps, e := s.store.ListISPs(ctx)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	for _, day := range s.flows.daysOlderThan(ctx, after) {
+		if done, _ := s.store.IsDayArchived(ctx, day); done {
+			continue
+		}
+		pd, perr := time.ParseInLocation("2006-01-02", day, istLoc)
+		if perr != nil {
+			continue
+		}
+		var dRows, dBytes int64
+		var objs int
+		ok := true
+		for _, isp := range isps {
+			res, ee := arch.ExportDay(ctx, isp.ID, pd, format)
+			if ee != nil {
+				ok = false
+				s.log.Error("auto-archive export", "day", day, "isp", isp.ID, "error", ee)
+				break
+			}
+			dRows += res.Rows
+			dBytes += res.Bytes
+			if res.Key != "" {
+				objs++
+			}
+		}
+		if !ok {
+			continue // leave hot data for the next sweep
+		}
+		if derr := s.flows.DropDay(ctx, day); derr != nil {
+			s.log.Error("auto-archive drop partition", "day", day, "error", derr)
+			continue
+		}
+		_ = s.store.MarkDayArchived(ctx, store.ArchivedDay{Day: day, Objects: objs, Rows: dRows, Bytes: dBytes})
+		s.log.Info("auto-archived day to S3", "day", day, "rows", dRows, "bytes", dBytes, "objects", objs)
+		days++
+		rows += dRows
+		bytes += dBytes
+	}
+	return days, rows, bytes, nil
+}
+
 // ---- handlers ----
 
 func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
@@ -94,15 +185,57 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 		retDays = 180
 	}
 	arch, bucket, format := s.archInfo()
+	set := s.CurrentSettings().S3
+	archInfo := map[string]any{
+		"enabled": arch != nil, "bucket": bucket, "format": format,
+		"canRun": arch != nil && id.isDirector(),
+		"auto":   set.AutoArchive, "afterDays": set.ArchiveAfterDays,
+	}
+	if id.isDirector() {
+		if ad, e := s.store.ListArchivedDays(ctx, 60); e == nil {
+			archInfo["archivedDays"] = ad
+		}
+	}
 	resp := map[string]any{
 		"available":     true,
 		"retentionDays": retDays,
 		"storage":       map[string]any{"rows": rows, "bytes": bytes, "human": humanBytes(bytes)},
 		"window":        map[string]string{"from": mn, "to": mx},
 		"perDay":        s.flows.perDay(ctx, id.ISPID, 30),
-		"archive":       map[string]any{"enabled": arch != nil, "bucket": bucket, "format": format, "canRun": arch != nil && id.isDirector()},
+		"archive":       archInfo,
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleArchiveSweep runs the auto-archival sweep on demand (director only).
+func (s *Server) handleArchiveSweep(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.authJSON(w, r)
+	if !ok {
+		return
+	}
+	if !id.isDirector() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if !s.csrfOK(w, r, id) {
+		return
+	}
+	if arch, _, _ := s.archInfo(); arch == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "S3 archive not configured"})
+		return
+	}
+	if !s.CurrentSettings().S3.AutoArchive {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "auto-archive is disabled in Settings → S3"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	days, rows, bytes, err := s.ArchiveSweep(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": days, "rows": rows, "bytes": bytes, "human": humanBytes(uint64(bytes))})
 }
 
 // handleArchive runs an S3 cold-archive export for a given day across all ISPs

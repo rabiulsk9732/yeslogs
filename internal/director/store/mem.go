@@ -17,6 +17,7 @@ type MemStore struct {
 	settings  map[string]string // by section
 	queries   []QueryAudit      // newest first
 	policies  map[int64]CapturePolicy
+	archived  map[string]ArchivedDay
 	nextISP   uint32
 	nextUser  int64
 	nextDev   int64
@@ -259,6 +260,34 @@ func (m *MemStore) DeletePolicy(_ context.Context, id int64) error {
 	}
 	delete(m.policies, id)
 	return nil
+}
+
+func (m *MemStore) IsDayArchived(_ context.Context, day string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.archived[day]
+	return ok, nil
+}
+
+func (m *MemStore) MarkDayArchived(_ context.Context, a ArchivedDay) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.archived == nil {
+		m.archived = map[string]ArchivedDay{}
+	}
+	a.ArchivedAt = time.Now().UTC()
+	m.archived[a.Day] = a
+	return nil
+}
+
+func (m *MemStore) ListArchivedDays(_ context.Context, limit int) ([]ArchivedDay, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ArchivedDay, 0, len(m.archived))
+	for _, a := range m.archived {
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 func (m *MemStore) GetSettings(context.Context) (map[string]string, error) {

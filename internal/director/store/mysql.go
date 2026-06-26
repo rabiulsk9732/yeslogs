@@ -108,6 +108,13 @@ var schema = []string{
 		UNIQUE KEY uq_policy (isp_id, name)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	`ALTER TABLE devices ADD COLUMN IF NOT EXISTS capture_policy VARCHAR(64) NOT NULL DEFAULT ''`,
+	"CREATE TABLE IF NOT EXISTS archived_days (" +
+		"`day` DATE NOT NULL PRIMARY KEY," +
+		"`objects` INT NOT NULL DEFAULT 0," +
+		"`rows` BIGINT NOT NULL DEFAULT 0," +
+		"`bytes` BIGINT NOT NULL DEFAULT 0," +
+		"`archived_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 }
 
 // Migrate creates the schema if absent.
@@ -430,6 +437,37 @@ func (s *MySQLStore) DeletePolicy(ctx context.Context, id int64) error {
 		return err
 	}
 	return rowsAffectedErr(res)
+}
+
+func (s *MySQLStore) IsDayArchived(ctx context.Context, day string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM archived_days WHERE `day`=?", day).Scan(&n)
+	return n > 0, err
+}
+
+func (s *MySQLStore) MarkDayArchived(ctx context.Context, a ArchivedDay) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO archived_days (`day`, `objects`, `rows`, `bytes`) VALUES (?,?,?,?) "+
+			"ON DUPLICATE KEY UPDATE `objects`=VALUES(`objects`), `rows`=VALUES(`rows`), `bytes`=VALUES(`bytes`)",
+		a.Day, a.Objects, a.Rows, a.Bytes)
+	return err
+}
+
+func (s *MySQLStore) ListArchivedDays(ctx context.Context, limit int) ([]ArchivedDay, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT DATE_FORMAT(`day`,'%Y-%m-%d'), `objects`, `rows`, `bytes`, `archived_at` FROM archived_days ORDER BY `day` DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ArchivedDay
+	for rows.Next() {
+		var a ArchivedDay
+		if err := rows.Scan(&a.Day, &a.Objects, &a.Rows, &a.Bytes, &a.ArchivedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func rowsAffectedErr(res sql.Result) error {
