@@ -84,9 +84,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specify at least a Public IP, Private IP, Destination IP, or Device"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second) // cold (S3) search can be slower
 	defer cancel()
-	rows, err := s.flows.Search(ctx, f, searchLimit)
+	rows, cold, err := s.searchAll(ctx, f, searchLimit)
 	if err != nil {
 		s.log.Error("flow search", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"})
@@ -97,7 +97,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
 		ResultCount: len(rows), CaseRef: strings.TrimSpace(body.Reason),
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"records": rows, "count": len(rows), "truncated": len(rows) == searchLimit})
+	writeJSON(w, http.StatusOK, map[string]any{"records": rows, "count": len(rows), "truncated": len(rows) == searchLimit, "cold": cold})
 }
 
 // handleReport re-runs a search and streams it as CSV/PDF/XLSX (read-only GET),
@@ -131,9 +131,9 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if format != "pdf" && format != "xlsx" {
 		format = "csv"
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second) // reports may span cold (S3) days
 	defer cancel()
-	rows, err := s.flows.Search(ctx, f, searchLimit)
+	rows, _, err := s.searchAll(ctx, f, searchLimit)
 	if err != nil {
 		http.Error(w, "search failed", http.StatusInternalServerError)
 		return

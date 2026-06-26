@@ -59,6 +59,7 @@ type Server struct {
 	archBucket    string
 	archFormat    string
 	retentionDays int
+	cold          ColdS3 // S3 read-back config for cold (archived) search
 
 	// editable settings (DB-backed source of truth; applied live via applier)
 	settingsMu sync.Mutex
@@ -80,6 +81,20 @@ func (s *Server) archInfo() (*archive.Exporter, string, string) {
 	s.archMu.Lock()
 	defer s.archMu.Unlock()
 	return s.arch, s.archBucket, s.archFormat
+}
+
+// SetColdSource configures S3 read-back for searching archived (cold) days.
+// An empty config (Endpoint=="") disables cold search.
+func (s *Server) SetColdSource(c ColdS3) {
+	s.archMu.Lock()
+	s.cold = c
+	s.archMu.Unlock()
+}
+
+func (s *Server) coldInfo() ColdS3 {
+	s.archMu.Lock()
+	defer s.archMu.Unlock()
+	return s.cold
 }
 
 // SetRetentionDays sets the displayed retention target (days).

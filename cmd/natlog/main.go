@@ -223,10 +223,13 @@ func run() (err error) {
 					}
 					ebc()
 					dirSrv.SetArchive(archive.New(aconn, s3c, cfg.ClickHouse.Database, "flow_logs", m, log), set.S3.Bucket, csvOr(set.S3.ExportFormat))
+					dirSrv.SetColdSource(director.ColdS3{Endpoint: set.S3.Endpoint, Bucket: set.S3.Bucket,
+						Prefix: set.S3.PathPrefix, AccessKey: set.S3.AccessKey, SecretKey: set.S3.SecretKey, Region: set.S3.Region})
 					log.Info("S3 cold-archive enabled", "bucket", set.S3.Bucket)
 				}
 			} else {
 				dirSrv.SetArchive(nil, "", "")
+				dirSrv.SetColdSource(director.ColdS3{})
 			}
 		}
 	}
