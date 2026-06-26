@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // embed the tz database so Asia/Kolkata resolves in the static binary
@@ -180,6 +181,18 @@ func run() (err error) {
 	var lastS3 director.S3Settings
 	lastRet := -1
 	var lastArchConn interface{ Close() error }
+	var archConnMu sync.Mutex // guards lastArchConn (applier goroutine vs shutdown)
+	// swapArchConn atomically installs the new archive ClickHouse pool and closes the
+	// previous one, so the applier and shutdown can't race or double-close.
+	swapArchConn := func(n interface{ Close() error }) {
+		archConnMu.Lock()
+		old := lastArchConn
+		lastArchConn = n
+		archConnMu.Unlock()
+		if old != nil {
+			_ = old.Close()
+		}
+	}
 	apply := func(set director.Settings) {
 		lv := cfg.Live()
 		lv.BatchSize = set.Dataplane.BatchSize
@@ -194,20 +207,29 @@ func run() (err error) {
 		live.Store(lv)
 		manager.Reload(set.Dataplane.WriterWorkers, set.Dataplane.MaxQueueRows)
 		dirSrv.SetRetentionDays(set.Retention.Days)
-		if fr != nil && set.Retention.Days != lastRet { // ALTER TTL only when it changes
-			lastRet = set.Retention.Days
+		// Safety invariant: the hot-storage TTL must NOT drop a day before the
+		// auto-archive sweep can move it to S3, or data is lost before archival.
+		// Keep TTL strictly greater than the archive window (+2-day margin for the
+		// 6h sweep cadence) whenever auto-archive is enabled.
+		ttlDays := set.Retention.Days
+		if set.S3.Enabled && set.S3.AutoArchive {
+			if min := set.S3.ArchiveAfterDays + 2; ttlDays < min {
+				log.Warn("retention shorter than archive window; raising hot TTL to protect un-archived data",
+					"retentionDays", set.Retention.Days, "archiveAfterDays", set.S3.ArchiveAfterDays, "effectiveTTLDays", min)
+				ttlDays = min
+			}
+		}
+		if fr != nil && ttlDays != lastRet { // ALTER TTL only when the effective value changes
+			lastRet = ttlDays
 			tctx, tc := context.WithTimeout(context.Background(), 30*time.Second)
-			if e := fr.SetTTLDays(tctx, set.Retention.Days); e != nil {
+			if e := fr.SetTTLDays(tctx, ttlDays); e != nil {
 				log.Warn("apply retention TTL failed", "error", e)
 			}
 			tc()
 		}
 		if set.S3 != lastS3 { // rebuild the archive client only when S3 settings change
 			lastS3 = set.S3
-			if lastArchConn != nil { // close the previous archive ClickHouse pool (no leak)
-				_ = lastArchConn.Close()
-				lastArchConn = nil
-			}
+			swapArchConn(nil) // close the previous archive ClickHouse pool (no leak)
 			if set.S3.Enabled && set.S3.Bucket != "" {
 				if s3c, e := s3.New(s3.Config{Endpoint: set.S3.Endpoint, Region: set.S3.Region, Bucket: set.S3.Bucket, AccessKey: set.S3.AccessKey, SecretKey: set.S3.SecretKey, PathPrefix: set.S3.PathPrefix}); e != nil {
 					log.Warn("S3 archive disabled: client init failed", "error", e)
@@ -216,7 +238,7 @@ func run() (err error) {
 					log.Warn("S3 archive disabled: clickhouse connect failed", "error", e)
 					dirSrv.SetArchive(nil, "", "")
 				} else {
-					lastArchConn = aconn
+					swapArchConn(aconn)
 					ebctx, ebc := context.WithTimeout(context.Background(), 10*time.Second)
 					if eb := s3c.EnsureBucket(ebctx); eb != nil {
 						log.Warn("S3 archive: could not ensure bucket (uploads may fail)", "bucket", set.S3.Bucket, "error", eb)
@@ -360,9 +382,7 @@ func run() (err error) {
 	if fr != nil {
 		_ = fr.Close()
 	}
-	if lastArchConn != nil {
-		_ = lastArchConn.Close()
-	}
+	swapArchConn(nil) // close the archive pool under the lock (no race with the applier)
 	log.Info("shutdown complete")
 	return nil
 }

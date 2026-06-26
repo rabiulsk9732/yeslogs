@@ -31,14 +31,26 @@ func (s *Server) csrfOK(w http.ResponseWriter, r *http.Request, id Identity) boo
 	return true
 }
 
-func jsonErr(w http.ResponseWriter, err error) {
+// uiError is an error whose message is safe to return to the client verbatim
+// (validation/usage messages). Any other error is treated as internal: logged
+// server-side, replaced with a generic message so driver/DB internals never leak.
+type uiError struct{ msg string }
+
+func (e uiError) Error() string { return e.msg }
+func clientErr(m string) error  { return uiError{m} }
+
+func (s *Server) jsonErr(w http.ResponseWriter, err error) {
+	var ue uiError
 	switch {
 	case errors.Is(err, store.ErrDuplicate):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "already exists (duplicate name or exporter IP)"})
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	case errors.As(err, &ue):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": ue.msg})
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		s.log.Error("admin handler error", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not complete the request"})
 	}
 }
 
@@ -79,17 +91,17 @@ func (s *Server) apiCreateISP(w http.ResponseWriter, r *http.Request) {
 		Name, AdminEmail, AdminPassword string
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, errors.New("bad request"))
+		s.jsonErr(w, clientErr("bad request"))
 		return
 	}
 	name := strings.TrimSpace(body.Name)
 	if name == "" {
-		jsonErr(w, errors.New("name required"))
+		s.jsonErr(w, clientErr("name required"))
 		return
 	}
 	isp, err := s.store.CreateISP(r.Context(), name)
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	email := strings.TrimSpace(strings.ToLower(body.AdminEmail))
@@ -116,11 +128,11 @@ func (s *Server) apiToggleISP(w http.ResponseWriter, r *http.Request) {
 	id64, _ := strconv.ParseUint(r.PathValue("id"), 10, 32)
 	isp, err := s.store.GetISP(r.Context(), uint32(id64))
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	if err := s.store.SetISPEnabled(r.Context(), isp.ID, !isp.Enabled); err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": !isp.Enabled})
@@ -171,7 +183,7 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 		SkipDNS, SkipPrivate, SkipZero bool
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, errors.New("bad request"))
+		s.jsonErr(w, clientErr("bad request"))
 		return
 	}
 	scope, err := id.scopeISP(body.ISPID)
@@ -180,7 +192,7 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.store.GetISP(r.Context(), scope); err != nil {
-		jsonErr(w, errors.New("unknown ISP"))
+		s.jsonErr(w, clientErr("unknown ISP"))
 		return
 	}
 	d := store.Device{
@@ -201,7 +213,7 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.store.CreateDevice(r.Context(), d)
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, created)
@@ -217,7 +229,7 @@ func (s *Server) apiUpdateDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.ownedDevice(r, id)
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
@@ -230,7 +242,7 @@ func (s *Server) apiUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		Enabled                        bool
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, errors.New("bad request"))
+		s.jsonErr(w, clientErr("bad request"))
 		return
 	}
 	d.Name = strings.TrimSpace(body.Name)
@@ -251,7 +263,7 @@ func (s *Server) apiUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.UpdateDevice(r.Context(), d); err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
@@ -267,12 +279,12 @@ func (s *Server) apiToggleDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.ownedDevice(r, id)
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	d.Enabled = !d.Enabled
 	if err := s.store.UpdateDevice(r.Context(), d); err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": d.Enabled})
@@ -288,11 +300,11 @@ func (s *Server) apiDeleteDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.ownedDevice(r, id)
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	if err := s.store.DeleteDevice(r.Context(), d.ID); err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})

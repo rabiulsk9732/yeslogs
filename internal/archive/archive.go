@@ -16,9 +16,13 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 )
 
-// chLit escapes a value for inlining as a ClickHouse string literal. Used only
-// for server-side config (S3 URL + credentials), not for user input.
-func chLit(s string) string { return strings.ReplaceAll(s, "'", "\\'") }
+// chLit escapes a value for inlining as a ClickHouse string literal — backslash
+// first, then single quote (order matters). Used for server-side config (S3 URL
+// + credentials); user filter values always stay bound parameters.
+func chLit(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, "'", "\\'")
+}
 
 // Exporter reads from ClickHouse and writes day partitions to S3.
 type Exporter struct {

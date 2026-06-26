@@ -3,7 +3,6 @@ package director
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -59,7 +58,7 @@ func (s *Server) apiCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		SkipDNS, SkipPrivate, SkipZero bool
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, errors.New("bad request"))
+		s.jsonErr(w, clientErr("bad request"))
 		return
 	}
 	// Directors may create global (ISPID 0) or tenant policies; ISP users get their own.
@@ -68,7 +67,7 @@ func (s *Server) apiCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		scope = id.ISPID
 	}
 	if strings.TrimSpace(body.Name) == "" {
-		jsonErr(w, errors.New("name required"))
+		s.jsonErr(w, clientErr("name required"))
 		return
 	}
 	p, err := s.store.CreatePolicy(r.Context(), store.CapturePolicy{
@@ -76,7 +75,7 @@ func (s *Server) apiCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		SkipDNS: body.SkipDNS, SkipPrivate: body.SkipPrivate, SkipZero: body.SkipZero,
 	})
 	if err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
@@ -109,7 +108,7 @@ func (s *Server) apiDeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeletePolicy(r.Context(), pid); err != nil {
-		jsonErr(w, err)
+		s.jsonErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})

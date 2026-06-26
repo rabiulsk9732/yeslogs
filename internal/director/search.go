@@ -109,6 +109,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
 		return
 	}
+	// CSRF: this is a state-recording GET (writes an audit row) reached by a direct
+	// link, so it carries the session-bound token as a query param instead of a header.
+	if !s.validCSRF(id, r.URL.Query().Get("csrf")) {
+		http.Error(w, "invalid csrf", http.StatusForbidden)
+		return
+	}
 	if s.flows == nil {
 		http.Error(w, "flow store unavailable", http.StatusServiceUnavailable)
 		return

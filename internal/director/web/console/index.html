@@ -390,7 +390,7 @@ async function runLogs(){
   if(r.status!==200){ const e=await r.json().catch(()=>({})); $('#s-results').html(''); $('#s-msg').text(e.error||'search failed'); return; }
   const d=await r.json(); renderLogResults(d.records||[], d.count, d.truncated, body);
 }
-function logQstr(body){ const p=new URLSearchParams(); if(body.PublicIP)p.set('ip',body.PublicIP); if(body.PrivateIP)p.set('priv',body.PrivateIP); if(body.DestIP)p.set('dst',body.DestIP); if(body.PublicPort)p.set('port',body.PublicPort); if(body.Proto&&body.Proto!=='Any')p.set('proto',body.Proto); if(body.DeviceID)p.set('device',body.DeviceID); if(body.ISPID)p.set('isp',body.ISPID); if(body.From)p.set('from',body.From); if(body.To)p.set('to',body.To); if(body.Reason)p.set('reason',body.Reason); return p.toString(); }
+function logQstr(body){ const p=new URLSearchParams(); if(body.PublicIP)p.set('ip',body.PublicIP); if(body.PrivateIP)p.set('priv',body.PrivateIP); if(body.DestIP)p.set('dst',body.DestIP); if(body.PublicPort)p.set('port',body.PublicPort); if(body.Proto&&body.Proto!=='Any')p.set('proto',body.Proto); if(body.DeviceID)p.set('device',body.DeviceID); if(body.ISPID)p.set('isp',body.ISPID); if(body.From)p.set('from',body.From); if(body.To)p.set('to',body.To); if(body.Reason)p.set('reason',body.Reason); p.set('csrf',S.csrf); return p.toString(); }
 function renderLogResults(rows,count,truncated,body){
   const qs=logQstr(body);
   let h=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>${count} record${count===1?'':'s'}${truncated?' (capped at 5000)':''}</h2></div>
@@ -417,7 +417,7 @@ async function pgReports(b){
   const exports=((await r.json()).queries||[]).filter(q=>(q.CaseRef||'').includes('[export:'));
   const fmt=cr=>{ const m=/\[export:(\w+)\]/.exec(cr||''); return m?m[1]:'csv'; };
   const reason=cr=>(cr||'').replace(/\s*\[export:\w+\]\s*/,'')||'—';
-  const dl=q=>{ const p=new URLSearchParams(); if(q.QueryIP)p.set('ip',q.QueryIP); if(q.QueryPort)p.set('port',q.QueryPort); if(q.QueryProto&&q.QueryProto!=='Any')p.set('proto',q.QueryProto); p.set('format',fmt(q.CaseRef)); return '/api/v1/report?'+p.toString(); };
+  const dl=q=>{ const p=new URLSearchParams(); if(q.QueryIP)p.set('ip',q.QueryIP); if(q.QueryPort)p.set('port',q.QueryPort); if(q.QueryProto&&q.QueryProto!=='Any')p.set('proto',q.QueryProto); p.set('format',fmt(q.CaseRef)); p.set('csrf',S.csrf); return '/api/v1/report?'+p.toString(); };
   let h=`<div style="margin-bottom:16px">${note('Reports are generated from <b>Logs Search</b> — run a search and use the CSV / Excel / PDF buttons. Recent exports are listed below and can be re-downloaded.','fa-circle-info')}</div>`;
   h+='<div class="card"><div class="ch"><i class="fas fa-file-export" style="color:var(--pri)"></i><h2>Recent Reports</h2></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>By</th><th>Format</th><th>Filter (IP)</th><th>Rows</th><th>Reason</th><th></th></tr></thead><tbody>';
   if(!exports.length) h+='<tr><td colspan="7" style="text-align:center;color:var(--mut);padding:24px">No reports generated yet.</td></tr>';

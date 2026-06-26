@@ -150,8 +150,14 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	return out, rs.Err()
 }
 
-// quote single-quotes a literal for inlining into a ClickHouse query.
-func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "\\'") + "'" }
+// quote returns s as a ClickHouse string literal — escaping backslashes first,
+// then single quotes (order matters), so config values containing \ or ' can't
+// break out of the literal.
+func quote(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "'", "\\'")
+	return "'" + s + "'"
+}
 
 // searchAll runs the hot search and, when the query window overlaps archived
 // days, also the cold (S3) search for exactly those days, then merges

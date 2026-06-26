@@ -470,6 +470,10 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
+	if !s.ispLoginAllowed(r.Context(), u) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "this ISP account is disabled"})
+		return
+	}
 	id := Identity{UserID: u.ID, ISPID: u.ISPID, Role: u.Role, Email: u.Email, Exp: time.Now().Add(sessionTTL).Unix()}
 	s.setSession(w, id)
 	writeJSON(w, http.StatusOK, meResp{Email: id.Email, Role: string(id.Role), ISPID: id.ISPID, IsDirector: id.isDirector(), CSRF: s.csrfToken(id)})

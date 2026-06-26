@@ -127,6 +127,11 @@ func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64,
 	}
 	for _, day := range s.flows.daysOlderThan(ctx, after) {
 		if done, _ := s.store.IsDayArchived(ctx, day); done {
+			// Already in S3 but still present in hot → a previous drop must have failed.
+			// Reconcile by dropping now so hot+cold never both serve the same day.
+			if derr := s.flows.DropDay(ctx, day); derr != nil {
+				s.log.Error("auto-archive: re-drop of already-archived day failed", "day", day, "error", derr)
+			}
 			continue
 		}
 		// Parse as UTC midnight: ExportDay/ArchiveRel key off day.UTC(), so an
@@ -160,11 +165,20 @@ func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64,
 			s.log.Error("auto-archive: candidate day exported 0 rows; NOT dropping from hot", "day", day)
 			continue
 		}
-		if derr := s.flows.DropDay(ctx, day); derr != nil {
-			s.log.Error("auto-archive drop partition", "day", day, "error", derr)
+		// Record the archived marker BEFORE dropping from hot. The day is durably in
+		// S3 now; if the marker write fails we must NOT drop it (cold search finds days
+		// only via archived_days), otherwise it would be in S3 but invisible forever.
+		// Leaving it in hot means the next sweep retries.
+		if merr := s.store.MarkDayArchived(ctx, store.ArchivedDay{Day: day, Objects: objs, Rows: dRows, Bytes: dBytes}); merr != nil {
+			s.log.Error("auto-archive: marker write failed; NOT dropping from hot (will retry)", "day", day, "error", merr)
 			continue
 		}
-		_ = s.store.MarkDayArchived(ctx, store.ArchivedDay{Day: day, Objects: objs, Rows: dRows, Bytes: dBytes})
+		if derr := s.flows.DropDay(ctx, day); derr != nil {
+			// Marked archived but couldn't drop — harmless: day stays in both hot+S3;
+			// next sweep sees it's already archived (IsDayArchived) and skips re-export.
+			s.log.Error("auto-archive: marked but drop partition failed (still searchable in hot)", "day", day, "error", derr)
+			continue
+		}
 		s.log.Info("auto-archived day to S3", "day", day, "rows", dRows, "bytes", dBytes, "objects", objs)
 		days++
 		rows += dRows

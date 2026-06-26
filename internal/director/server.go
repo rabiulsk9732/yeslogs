@@ -268,9 +268,24 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, "login", Identity{}, http.StatusUnauthorized, "invalid credentials", nil)
 		return
 	}
+	if !s.ispLoginAllowed(r.Context(), u) {
+		s.render(w, r, "login", Identity{}, http.StatusForbidden, "this ISP account is disabled", nil)
+		return
+	}
 	id := Identity{UserID: u.ID, ISPID: u.ISPID, Role: u.Role, Email: u.Email, Exp: time.Now().Add(sessionTTL).Unix()}
 	s.setSession(w, id)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// ispLoginAllowed reports whether the user may sign in: directors always may; an
+// ISP user may only if their tenant exists and is enabled. (Disabling an ISP
+// blocks new logins; existing stateless sessions expire within sessionTTL.)
+func (s *Server) ispLoginAllowed(ctx context.Context, u store.User) bool {
+	if u.ISPID == 0 {
+		return true
+	}
+	isp, err := s.store.GetISP(ctx, u.ISPID)
+	return err == nil && isp.Enabled
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, _ Identity) {
