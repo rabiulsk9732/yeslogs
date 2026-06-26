@@ -217,6 +217,11 @@ func run() (err error) {
 					dirSrv.SetArchive(nil, "", "")
 				} else {
 					lastArchConn = aconn
+					ebctx, ebc := context.WithTimeout(context.Background(), 10*time.Second)
+					if eb := s3c.EnsureBucket(ebctx); eb != nil {
+						log.Warn("S3 archive: could not ensure bucket (uploads may fail)", "bucket", set.S3.Bucket, "error", eb)
+					}
+					ebc()
 					dirSrv.SetArchive(archive.New(aconn, s3c, cfg.ClickHouse.Database, "flow_logs", m, log), set.S3.Bucket, csvOr(set.S3.ExportFormat))
 					log.Info("S3 cold-archive enabled", "bucket", set.S3.Bucket)
 				}

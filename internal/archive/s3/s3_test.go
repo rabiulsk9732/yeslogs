@@ -67,6 +67,11 @@ func (f *fakePutter) PutObject(_ context.Context, bucket, object string, r io.Re
 	return minio.UploadInfo{}, nil
 }
 
+func (f *fakePutter) BucketExists(context.Context, string) (bool, error) { return true, nil }
+func (f *fakePutter) MakeBucket(context.Context, string, minio.MakeBucketOptions) error {
+	return nil
+}
+
 func TestUploadKeyConstruction(t *testing.T) {
 	fp := &fakePutter{}
 	c := &Client{mc: fp, bucket: "flows", prefix: "natflow"}

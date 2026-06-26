@@ -28,6 +28,8 @@ type Config struct {
 // putter is the subset of the minio client used here (swappable in tests).
 type putter interface {
 	PutObject(ctx context.Context, bucket, object string, r io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+	BucketExists(ctx context.Context, bucket string) (bool, error)
+	MakeBucket(ctx context.Context, bucket string, opts minio.MakeBucketOptions) error
 }
 
 // Client uploads objects to an S3-compatible bucket.
@@ -35,6 +37,21 @@ type Client struct {
 	mc     putter
 	bucket string
 	prefix string
+	region string
+}
+
+// EnsureBucket creates the bucket if it does not already exist. Best-effort and
+// idempotent — convenient for self-hosted S3/MinIO; a no-op when the bucket is
+// already present (e.g. pre-created AWS buckets).
+func (c *Client) EnsureBucket(ctx context.Context) error {
+	ok, err := c.mc.BucketExists(ctx, c.bucket)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	return c.mc.MakeBucket(ctx, c.bucket, minio.MakeBucketOptions{Region: c.region})
 }
 
 // New builds a Client. The endpoint may include an http(s):// scheme; otherwise
@@ -52,7 +69,7 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("s3 client: %w", err)
 	}
-	return &Client{mc: mc, bucket: cfg.Bucket, prefix: strings.Trim(cfg.PathPrefix, "/")}, nil
+	return &Client{mc: mc, bucket: cfg.Bucket, prefix: strings.Trim(cfg.PathPrefix, "/"), region: cfg.Region}, nil
 }
 
 // Key joins the configured path prefix with a relative object key.
