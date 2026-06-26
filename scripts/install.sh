@@ -53,6 +53,11 @@ systemctl daemon-reload
 
 echo "==> start MariaDB + ClickHouse"
 systemctl enable --now mariadb
+# Pin MariaDB to UTC so audit CURRENT_TIMESTAMP is a deterministic instant (the
+# console converts to IST for display; ClickHouse is set to Asia/Kolkata).
+install -d /etc/mysql/mariadb.conf.d
+printf '[mariadbd]\ndefault_time_zone="+00:00"\n' > /etc/mysql/mariadb.conf.d/99-natlog-tz.cnf
+mariadb -e "SET GLOBAL time_zone='+00:00'" 2>/dev/null || true
 systemctl enable --now clickhouse-server
 for i in $(seq 1 30); do /usr/local/bin/clickhouse client --host 127.0.0.1 -q "SELECT 1" >/dev/null 2>&1 && break; sleep 1; done
 

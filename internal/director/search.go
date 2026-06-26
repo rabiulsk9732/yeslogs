@@ -21,7 +21,7 @@ func parseTime(s string) time.Time {
 		return time.Time{}
 	}
 	for _, layout := range []string{"2006-01-02T15:04", "2006-01-02T15:04:05", "2006-01-02 15:04", "2006-01-02 15:04:05", time.RFC3339} {
-		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+		if t, err := time.ParseInLocation(layout, s, istLoc); err == nil { // form input is IST
 			return t
 		}
 	}
@@ -145,7 +145,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	})
 	meta := reportMeta{
 		CaseRef: q.Get("reason"), GeneratedBy: id.Email,
-		GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+		GeneratedAt: time.Now().In(istLoc).Format("2006-01-02 15:04:05 IST"),
 		QueryIP:     firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP), QueryPort: f.PublicPort, QueryProto: f.Proto,
 		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: len(rows) == searchLimit,
 	}
@@ -183,6 +183,15 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("list audit", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
+	}
+	for i := range q { // present audit times in IST
+		q[i].CreatedAt = q[i].CreatedAt.In(istLoc)
+		if !q[i].FromTS.IsZero() {
+			q[i].FromTS = q[i].FromTS.In(istLoc)
+		}
+		if !q[i].ToTS.IsZero() {
+			q[i].ToTS = q[i].ToTS.In(istLoc)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"queries": q})
 }

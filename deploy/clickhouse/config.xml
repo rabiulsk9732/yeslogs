@@ -19,6 +19,9 @@
     <mark_cache_size>536870912</mark_cache_size>
     <mlock_executable>false</mlock_executable>
 
+    <!-- India: all DateTime display, now()/today()/toDate() in IST. -->
+    <timezone>Asia/Kolkata</timezone>
+
     <user_directories>
         <users_xml>
             <path>/etc/clickhouse-server/users.xml</path>

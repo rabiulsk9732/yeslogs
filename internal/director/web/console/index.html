@@ -297,8 +297,8 @@ async function pgLogs(b){
     <div style="flex:1 1 140px"><label class="lbl">Private IP</label><input id="s-priv" class="inp mono" placeholder="100.64.x.x"></div>
     <div style="flex:1 1 140px"><label class="lbl">Destination IP</label><input id="s-dst" class="inp mono" placeholder="any"></div>
     <div style="flex:1 1 100px"><label class="lbl">Protocol</label><select id="s-proto" class="inp"><option>Any</option><option>TCP</option><option>UDP</option><option>ICMP</option></select></div>
-    <div style="flex:1 1 160px"><label class="lbl">From (UTC)</label><input id="s-from" type="datetime-local" class="inp"></div>
-    <div style="flex:1 1 160px"><label class="lbl">To (UTC)</label><input id="s-to" type="datetime-local" class="inp"></div>
+    <div style="flex:1 1 160px"><label class="lbl">From (IST)</label><input id="s-from" type="datetime-local" class="inp"></div>
+    <div style="flex:1 1 160px"><label class="lbl">To (IST)</label><input id="s-to" type="datetime-local" class="inp"></div>
     <div style="flex:1 1 170px"><label class="lbl">Audit reason (optional)</label><input id="s-reason" class="inp" placeholder="reason for this search"></div>
     <button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Search</button>
   </div><div style="padding:0 18px 8px;font-size:12px;color:#9aa5b1">Provide at least one of: Public IP, Private IP, Destination IP, or Device.</div><div id="s-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>
@@ -344,7 +344,7 @@ async function pgReports(b){
   const reason=cr=>(cr||'').replace(/\s*\[export:\w+\]\s*/,'')||'—';
   const dl=q=>{ const p=new URLSearchParams(); if(q.QueryIP)p.set('ip',q.QueryIP); if(q.QueryPort)p.set('port',q.QueryPort); if(q.QueryProto&&q.QueryProto!=='Any')p.set('proto',q.QueryProto); p.set('format',fmt(q.CaseRef)); return '/api/v1/report?'+p.toString(); };
   let h=`<div class="card" style="margin-bottom:16px;padding:16px;font-size:13.5px;color:#4a5560"><i class="fas fa-circle-info" style="color:var(--pri)"></i> Reports are generated from <b>Logs Search</b> — run a search and use the CSV / Excel / PDF buttons. Recent exports are listed below and can be re-downloaded.</div>`;
-  h+='<div class="card"><div class="ch"><i class="fas fa-file-export" style="color:var(--pri)"></i><h2>Recent Reports</h2></div><div style="overflow-x:auto"><table><thead><tr><th>When (UTC)</th><th>By</th><th>Format</th><th>Filter (IP)</th><th>Rows</th><th>Reason</th><th></th></tr></thead><tbody>';
+  h+='<div class="card"><div class="ch"><i class="fas fa-file-export" style="color:var(--pri)"></i><h2>Recent Reports</h2></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>By</th><th>Format</th><th>Filter (IP)</th><th>Rows</th><th>Reason</th><th></th></tr></thead><tbody>';
   if(!exports.length) h+='<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:24px">No reports generated yet.</td></tr>';
   exports.forEach(q=>{ h+=`<tr><td class="mono" style="color:#5a6573">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td>
     <td><span class="pill" style="background:#eef7fc;color:#0077b6">${esc(fmt(q.CaseRef).toUpperCase())}</span></td>
@@ -360,7 +360,7 @@ async function pgAudit(b){
   const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load audit.</div>'); return; }
   const {queries=[]}=await r.json();
   const t=s=>(s&&!String(s).startsWith('0001'))?String(s).replace('T',' ').slice(0,16):'any';
-  let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (UTC)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
+  let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
   if(!queries.length) h+='<tr><td colspan="9" style="text-align:center;color:#9aa5b1;padding:24px">No queries yet.</td></tr>';
   queries.forEach(q=>{ h+=`<tr><td class="mono" style="color:#5a6573">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td><td class="mono">${q.ISPID||'all'}</td>
     <td class="mono" style="font-weight:600">${esc(q.QueryIP)}</td><td class="mono">${q.QueryPort||'any'}</td><td>${esc(q.QueryProto||'any')}</td>

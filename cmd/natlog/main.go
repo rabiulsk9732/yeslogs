@@ -22,6 +22,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // embed the tz database so Asia/Kolkata resolves in the static binary
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 

@@ -179,7 +179,7 @@ func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int)
 			return out
 		}
 		out = append(out, natRecord{
-			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"),
+			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
 			Sub: fmt.Sprintf("DEV-%d", dev), PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(proto), Dest: dip.String(),
 			Action: strings.ToUpper(ft),
@@ -270,7 +270,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit int) ([]n
 			return out, err
 		}
 		out = append(out, natRecord{
-			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"),
+			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
 			Sub: fmt.Sprintf("DEV-%d", dev), PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(pr),
 			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
