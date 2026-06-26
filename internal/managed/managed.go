@@ -71,6 +71,8 @@ type Client struct {
 	log       *slog.Logger
 	baseRules rules.RuleSet
 
+	manageLive bool // true: this client owns live.UnknownMode (split mode); false: an external applier owns Live (unified mode)
+
 	mu          sync.Mutex
 	lastVersion string
 }
@@ -82,7 +84,9 @@ func New(dir config.DirectorConfig, devices *device.Store, live *config.Store, b
 		token: dir.Token,
 		httpc: &http.Client{Timeout: 10 * time.Second},
 	}
-	return NewWithSource(src, devices, live, base, m, log)
+	c := NewWithSource(src, devices, live, base, m, log)
+	c.manageLive = true // split mode: the collector owns live.UnknownMode from the bundle
+	return c
 }
 
 // NewWithSource builds a Client backed by an arbitrary Source (e.g. in-process).
@@ -127,9 +131,13 @@ func (c *Client) PollOnce(ctx context.Context) error {
 	if err != nil {
 		mode = device.ModeReject // managed default: only registered exporters
 	}
-	cur := *c.live.Load()
-	cur.UnknownMode = mode
-	c.live.Store(cur)
+	// Only write Live when this client owns it. In unified mode an external
+	// applier owns the full Live config (avoids a lost-update race on the store).
+	if c.manageLive {
+		cur := *c.live.Load()
+		cur.UnknownMode = mode
+		c.live.Store(cur)
+	}
 
 	if c.metrics != nil {
 		c.metrics.DeviceRegistryEntries.Set(float64(reg.Len()))
@@ -150,7 +158,10 @@ func (c *Client) Run(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := c.PollOnce(ctx); err != nil {
+			pctx, cancel := context.WithTimeout(ctx, 15*time.Second) // bound each poll so a hung source can't wedge the loop
+			err := c.PollOnce(pctx)
+			cancel()
+			if err != nil {
 				c.log.Warn("config poll failed; keeping current registry", "error", err)
 			}
 		}

@@ -92,6 +92,22 @@ var schema = []string{
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_qa_isp (isp_id, created_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`CREATE TABLE IF NOT EXISTS settings (
+		section VARCHAR(32) NOT NULL PRIMARY KEY,
+		data MEDIUMTEXT NOT NULL,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`CREATE TABLE IF NOT EXISTS capture_policies (
+		id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+		isp_id INT UNSIGNED NOT NULL DEFAULT 0,
+		name VARCHAR(64) NOT NULL,
+		skip_dns TINYINT(1) NOT NULL DEFAULT 1,
+		skip_private TINYINT(1) NOT NULL DEFAULT 1,
+		skip_zero TINYINT(1) NOT NULL DEFAULT 1,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE KEY uq_policy (isp_id, name)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`ALTER TABLE devices ADD COLUMN IF NOT EXISTS capture_policy VARCHAR(64) NOT NULL DEFAULT ''`,
 }
 
 // Migrate creates the schema if absent.
@@ -183,9 +199,9 @@ func (s *MySQLStore) CountUsers(ctx context.Context) (int, error) {
 
 func (s *MySQLStore) CreateDevice(ctx context.Context, d Device) (Device, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO devices (isp_id, name, exporter_ip, device_id, protocol, profile, enabled, skip_dns, skip_private, skip_zero)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		d.ISPID, d.Name, d.ExporterIP, d.DeviceID, d.Protocol, d.Profile, d.Enabled, d.SkipDNS, d.SkipPrivate, d.SkipZero)
+		`INSERT INTO devices (isp_id, name, exporter_ip, device_id, protocol, profile, capture_policy, enabled, skip_dns, skip_private, skip_zero)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		d.ISPID, d.Name, d.ExporterIP, d.DeviceID, d.Protocol, d.Profile, d.CapturePolicy, d.Enabled, d.SkipDNS, d.SkipPrivate, d.SkipZero)
 	if err != nil {
 		if isDuplicate(err) {
 			return Device{}, ErrDuplicate
@@ -196,12 +212,12 @@ func (s *MySQLStore) CreateDevice(ctx context.Context, d Device) (Device, error)
 	return s.GetDevice(ctx, id)
 }
 
-const deviceCols = `id, isp_id, name, exporter_ip, device_id, protocol, profile, enabled, skip_dns, skip_private, skip_zero, updated_at`
+const deviceCols = `id, isp_id, name, exporter_ip, device_id, protocol, profile, capture_policy, enabled, skip_dns, skip_private, skip_zero, updated_at`
 
 func scanDevice(sc interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	err := sc.Scan(&d.ID, &d.ISPID, &d.Name, &d.ExporterIP, &d.DeviceID, &d.Protocol, &d.Profile,
-		&d.Enabled, &d.SkipDNS, &d.SkipPrivate, &d.SkipZero, &d.UpdatedAt)
+		&d.CapturePolicy, &d.Enabled, &d.SkipDNS, &d.SkipPrivate, &d.SkipZero, &d.UpdatedAt)
 	return d, err
 }
 
@@ -240,8 +256,8 @@ func (s *MySQLStore) ListDevices(ctx context.Context, ispID uint32) ([]Device, e
 
 func (s *MySQLStore) UpdateDevice(ctx context.Context, d Device) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE devices SET name=?, exporter_ip=?, device_id=?, protocol=?, profile=?, enabled=?, skip_dns=?, skip_private=?, skip_zero=? WHERE id=?`,
-		d.Name, d.ExporterIP, d.DeviceID, d.Protocol, d.Profile, d.Enabled, d.SkipDNS, d.SkipPrivate, d.SkipZero, d.ID)
+		`UPDATE devices SET name=?, exporter_ip=?, device_id=?, protocol=?, profile=?, capture_policy=?, enabled=?, skip_dns=?, skip_private=?, skip_zero=? WHERE id=?`,
+		d.Name, d.ExporterIP, d.DeviceID, d.Protocol, d.Profile, d.CapturePolicy, d.Enabled, d.SkipDNS, d.SkipPrivate, d.SkipZero, d.ID)
 	if err != nil {
 		if isDuplicate(err) {
 			return ErrDuplicate
@@ -341,6 +357,79 @@ func (s *MySQLStore) ListQueries(ctx context.Context, ispID uint32, limit int) (
 		out = append(out, q)
 	}
 	return out, rows.Err()
+}
+
+func (s *MySQLStore) GetSettings(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT section, data FROM settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var sec, data string
+		if err := rows.Scan(&sec, &data); err != nil {
+			return nil, err
+		}
+		out[sec] = data
+	}
+	return out, rows.Err()
+}
+
+func (s *MySQLStore) PutSetting(ctx context.Context, section, jsonData string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO settings (section, data) VALUES (?, ?) ON DUPLICATE KEY UPDATE data = VALUES(data)`,
+		section, jsonData)
+	return err
+}
+
+func (s *MySQLStore) CreatePolicy(ctx context.Context, p CapturePolicy) (CapturePolicy, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO capture_policies (isp_id, name, skip_dns, skip_private, skip_zero) VALUES (?,?,?,?,?)`,
+		p.ISPID, p.Name, p.SkipDNS, p.SkipPrivate, p.SkipZero)
+	if err != nil {
+		if isDuplicate(err) {
+			return CapturePolicy{}, ErrDuplicate
+		}
+		return CapturePolicy{}, err
+	}
+	p.ID, _ = res.LastInsertId()
+	return p, nil
+}
+
+func (s *MySQLStore) ListPolicies(ctx context.Context, ispID uint32) ([]CapturePolicy, error) {
+	const cols = `id, isp_id, name, skip_dns, skip_private, skip_zero, created_at`
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if ispID == 0 {
+		rows, err = s.db.QueryContext(ctx, `SELECT `+cols+` FROM capture_policies ORDER BY isp_id, name`)
+	} else {
+		// tenant policies + global (isp_id 0) presets are usable by the tenant.
+		rows, err = s.db.QueryContext(ctx, `SELECT `+cols+` FROM capture_policies WHERE isp_id IN (0, ?) ORDER BY name`, ispID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CapturePolicy
+	for rows.Next() {
+		var p CapturePolicy
+		if err := rows.Scan(&p.ID, &p.ISPID, &p.Name, &p.SkipDNS, &p.SkipPrivate, &p.SkipZero, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *MySQLStore) DeletePolicy(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM capture_policies WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	return rowsAffectedErr(res)
 }
 
 func rowsAffectedErr(res sql.Result) error {

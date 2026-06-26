@@ -13,7 +13,8 @@ test('rejects invalid credentials', async ({ page }) => {
 test('admin can sign in and sees the console', async ({ page }) => {
   await login(page, ADMIN_EMAIL, ADMIN_PW);
   await expect(page.locator('#hdr-email')).toHaveText(ADMIN_EMAIL);
-  await expect(page.locator('#menu')).toContainText('IP Search');
+  await expect(page.locator('#menu')).toContainText('Logs');
+  await expect(page.locator('#menu')).toContainText('Capture Policies');
   await expect(page.locator('#menu')).toContainText('ISPs'); // director-only item visible
 });
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPDR·NATLog Console</title>
+<title>YesLogs Director</title>
 <link rel="stylesheet" href="/assets/fontawesome/css/all.min.css">
 <script src="/assets/js/jquery.min.js"></script>
 <style>
@@ -32,6 +32,16 @@ td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
 .menua:hover{background:#f3f9fd;color:var(--pri)}
 .menua.on{color:var(--pri);background:#eef7fc;border-bottom-color:var(--pri)}
 .pill{display:inline-block;padding:2px 9px;border-radius:5px;font-size:12px;font-weight:700}
+.modal-bg{position:fixed;inset:0;background:rgba(11,33,56,.45);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal{background:#fff;border-radius:6px;box-shadow:0 12px 40px rgba(0,0,0,.25);width:520px;max-width:94vw;max-height:90vh;overflow:auto}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--bd);margin-bottom:18px;flex-wrap:wrap}
+.tab{padding:9px 16px;font-size:14px;font-weight:600;color:#4a5560;cursor:pointer;border-bottom:3px solid transparent}
+.tab:hover{color:var(--pri)}
+.tab.on{color:var(--pri);border-bottom-color:var(--pri)}
+.gauge{height:8px;background:#eef1f4;border-radius:5px;overflow:hidden;margin-top:8px}
+.gauge>div{height:100%;border-radius:5px}
+.fgrid{display:grid;grid-template-columns:200px 1fr;gap:12px 16px;align-items:center;padding:4px 0}
+.toast{position:fixed;bottom:20px;right:20px;background:#1e7e34;color:#fff;padding:11px 18px;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.2);z-index:60;font-size:14px;font-weight:600}
 </style>
 </head>
 <body>
@@ -44,18 +54,18 @@ td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
       <div style="position:absolute;right:80px;bottom:-120px;width:300px;height:300px;border:48px solid rgba(255,255,255,.04);border-radius:50%"></div>
       <div style="display:flex;align-items:center;gap:13px;position:relative">
         <i class="fas fa-network-wired" style="font-size:30px"></i>
-        <div style="font-size:26px;font-weight:700">IPDR<span style="opacity:.5;margin:0 4px">·</span>NATLog</div>
+        <div style="font-size:26px;font-weight:700">Yes<span style="color:#7CFFB2">Logs</span> <span style="opacity:.55;font-weight:600">Director</span></div>
       </div>
       <div style="position:relative">
-        <div style="font-size:34px;font-weight:700;line-height:1.2;max-width:440px">Carrier-Grade NAT translation logging &amp; lawful query console</div>
-        <div style="font-size:16px;color:#bfe0f2;margin-top:16px;max-width:420px;line-height:1.6">Reverse-resolve any public IP/port back to the subscriber, with full IPDR audit retention.</div>
+        <div style="font-size:34px;font-weight:700;line-height:1.2;max-width:460px">Multi-ISP NAT &amp; NetFlow log ingestion and reporting</div>
+        <div style="font-size:16px;color:#bfe0f2;margin-top:16px;max-width:430px;line-height:1.6">Collect flow logs from every ISP's exporters, store them hot, archive to S3, and search &amp; report across tenants.</div>
         <div style="display:flex;gap:30px;margin-top:34px">
-          <div><div style="font-size:26px;font-weight:700" id="brand-records">—</div><div style="font-size:13px;color:#bfe0f2">records logged</div></div>
-          <div><div style="font-size:26px;font-weight:700">30 d</div><div style="font-size:13px;color:#bfe0f2">retention</div></div>
-          <div><div style="font-size:26px;font-weight:700">99.9%</div><div style="font-size:13px;color:#bfe0f2">uptime</div></div>
+          <div><div style="font-size:26px;font-weight:700" id="brand-records">—</div><div style="font-size:13px;color:#bfe0f2">flows ingested</div></div>
+          <div><div style="font-size:26px;font-weight:700">Hot+S3</div><div style="font-size:13px;color:#bfe0f2">storage tiers</div></div>
+          <div><div style="font-size:26px;font-weight:700">Multi</div><div style="font-size:13px;color:#bfe0f2">tenant</div></div>
         </div>
       </div>
-      <div style="font-size:13px;color:#9ec9e3;position:relative">v0.5.1 · CGNAT Compliance Build · © 2026 Network Compliance Division</div>
+      <div style="font-size:13px;color:#9ec9e3;position:relative">YesLogs Director · ISP infrastructure operations</div>
     </div>
     <div style="flex:1;background:#f4f6f9;display:flex;align-items:center;justify-content:center;padding:24px">
       <div style="width:380px;background:#fff;border-radius:5px;box-shadow:0 8px 28px rgba(0,0,0,.12);overflow:hidden">
@@ -76,7 +86,7 @@ td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
           </div>
           <button id="li-btn" class="btn" style="width:100%;height:44px;justify-content:center;font-size:15px;font-weight:700"><i class="fas fa-right-to-bracket"></i> Sign in to Console</button>
           <div style="margin-top:18px;font-size:12px;color:#9aa5b1;display:flex;align-items:center;gap:7px;justify-content:center">
-            <i class="fas fa-shield-halved" style="color:var(--ok)"></i> Access is logged under lawful-intercept policy LI-2026
+            <i class="fas fa-shield-halved" style="color:var(--ok)"></i> Director console · all access is audited
           </div>
         </div>
       </div>
@@ -89,7 +99,7 @@ td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
   <header style="flex:0 0 auto;height:56px;background:var(--pri);display:flex;align-items:center;padding-right:10px;box-shadow:0 2px 4px rgba(0,0,0,.12);position:relative;z-index:20">
     <div style="width:248px;height:56px;display:flex;align-items:center;gap:11px;padding:0 18px;background:var(--dark);color:#fff">
       <i class="fas fa-network-wired" style="font-size:21px"></i>
-      <div style="font-size:19px;font-weight:700">IPDR<span style="opacity:.5;margin:0 3px">·</span>NATLog</div>
+      <div style="font-size:19px;font-weight:700">Yes<span style="color:#7CFFB2">Logs</span> <span style="opacity:.55;font-weight:600">Director</span></div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;background:var(--pri6);border-radius:5px;height:36px;padding:0 13px;min-width:300px;margin-left:18px">
       <i class="fas fa-magnifying-glass" style="color:#bfe0f2;font-size:13px"></i>
@@ -97,7 +107,7 @@ td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
     </div>
     <div style="flex:1"></div>
     <div style="display:flex;align-items:center;gap:7px;color:#dff0fa;font-size:12px;font-weight:600;background:rgba(255,255,255,.12);border-radius:5px;padding:6px 11px;margin-right:10px">
-      <span style="width:8px;height:8px;border-radius:50%;background:#7CFFB2;display:inline-block;animation:pulseDot 1.4s infinite"></span> COLLECTORS LIVE
+      <span style="width:8px;height:8px;border-radius:50%;background:#7CFFB2;display:inline-block;animation:pulseDot 1.4s infinite"></span> DATAPLANES LIVE
     </div>
     <div style="display:flex;align-items:center;gap:10px;cursor:pointer;color:#fff;margin-left:4px">
       <div id="hdr-initials" style="width:34px;height:34px;border-radius:5px;background:var(--dark);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">··</div>
@@ -125,25 +135,32 @@ td{padding:11px 14px;border-bottom:1px solid #f0f3f6;white-space:nowrap}
   </main>
 
   <footer style="flex:0 0 auto;background:#fff;border-top:1px solid var(--bd);height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-size:13px;color:var(--slate)">
-    <div><span style="color:var(--pri);font-weight:700">IPDR·NATLog</span> Console — © 2026 Network Compliance Division</div>
-    <div style="display:flex;align-items:center;gap:6px">v0.5.1 · CGNAT Compliance Build <i class="fas fa-shield-halved" style="color:var(--ok)"></i></div>
+    <div><span style="color:var(--pri);font-weight:700">YesLogs Director</span> — multi-ISP flow log platform</div>
+    <div style="display:flex;align-items:center;gap:6px">Director console <i class="fas fa-network-wired" style="color:var(--ok)"></i></div>
   </footer>
 </div>
 
 <script>
-const S = { me:null, csrf:'', view:'Dashboard', data:null, records:[],
+const S = { me:null, csrf:'', view:'Overview', data:null, records:[],
   search:'', sortKey:'time', sortDir:'desc', page:1, pageSize:10, qIp:'', qPort:'', qProto:'Any' };
 const MENU = [
-  ['Dashboard','fa-gauge-high','Carrier-Grade NAT · IPDR overview','all'],
-  ['IP Search','fa-magnifying-glass-location','Lawful reverse-NAT lookup: public IP → subscriber','all'],
-  ['Audit','fa-clipboard-list','Lawful query audit trail','all'],
-  ['Devices','fa-server','Exporters / NAT devices & per-device policy','all'],
-  ['Retention','fa-database','Retention window, storage & S3 cold archive','all'],
+  ['Overview','fa-gauge-high','Ingestion, storage & dataplane health','all'],
   ['ISPs','fa-building','Tenant ISPs — onboarding & status','director'],
+  ['Dataplanes','fa-network-wired','Collectors & dataplane status','director'],
+  ['Devices','fa-server','Exporter devices & capture policy','all'],
+  ['Capture Policies','fa-shield-halved','Reusable skip-rule presets','all'],
+  ['Logs','fa-magnifying-glass','Flow log search (NAT mappings)','all'],
+  ['Reports','fa-file-export','Generated exports — CSV / Excel / PDF','all'],
+  ['Retention','fa-database','Hot storage window & S3 archive','all'],
+  ['Audit','fa-clipboard-list','Search & export audit trail','all'],
+  ['Settings','fa-sliders','Dataplane, skip rules, retention & S3','director'],
 ];
 const esc = s => $('<div>').text(s==null?'':s).html();
 const api = (p,o) => fetch(p,Object.assign({headers:{'Content-Type':'application/json'}},o||{}));
 const apiJSON = (p,method,body) => fetch(p,{method:method||'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':S.csrf},body:body?JSON.stringify(body):undefined});
+function modal(html){ closeModal(); const $m=$('<div class="modal-bg"><div class="modal">'+html+'</div></div>'); $m.on('click',e=>{if(e.target===$m[0])closeModal();}); $('body').append($m); return $m; }
+function closeModal(){ $('.modal-bg').remove(); }
+function toast(msg){ const $t=$('<div class="toast"></div>').text(msg); $('body').append($t); setTimeout(()=>$t.fadeOut(300,()=>$t.remove()),1800); }
 
 // ---- auth ----
 function showLogin(){ $('#login').css('display','block'); $('#app').css('display','none'); }
@@ -200,46 +217,33 @@ function renderPage(){
   setHead();
   const b=$('#pageBody').empty();
   if(!S.data){ b.html('<div class="card" style="padding:40px;text-align:center;color:#9aa5b1">Loading…</div>'); return; }
-  ({Dashboard:pgDashboard,'IP Search':pgSearch,Audit:pgAudit,Devices:pgDevices,Retention:pgRetention,ISPs:pgISPs}[S.view]||pgDashboard)(b);
+  ({Overview:pgOverview,ISPs:pgISPs,Dataplanes:pgDataplanes,Devices:pgDevices,'Capture Policies':pgPolicies,Logs:pgLogs,Reports:pgReports,Retention:pgRetention,Audit:pgAudit,Settings:pgSettings}[S.view]||pgOverview)(b);
 }
 
-// ==================== DASHBOARD ====================
-function pgDashboard(b){
-  const d=S.data;
-  if(d.empty){ b.append('<div class="card" style="padding:30px;color:#7b8794">No flows logged yet in this window. Once a collector ingests CGNAT/NetFlow data it appears here.</div>'); }
-  // widgets
-  let h='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:20px">';
-  (d.widgets||[]).forEach(w=>{ h+=`<div style="position:relative;border-radius:5px;color:#fff;overflow:hidden;background:${w.color};box-shadow:0 1px 3px rgba(0,0,0,.15)">
-    <div style="padding:16px 18px 22px"><div style="font-size:33px;font-weight:700;line-height:1.05">${esc(w.value)}</div><div style="font-size:15px;margin-top:5px;opacity:.95">${esc(w.label)}</div></div>
-    <i class="fas ${w.icon}" style="position:absolute;right:14px;top:12px;font-size:58px;opacity:.25"></i></div>`; });
+// ==================== OVERVIEW ====================
+async function pgOverview(b){
+  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
+  const r=await api('/api/v1/overview'); const cards=(r.status===200?((await r.json()).cards||[]):[]);
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:18px">';
+  cards.forEach(c=>{ h+=`<div class="card" style="padding:16px;display:flex;justify-content:space-between;align-items:flex-start">
+    <div style="min-width:0"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${esc(c.label)}</div>
+    <div style="font-size:26px;font-weight:700;color:#2c3a47;margin-top:4px">${esc(c.value)}</div>
+    <div style="font-size:12px;color:#a7b1bc">${esc(c.sub)}</div>
+    ${c.pct?`<div class="gauge"><div style="width:${c.pct}%;background:${c.color}"></div></div>`:''}</div>
+    <i class="fas ${c.icon}" style="font-size:24px;color:${c.color};opacity:.85"></i></div>`; });
   h+='</div>';
-  // info boxes
-  h+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:20px">';
-  (d.infoBoxes||[]).forEach(x=>{ h+=`<div style="display:flex;align-items:stretch;background:#fff;border-radius:5px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
-    <div style="width:68px;display:flex;align-items:center;justify-content:center;background:${x.color};color:#fff;font-size:25px"><i class="fas ${x.icon}"></i></div>
-    <div style="flex:1;padding:11px 16px"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${esc(x.label)}</div>
-    <div style="font-size:22px;font-weight:700;color:#2c3a47">${esc(x.value)}</div>
-    <div style="height:7px;background:#eaeef2;border-radius:5px;margin-top:7px;overflow:hidden"><div style="height:100%;width:${x.pct};background:${x.color};border-radius:5px"></div></div>
-    <div style="font-size:12px;color:#a7b1bc;margin-top:5px">${esc(x.note)}</div></div></div>`; });
-  h+='</div>';
-  // recent records table (the full lawful lookup lives on the IP Search page)
-  h+=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>NAT Translation Records</h2></div>
-    <div style="display:flex;gap:10px"><button id="expCsv" class="btn out" style="height:34px;color:var(--pri);border-color:var(--pri)"><i class="fas fa-file-csv"></i> Export</button><button id="refresh" class="btn out" style="height:34px"><i class="fas fa-arrows-rotate"></i> Refresh</button></div></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;flex-wrap:wrap;gap:10px">
-      <div style="font-size:13px;color:#6c757d">Show <select id="psize" class="inp" style="width:auto;height:32px;display:inline-block"><option>10</option><option>25</option><option>50</option></select> entries</div>
-      <div style="font-size:13px;color:#6c757d">Search: <input id="tsearch" class="inp" style="width:220px;height:32px;display:inline-block" value="${esc(S.search)}"></div>
-    </div>
+  if(!cards.length) h='<div class="card" style="padding:24px;color:#7b8794">No data yet. Add an exporter device and point it at this dataplane to start ingesting flow logs.</div>';
+  // recent flow logs
+  h+=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>Recent Flow Logs</h2></div>
+    <div style="display:flex;gap:10px;align-items:center"><input id="tsearch" class="inp" placeholder="filter…" style="width:200px;height:32px" value="${esc(S.search)}"><button id="refresh" class="btn out" style="height:32px"><i class="fas fa-arrows-rotate"></i></button></div></div>
     <div style="overflow-x:auto"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;flex-wrap:wrap;gap:12px"><div id="showing" style="font-size:13px;color:#6c757d"></div><div id="pager" style="display:flex;gap:6px;align-items:center"></div></div>
-  </div>`;
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;flex-wrap:wrap;gap:12px"><div id="showing" style="font-size:13px;color:#6c757d"></div><div id="pager" style="display:flex;gap:6px;align-items:center"></div></div></div>`;
   b.html(h);
-  $('#refresh').on('click',()=>{S.page=1;renderTable();});
-  $('#psize').val(S.pageSize).on('change',function(){S.pageSize=+this.value;S.page=1;renderTable();});
+  $('#refresh').on('click',async()=>{await loadData(); pgOverview(b);});
   $('#tsearch').on('input',function(){S.search=this.value;S.page=1;renderTable();});
-  $('#expCsv').on('click',exportCsv);
   renderTable();
 }
-const COLS=[['Timestamp','time'],['Subscriber','sub'],['Private (CGNAT)','priv'],['Public Endpoint','pub'],['Proto','proto'],['Destination','dest'],['Event','action']];
+const COLS=[['Timestamp','time'],['Device','sub'],['Private (NAT)','priv'],['Public (NAT)','pub'],['Proto','proto'],['Destination','dest'],['Type','action']];
 function ipNum(ip){ return (ip||'').split('.').reduce((a,o)=>a*256+(+o||0),0); }
 function computeRows(){
   let rows=S.records.slice();
@@ -283,39 +287,49 @@ function exportCsv(){
   a.href=URL.createObjectURL(blob); a.download='ipdr-records.csv'; a.click();
 }
 
-// ==================== IP SEARCH (lawful reverse-NAT lookup) ====================
-function pgSearch(b){
-  b.html(`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-magnifying-glass-location" style="color:var(--pri)"></i><h2>Lawful Reverse-NAT Lookup</h2><span class="pill" style="background:#fdecec;color:#c0392b">audited</span></div>
+// ==================== LOGS SEARCH ====================
+async function pgLogs(b){
+  let isps=[], devs=[];
+  const dr=await api('/api/v1/devices'); if(dr.status===200){ const d=await dr.json(); devs=d.devices||[]; isps=d.isps||[]; }
+  const dir=S.me&&S.me.isDirector;
+  const ispOpts = dir? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="s-isp" class="inp"><option value="0">All ISPs</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>`:'';
+  b.html(`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-magnifying-glass" style="color:var(--pri)"></i><h2>Logs Search</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">audited</span></div>
   <div style="padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
-    <div style="flex:1 1 160px"><label class="lbl">Public IP *</label><input id="s-ip" class="inp mono" placeholder="203.0.113.42"></div>
-    <div style="flex:1 1 90px"><label class="lbl">Public port</label><input id="s-port" type="number" class="inp mono" placeholder="any"></div>
+    ${ispOpts}
+    <div style="flex:1 1 120px"><label class="lbl">Dataplane</label><select id="s-dp" class="inp"><option>All</option></select></div>
+    <div style="flex:1 1 150px"><label class="lbl">Device</label><select id="s-dev" class="inp"><option value="0">Any device</option>${devs.map(d=>`<option value="${d.DeviceID}">${esc(d.Name)} (#${d.DeviceID})</option>`).join('')}</select></div>
+    <div style="flex:1 1 140px"><label class="lbl">Public IP</label><input id="s-pub" class="inp mono" placeholder="203.0.113.x"></div>
+    <div style="flex:1 1 90px"><label class="lbl">Public Port</label><input id="s-port" type="number" class="inp mono" placeholder="any"></div>
+    <div style="flex:1 1 140px"><label class="lbl">Private IP</label><input id="s-priv" class="inp mono" placeholder="100.64.x.x"></div>
+    <div style="flex:1 1 140px"><label class="lbl">Destination IP</label><input id="s-dst" class="inp mono" placeholder="any"></div>
     <div style="flex:1 1 100px"><label class="lbl">Protocol</label><select id="s-proto" class="inp"><option>Any</option><option>TCP</option><option>UDP</option><option>ICMP</option></select></div>
-    <div style="flex:1 1 170px"><label class="lbl">From (UTC)</label><input id="s-from" type="datetime-local" class="inp"></div>
-    <div style="flex:1 1 170px"><label class="lbl">To (UTC)</label><input id="s-to" type="datetime-local" class="inp"></div>
-    <div style="flex:1 1 150px"><label class="lbl">Case ref</label><input id="s-case" class="inp" placeholder="LI-2026-0814"></div>
-    <button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Resolve</button>
-  </div><div id="s-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>
+    <div style="flex:1 1 160px"><label class="lbl">From (UTC)</label><input id="s-from" type="datetime-local" class="inp"></div>
+    <div style="flex:1 1 160px"><label class="lbl">To (UTC)</label><input id="s-to" type="datetime-local" class="inp"></div>
+    <div style="flex:1 1 170px"><label class="lbl">Audit reason (optional)</label><input id="s-reason" class="inp" placeholder="reason for this search"></div>
+    <button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Search</button>
+  </div><div style="padding:0 18px 8px;font-size:12px;color:#9aa5b1">Provide at least one of: Public IP, Private IP, Destination IP, or Device.</div><div id="s-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>
   <div id="s-results"></div>`);
-  $('#s-run').on('click', runSearch);
-  $('#s-ip').on('keydown',e=>{if(e.key==='Enter')runSearch();});
+  $('#s-run').on('click', runLogs);
+  $('#s-pub,#s-priv,#s-dst').on('keydown',e=>{if(e.key==='Enter')runLogs();});
 }
-async function runSearch(){
-  const ip=$('#s-ip').val().trim(); if(!ip){ $('#s-msg').text('Public IP required'); return; }
+function logBody(){ return {PublicIP:$('#s-pub').val().trim(),PrivateIP:$('#s-priv').val().trim(),DestIP:$('#s-dst').val().trim(),PublicPort:+($('#s-port').val()||0),Proto:$('#s-proto').val(),DeviceID:+($('#s-dev').val()||0),ISPID:+($('#s-isp').length?$('#s-isp').val():0),From:$('#s-from').val(),To:$('#s-to').val(),Reason:$('#s-reason').val()}; }
+async function runLogs(){
+  const body=logBody();
+  if(!body.PublicIP&&!body.PrivateIP&&!body.DestIP&&!body.DeviceID){ $('#s-msg').text('Provide a Public IP, Private IP, Destination IP, or Device'); return; }
   $('#s-msg').text(''); $('#s-results').html('<div class="card" style="padding:24px;color:#9aa5b1">Searching…</div>');
-  const body={IP:ip,Port:+($('#s-port').val()||0),Proto:$('#s-proto').val(),From:$('#s-from').val(),To:$('#s-to').val(),CaseRef:$('#s-case').val()};
   const r=await apiJSON('/api/v1/search','POST',body);
   if(r.status!==200){ const e=await r.json().catch(()=>({})); $('#s-results').html(''); $('#s-msg').text(e.error||'search failed'); return; }
-  const d=await r.json(); renderSearchResults(d.records||[], d.count, d.truncated, body);
+  const d=await r.json(); renderLogResults(d.records||[], d.count, d.truncated, body);
 }
-function qstr(body){ const p=new URLSearchParams(); p.set('ip',body.IP); if(body.Port)p.set('port',body.Port); if(body.Proto&&body.Proto!=='Any')p.set('proto',body.Proto); if(body.From)p.set('from',body.From); if(body.To)p.set('to',body.To); if(body.CaseRef)p.set('case',body.CaseRef); return p.toString(); }
-function renderSearchResults(rows,count,truncated,body){
-  const qs=qstr(body);
-  let h=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>Result — ${count} record${count===1?'':'s'}${truncated?' (capped)':''}</h2></div>
+function logQstr(body){ const p=new URLSearchParams(); if(body.PublicIP)p.set('ip',body.PublicIP); if(body.PrivateIP)p.set('priv',body.PrivateIP); if(body.DestIP)p.set('dst',body.DestIP); if(body.PublicPort)p.set('port',body.PublicPort); if(body.Proto&&body.Proto!=='Any')p.set('proto',body.Proto); if(body.DeviceID)p.set('device',body.DeviceID); if(body.ISPID)p.set('isp',body.ISPID); if(body.From)p.set('from',body.From); if(body.To)p.set('to',body.To); if(body.Reason)p.set('reason',body.Reason); return p.toString(); }
+function renderLogResults(rows,count,truncated,body){
+  const qs=logQstr(body);
+  let h=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>${count} record${count===1?'':'s'}${truncated?' (capped at 5000)':''}</h2></div>
     <div style="display:flex;gap:8px"><a class="btn out" style="height:32px" href="/api/v1/report?format=csv&${qs}"><i class="fas fa-file-csv"></i> CSV</a>
     <a class="btn out" style="height:32px" href="/api/v1/report?format=xlsx&${qs}"><i class="fas fa-file-excel"></i> Excel</a>
     <a class="btn out" style="height:32px" href="/api/v1/report?format=pdf&${qs}"><i class="fas fa-file-pdf"></i> PDF</a></div></div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Timestamp</th><th>Subscriber</th><th>Private (CGNAT)</th><th>Public Endpoint</th><th>Proto</th><th>Destination</th><th>Event</th></tr></thead><tbody>`;
-  if(!rows.length) h+='<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:30px">No records for this public endpoint + window. Subscriber not found — verify IP/port/time.</td></tr>';
+    <div style="overflow-x:auto"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Private (NAT)</th><th>Public (NAT)</th><th>Proto</th><th>Destination</th><th>Type</th></tr></thead><tbody>`;
+  if(!rows.length) h+='<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:30px">No flow logs match these filters / time window.</td></tr>';
   rows.forEach((r,i)=>{const pb=PB[r.proto]||PB.OTH;
     h+=`<tr style="background:${i%2?'#fbfcfd':'#fff'}"><td class="mono"><span style="color:#9aa5b1;font-size:11px">${esc(r.date)}</span><br>${esc(r.clock)}</td>
     <td class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</td>
@@ -327,13 +341,32 @@ function renderSearchResults(rows,count,truncated,body){
   $('#s-results').html(h);
 }
 
+// ==================== REPORTS ====================
+async function pgReports(b){
+  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading reports…</div>');
+  const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load reports.</div>'); return; }
+  const exports=((await r.json()).queries||[]).filter(q=>(q.CaseRef||'').includes('[export:'));
+  const fmt=cr=>{ const m=/\[export:(\w+)\]/.exec(cr||''); return m?m[1]:'csv'; };
+  const reason=cr=>(cr||'').replace(/\s*\[export:\w+\]\s*/,'')||'—';
+  const dl=q=>{ const p=new URLSearchParams(); if(q.QueryIP)p.set('ip',q.QueryIP); if(q.QueryPort)p.set('port',q.QueryPort); if(q.QueryProto&&q.QueryProto!=='Any')p.set('proto',q.QueryProto); p.set('format',fmt(q.CaseRef)); return '/api/v1/report?'+p.toString(); };
+  let h=`<div class="card" style="margin-bottom:16px;padding:16px;font-size:13.5px;color:#4a5560"><i class="fas fa-circle-info" style="color:var(--pri)"></i> Reports are generated from <b>Logs Search</b> — run a search and use the CSV / Excel / PDF buttons. Recent exports are listed below and can be re-downloaded.</div>`;
+  h+='<div class="card"><div class="ch"><i class="fas fa-file-export" style="color:var(--pri)"></i><h2>Recent Reports</h2></div><div style="overflow-x:auto"><table><thead><tr><th>When (UTC)</th><th>By</th><th>Format</th><th>Filter (IP)</th><th>Rows</th><th>Reason</th><th></th></tr></thead><tbody>';
+  if(!exports.length) h+='<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:24px">No reports generated yet.</td></tr>';
+  exports.forEach(q=>{ h+=`<tr><td class="mono" style="color:#5a6573">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td>
+    <td><span class="pill" style="background:#eef7fc;color:#0077b6">${esc(fmt(q.CaseRef).toUpperCase())}</span></td>
+    <td class="mono">${esc(q.QueryIP||'—')}</td><td class="mono">${q.ResultCount}</td><td>${esc(reason(q.CaseRef))}</td>
+    <td><a class="btn out" style="height:28px" href="${dl(q)}"><i class="fas fa-download"></i></a></td></tr>`;});
+  h+='</tbody></table></div></div>';
+  b.html(h);
+}
+
 // ==================== AUDIT ====================
 async function pgAudit(b){
   b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading audit…</div>');
   const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load audit.</div>'); return; }
   const {queries=[]}=await r.json();
   const t=s=>(s&&!String(s).startsWith('0001'))?String(s).replace('T',' ').slice(0,16):'any';
-  let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Lawful Query Audit</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">every lookup is recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (UTC)</th><th>Analyst</th><th>ISP</th><th>Public IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Hits</th><th>Case</th></tr></thead><tbody>';
+  let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (UTC)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
   if(!queries.length) h+='<tr><td colspan="9" style="text-align:center;color:#9aa5b1;padding:24px">No queries yet.</td></tr>';
   queries.forEach(q=>{ h+=`<tr><td class="mono" style="color:#5a6573">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td><td class="mono">${q.ISPID||'all'}</td>
     <td class="mono" style="font-weight:600">${esc(q.QueryIP)}</td><td class="mono">${q.QueryPort||'any'}</td><td>${esc(q.QueryProto||'any')}</td>
@@ -358,7 +391,7 @@ async function pgRetention(b){
   h+='</div>';
   // S3 archive card
   h+=`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-box-archive" style="color:var(--pri)"></i><h2>S3 Cold Archive</h2>${arch.enabled?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">enabled · ${esc(arch.bucket)}</span>`:'<span class="pill" style="background:#fff4e0;color:#a86700">not configured</span>'}</div>
-    <div style="padding:16px 18px;font-size:13.5px;color:#4a5560">${arch.enabled?'Export a day to S3 (gzip CSV) for long-term cold retention beyond the hot window. Director-only.':'Configure the <span class="mono">s3:</span> section in natlog.yaml (endpoint, bucket, keys) to enable off-box cold archive. Hot retention + lawful query work without it.'}</div></div>`;
+    <div style="padding:16px 18px;font-size:13.5px;color:#4a5560">${arch.enabled?'Export a day to S3 (gzip CSV) for long-term cold storage beyond the hot window. Director-only.':'Enable S3 in <b>Settings → S3 Archive</b> (endpoint, bucket, keys) for off-box cold storage. Hot storage + search work without it.'}</div></div>`;
   // per-day table
   h+='<div class="card"><div class="ch"><i class="fas fa-calendar-week" style="color:var(--pri)"></i><h2>Records by day (last 30)</h2></div><div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Records</th><th>Coverage</th>'+(arch.canRun?'<th>Archive</th>':'')+'</tr></thead><tbody>';
   const days=d.perDay||[]; const max=days.reduce((m,x)=>Math.max(m,x.count),0)||1;
@@ -403,43 +436,197 @@ async function pgISPs(b){
 }
 
 // ==================== DEVICES ====================
+async function loadPolicies(){ const r=await api('/api/v1/policies'); return r.status===200?((await r.json()).policies||[]):[]; }
+function policyOpts(pols,sel){ return `<option value="">Custom rules</option>`+pols.map(p=>`<option ${p.Name===sel?'selected':''}>${esc(p.Name)}</option>`).join(''); }
 async function pgDevices(b){
   b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading devices…</div>');
   const r=await api('/api/v1/devices');
   if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load devices.</div>'); return; }
   const data=await r.json(); const devs=data.devices||[], isps=data.isps||[], dir=data.isDirector;
-  const ispSel = dir ? `<div style="flex:1 1 150px"><label class="lbl">ISP</label><select id="d-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>` : '';
-  let h=`<div class="card" style="margin-bottom:20px"><div class="ch"><i class="fas fa-server" style="color:var(--pri)"></i><h2>Add NAT device / exporter</h2></div>
+  const pols=await loadPolicies();
+  const ispSel = dir ? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="d-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>` : '';
+  let h=`<div class="card" style="margin-bottom:20px"><div class="ch"><i class="fas fa-server" style="color:var(--pri)"></i><h2>Add Exporter Device</h2></div>
   <div style="padding:18px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
     ${ispSel}
-    <div style="flex:1 1 150px"><label class="lbl">Name</label><input id="d-name" class="inp" placeholder="edge-router-01"></div>
-    <div style="flex:1 1 140px"><label class="lbl">Exporter IP</label><input id="d-ip" class="inp mono" placeholder="10.0.0.1"></div>
-    <div style="flex:1 1 100px"><label class="lbl">device_id</label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1"></div>
+    <div style="flex:1 1 110px"><label class="lbl">Dataplane</label><select id="d-dp" class="inp"><option>local</option></select></div>
+    <div style="flex:1 1 150px"><label class="lbl">Device name</label><input id="d-name" class="inp" placeholder="edge-router-01"></div>
+    <div style="flex:1 1 130px"><label class="lbl">Exporter IP</label><input id="d-ip" class="inp mono" placeholder="10.0.0.1"></div>
+    <div style="flex:1 1 90px"><label class="lbl">device_id</label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1"></div>
     <div style="flex:1 1 120px"><label class="lbl">Protocol</label><select id="d-proto" class="inp"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select></div>
-    <div style="flex:1 1 120px"><label class="lbl">Profile</label><select id="d-profile" class="inp"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select></div>
-    <button id="d-add" class="btn"><i class="fas fa-plus"></i> Add</button>
+    <div style="flex:1 1 120px"><label class="lbl">Vendor profile</label><select id="d-profile" class="inp"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select></div>
+    <div style="flex:1 1 140px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select></div>
+    <button id="d-add" class="btn"><i class="fas fa-plus"></i> Add Device</button>
   </div>
-  <div style="padding:0 18px 14px;display:flex;gap:18px;font-size:13px;color:#4a5560;align-items:center;flex-wrap:wrap">
+  <div id="d-custom" style="padding:0 18px 14px;display:flex;gap:18px;font-size:13px;color:#4a5560;align-items:center;flex-wrap:wrap">
+    <span style="color:#9aa5b1">Custom skip rules (used when no capture policy):</span>
     <label><input type="checkbox" id="d-dns" checked> skip DNS</label>
     <label><input type="checkbox" id="d-priv" checked> skip priv→priv</label>
     <label><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
     <span id="d-msg" style="color:#c0392b"></span>
   </div></div>`;
-  h+='<div class="card"><div class="ch"><i class="fas fa-list" style="color:var(--pri)"></i><h2>Devices (exporters)</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">flows from unregistered exporters are rejected</span></div><div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>device_id</th><th>Proto</th><th>Profile</th><th>Rules</th><th>Status</th><th></th></tr></thead><tbody>';
-  if(!devs.length) h+='<tr><td colspan="9" style="text-align:center;color:#9aa5b1;padding:24px">No devices yet — add an exporter above.</td></tr>';
+  h+='<div class="card"><div class="ch"><i class="fas fa-list" style="color:var(--pri)"></i><h2>Exporter Devices</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">unregistered exporters are rejected</span></div><div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>device_id</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Rules</th><th>Status</th><th></th></tr></thead><tbody>';
+  if(!devs.length) h+='<tr><td colspan="10" style="text-align:center;color:#9aa5b1;padding:24px">No exporter devices yet — add one above.</td></tr>';
   devs.forEach(d=>{ h+=`<tr><td class="mono">${d.ISPID}</td><td>${esc(d.Name)}</td><td class="mono">${esc(d.ExporterIP)}</td><td class="mono">${d.DeviceID}</td><td>${esc(d.Protocol)}</td><td>${esc(d.Profile)}</td>
+    <td>${d.CapturePolicy?`<span class="pill" style="background:#eef7fc;color:#0077b6">${esc(d.CapturePolicy)}</span>`:'<span style="color:#9aa5b1">custom</span>'}</td>
     <td style="font-size:12px;color:#7b8794">${d.SkipDNS?'dns ':''}${d.SkipPrivate?'priv ':''}${d.SkipZero?'zero':''}</td>
     <td><span class="pill" style="background:${d.Enabled?'#e6f4ea':'#f0f0f3'};color:${d.Enabled?'#1e7e34':'#6c757d'}">${d.Enabled?'enabled':'disabled'}</span></td>
-    <td style="white-space:nowrap"><button class="btn out d-tog" data-id="${d.ID}" style="height:30px">${d.Enabled?'Disable':'Enable'}</button> <button class="btn d-del" data-id="${d.ID}" style="height:30px;background:#e63946">Del</button></td></tr>`; });
+    <td style="white-space:nowrap"><button class="btn out d-edit" data-id="${d.ID}" style="height:30px"><i class="fas fa-pen"></i></button> <button class="btn out d-tog" data-id="${d.ID}" style="height:30px">${d.Enabled?'Disable':'Enable'}</button> <button class="btn d-del" data-id="${d.ID}" style="height:30px;background:#e63946">Del</button></td></tr>`; });
   h+='</tbody></table></div></div>';
   b.html(h);
+  $('#d-pol').on('change',function(){ $('#d-custom').css('opacity', this.value?'.4':'1'); });
   $('#d-add').on('click', async ()=>{
-    const body={ISPID:dir?+($('#d-isp').val()||0):0,Name:$('#d-name').val(),ExporterIP:$('#d-ip').val(),DeviceID:+($('#d-id').val()||0),Protocol:$('#d-proto').val(),Profile:$('#d-profile').val(),SkipDNS:$('#d-dns').is(':checked'),SkipPrivate:$('#d-priv').is(':checked'),SkipZero:$('#d-zero').is(':checked')};
+    const body={ISPID:dir?+($('#d-isp').val()||0):0,Name:$('#d-name').val(),ExporterIP:$('#d-ip').val(),DeviceID:+($('#d-id').val()||0),Protocol:$('#d-proto').val(),Profile:$('#d-profile').val(),CapturePolicy:$('#d-pol').val(),SkipDNS:$('#d-dns').is(':checked'),SkipPrivate:$('#d-priv').is(':checked'),SkipZero:$('#d-zero').is(':checked')};
     const r=await apiJSON('/api/v1/devices','POST',body);
     if(r.status===200){ pgDevices(b); } else { const e=await r.json().catch(()=>({})); $('#d-msg').text(e.error||'failed'); }
   });
+  $('.d-edit').on('click', function(){ const dev=devs.find(x=>String(x.ID)===String($(this).data('id'))); if(dev) editDevice(dev,pols,()=>pgDevices(b)); });
   $('.d-tog').on('click', async function(){ await apiJSON('/api/v1/devices/'+$(this).data('id')+'/toggle','POST'); pgDevices(b); });
   $('.d-del').on('click', async function(){ if(confirm('Delete device?')){ await apiJSON('/api/v1/devices/'+$(this).data('id'),'DELETE'); pgDevices(b); } });
+}
+
+// ==================== SETTINGS (Director) ====================
+const opts=(arr,sel)=>arr.map(o=>`<option ${o===sel?'selected':''}>${o}</option>`).join('');
+const srow=(label,ctrl)=>`<div class="fgrid"><label class="lbl" style="margin:0">${label}</label><div>${ctrl}</div></div>`;
+const chk=(id,v)=>`<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="${id}" ${v?'checked':''}> enabled</label>`;
+function saveSetting(section,body){ apiJSON('/api/v1/settings/'+section,'PUT',body).then(async r=>{ if(r.status===200){ toast('Saved · applied to dataplane'); } else { const e=await r.json().catch(()=>({})); alert(e.error||'save failed'); } }); }
+async function pgSettings(b){
+  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading settings…</div>');
+  const r=await api('/api/v1/settings'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load settings (Director only).</div>'); return; }
+  const j=await r.json(); const cfg=j.settings||{}, secretSet=j.secretSet;
+  const tabs=[['Dataplane',()=>dpTab(cfg)],['Skip Rules',()=>skipTab(cfg)],['Retention',()=>retTab(cfg)],['S3 Archive',()=>s3Tab(cfg,secretSet)]];
+  b.html('<div class="tabs">'+tabs.map((t,i)=>`<div class="tab${i?'':' on'}" data-i="${i}">${t[0]}</div>`).join('')+'</div><div id="set-body" class="card" style="padding:18px"></div>');
+  const open=i=>{ $('.tab').removeClass('on').eq(i).addClass('on'); tabs[i][1](); };
+  $('.tab').on('click',function(){open(+$(this).data('i'));}); open(0);
+}
+function dpTab(cfg){ const d=cfg.dataplane||{};
+  $('#set-body').html(srow('Batch size',`<input id="dp-batch" class="inp mono" value="${d.batchSize||5000}">`)+
+    srow('Flush interval (ms)',`<input id="dp-flush" class="inp mono" value="${d.flushIntervalMs||300}">`)+
+    srow('Writer workers',`<input id="dp-workers" class="inp mono" value="${d.writerWorkers||2}">`)+
+    srow('Max queue rows',`<input id="dp-queue" class="inp mono" value="${d.maxQueueRows||200000}">`)+
+    srow('Backpressure',`<select id="dp-bp" class="inp">${opts(['block','drop_new','drop_old'],d.backpressureMode)}</select>`)+
+    srow('Unknown exporter',`<select id="dp-unk" class="inp">${opts(['reject','observe','allow'],d.unknownExporterMode)}</select>`)+
+    `<div style="margin-top:14px"><button class="btn" id="dp-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#dp-save').on('click',()=>saveSetting('dataplane',{batchSize:+$('#dp-batch').val(),flushIntervalMs:+$('#dp-flush').val(),writerWorkers:+$('#dp-workers').val(),maxQueueRows:+$('#dp-queue').val(),backpressureMode:$('#dp-bp').val(),unknownExporterMode:$('#dp-unk').val()}));
+}
+function skipTab(cfg){ const s=cfg.skiprules||{};
+  $('#set-body').html(srow('Skip DNS (port 53)',chk('sk-dns',s.skipDns))+srow('Skip private→private',chk('sk-priv',s.skipPrivate))+srow('Skip zero-byte flows',chk('sk-zero',s.skipZero))+
+    `<div style="font-size:12px;color:#9aa5b1;margin:8px 0">Global skip rules + default for new devices. Per-device overrides live on the Devices page.</div><div style="margin-top:8px"><button class="btn" id="sk-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#sk-save').on('click',()=>saveSetting('skiprules',{skipDns:$('#sk-dns').is(':checked'),skipPrivate:$('#sk-priv').is(':checked'),skipZero:$('#sk-zero').is(':checked')}));
+}
+function retTab(cfg){ const r=cfg.retention||{};
+  $('#set-body').html(srow('Retention (days)',`<input id="rt-days" type="number" min="1" class="inp mono" value="${r.days||180}">`)+
+    `<div style="font-size:12px;color:#9aa5b1;margin:8px 0">Sets the ClickHouse hot-storage TTL (how long flow logs are kept on disk before drop/archive).</div><div style="margin-top:8px"><button class="btn" id="rt-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#rt-save').on('click',()=>saveSetting('retention',{days:+$('#rt-days').val()}));
+}
+function s3Tab(cfg,secretSet){ const s=cfg.s3||{};
+  $('#set-body').html(srow('Enabled',chk('s3-en',s.enabled))+
+    srow('Endpoint',`<input id="s3-ep" class="inp mono" placeholder="https://s3.ap-south-1.amazonaws.com" value="${esc(s.endpoint||'')}">`)+
+    srow('Region',`<input id="s3-rg" class="inp mono" value="${esc(s.region||'us-east-1')}">`)+
+    srow('Bucket',`<input id="s3-bk" class="inp mono" value="${esc(s.bucket||'')}">`)+
+    srow('Access key',`<input id="s3-ak" class="inp mono" value="${esc(s.accessKey||'')}">`)+
+    srow('Secret key',`<input id="s3-sk" type="password" class="inp mono" placeholder="${secretSet?'•••••••• (unchanged — leave blank to keep)':'(none)'}">`)+
+    srow('Path prefix',`<input id="s3-pp" class="inp mono" value="${esc(s.pathPrefix||'natlog')}">`)+
+    srow('Export format',`<select id="s3-fmt" class="inp">${opts(['csvgz','parquet'],s.exportFormat)}</select>`)+
+    `<div style="margin-top:14px"><button class="btn" id="s3-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
+  $('#s3-save').on('click',()=>saveSetting('s3',{enabled:$('#s3-en').is(':checked'),endpoint:$('#s3-ep').val(),region:$('#s3-rg').val(),bucket:$('#s3-bk').val(),accessKey:$('#s3-ak').val(),secretKey:$('#s3-sk').val(),pathPrefix:$('#s3-pp').val(),exportFormat:$('#s3-fmt').val()}));
+}
+
+// ==================== SYSTEM (Director) ====================
+function pgSystem(b){
+  const gc=(title,icon,p,big,sub,color)=>`<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${title}</div><i class="fas ${icon}" style="color:${color}"></i></div><div style="font-size:24px;font-weight:700;color:#2c3a47;margin-top:6px">${big}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div><div class="gauge"><div style="width:${p}%;background:${color}"></div></div></div>`;
+  async function load(){
+    const r=await api('/api/v1/system'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load system (Director only).</div>'); return; }
+    const d=await r.json(); const cpu=d.cpu||{},mem=d.memory||{},disk=d.disk||{},proc=d.process||{},ing=d.ingest||{};
+    const up=proc.uptime||0, uph=Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m';
+    let h='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">';
+    h+=gc('CPU load','fa-microchip',cpu.loadPct||0,(cpu.load1||0).toFixed(2),(cpu.cores||0)+' cores · '+(cpu.loadPct||0)+'%','#0077b6');
+    h+=gc('Memory','fa-memory',mem.pct||0,mem.human||'—',(mem.pct||0)+'% of '+(mem.totalHuman||'—'),'#2a9d8f');
+    h+=gc('Disk','fa-hard-drive',disk.pct||0,disk.human||'—',(disk.pct||0)+'% of '+(disk.totalHuman||'—'),'#e76f51');
+    h+=gc('Flows today','fa-bolt',Math.min(100,(ing.flowsToday||0)/10000),Number(ing.flowsToday||0).toLocaleString(),(ing.bytesHuman||'0 B')+' · '+(ing.devices||0)+' dev','#00a3c4');
+    h+='</div><div class="card"><div class="ch"><i class="fas fa-gears" style="color:var(--pri)"></i><h2>natlog process</h2><span style="flex:1"></span><button class="btn out" id="sys-refresh" style="height:30px"><i class="fas fa-arrows-rotate"></i> Refresh</button></div><div style="padding:18px">';
+    h+=`<div class="fgrid"><label class="lbl" style="margin:0">Goroutines</label><div class="mono">${proc.goroutines||0}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Go heap</label><div class="mono">${proc.heapHuman||'—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Process memory</label><div class="mono">${proc.sysHuman||'—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Uptime</label><div class="mono">${uph}</div></div></div></div>`;
+    b.html(h); $('#sys-refresh').on('click',load);
+  }
+  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading system…</div>'); load();
+}
+
+// ==================== DEVICE EDIT ====================
+function editDevice(dev,pols,onSave){
+  pols=pols||[];
+  modal(`<div class="ch"><i class="fas fa-pen" style="color:var(--pri)"></i><h2>Edit exporter — ${esc(dev.Name)} (ISP #${dev.ISPID})</h2></div><div style="padding:18px">
+    ${srow('Device name',`<input id="e-name" class="inp" value="${esc(dev.Name)}">`)}
+    ${srow('Exporter IP',`<input id="e-ip" class="inp mono" value="${esc(dev.ExporterIP)}">`)}
+    ${srow('device_id',`<input id="e-id" type="number" class="inp mono" value="${dev.DeviceID}">`)}
+    ${srow('Protocol',`<select id="e-proto" class="inp">${opts(['auto','netflow5','netflow9','ipfix'],dev.Protocol)}</select>`)}
+    ${srow('Vendor profile',`<select id="e-profile" class="inp">${opts(['generic','mikrotik','cisco','juniper','huawei'],dev.Profile)}</select>`)}
+    ${srow('Capture policy',`<select id="e-pol" class="inp">${policyOpts(pols,dev.CapturePolicy)}</select>`)}
+    ${srow('Custom skip rules',`<div style="display:flex;gap:16px"><label><input type="checkbox" id="e-dns" ${dev.SkipDNS?'checked':''}> dns</label><label><input type="checkbox" id="e-priv" ${dev.SkipPrivate?'checked':''}> priv</label><label><input type="checkbox" id="e-zero" ${dev.SkipZero?'checked':''}> zero</label></div>`)}
+    ${srow('Enabled',`<label><input type="checkbox" id="e-en" ${dev.Enabled?'checked':''}> enabled</label>`)}
+    <div id="e-msg" style="color:#c0392b;font-size:13px;margin-top:6px"></div>
+    <div style="display:flex;gap:10px;margin-top:14px"><button class="btn" id="e-save"><i class="fas fa-floppy-disk"></i> Save</button><button class="btn out" id="e-cancel">Cancel</button></div></div>`);
+  $('#e-cancel').on('click',closeModal);
+  $('#e-save').on('click',async()=>{
+    const body={Name:$('#e-name').val(),ExporterIP:$('#e-ip').val(),DeviceID:+$('#e-id').val(),Protocol:$('#e-proto').val(),Profile:$('#e-profile').val(),CapturePolicy:$('#e-pol').val(),SkipDNS:$('#e-dns').is(':checked'),SkipPrivate:$('#e-priv').is(':checked'),SkipZero:$('#e-zero').is(':checked'),Enabled:$('#e-en').is(':checked')};
+    const r=await apiJSON('/api/v1/devices/'+dev.ID,'PUT',body);
+    if(r.status===200){ closeModal(); toast('Device updated'); onSave(); } else { const e=await r.json().catch(()=>({})); $('#e-msg').text(e.error||'failed'); }
+  });
+}
+
+// ==================== CAPTURE POLICIES ====================
+async function pgPolicies(b){
+  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
+  const r=await api('/api/v1/policies'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load capture policies.</div>'); return; }
+  const j=await r.json(); const pols=j.policies||[];
+  let h=`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-shield-halved" style="color:var(--pri)"></i><h2>Create Capture Policy</h2></div>
+  <div style="padding:18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end">
+    <div style="flex:1 1 220px"><label class="lbl">Policy name</label><input id="p-name" class="inp" placeholder="e.g. default, full-capture"></div>
+    <label style="display:flex;align-items:center;gap:7px"><input type="checkbox" id="p-dns" checked> skip DNS</label>
+    <label style="display:flex;align-items:center;gap:7px"><input type="checkbox" id="p-priv" checked> skip priv→priv</label>
+    <label style="display:flex;align-items:center;gap:7px"><input type="checkbox" id="p-zero" checked> skip zero-byte</label>
+    <button id="p-add" class="btn"><i class="fas fa-plus"></i> Create</button>
+  </div><div id="p-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>`;
+  h+='<div class="card"><div class="ch"><i class="fas fa-list" style="color:var(--pri)"></i><h2>Capture Policies</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">applied to exporter devices</span></div><div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Scope</th><th>Skip rules</th><th></th></tr></thead><tbody>';
+  if(!pols.length) h+='<tr><td colspan="4" style="text-align:center;color:#9aa5b1;padding:24px">No capture policies yet — create one above, then assign it on the Devices page.</td></tr>';
+  pols.forEach(p=>{ const none=!p.SkipDNS&&!p.SkipPrivate&&!p.SkipZero;
+    h+=`<tr><td style="font-weight:600">${esc(p.Name)}</td><td>${p.ISPID===0?'<span class="pill" style="background:#eef7fc;color:#0077b6">global</span>':'ISP #'+p.ISPID}</td>
+    <td style="font-size:12px;color:#7b8794">${p.SkipDNS?'dns ':''}${p.SkipPrivate?'priv ':''}${p.SkipZero?'zero':''}${none?'capture everything':''}</td>
+    <td><button class="btn p-del" data-id="${p.ID}" style="height:28px;background:#e63946"><i class="fas fa-trash"></i></button></td></tr>`;});
+  h+='</tbody></table></div></div>';
+  b.html(h);
+  $('#p-add').on('click', async ()=>{
+    const body={Name:$('#p-name').val(),SkipDNS:$('#p-dns').is(':checked'),SkipPrivate:$('#p-priv').is(':checked'),SkipZero:$('#p-zero').is(':checked'),ISPID:0};
+    const r=await apiJSON('/api/v1/policies','POST',body);
+    if(r.status===200){ pgPolicies(b); } else { const e=await r.json().catch(()=>({})); $('#p-msg').text(e.error||'failed'); }
+  });
+  $('.p-del').on('click', async function(){ if(confirm('Delete capture policy?')){ await apiJSON('/api/v1/policies/'+$(this).data('id'),'DELETE'); pgPolicies(b); } });
+}
+
+// ==================== DATAPLANES ====================
+async function pgDataplanes(b){
+  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
+  const r=await api('/api/v1/dataplanes'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load dataplanes (Director only).</div>'); return; }
+  const dps=(await r.json()).dataplanes||[];
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:18px">';
+  dps.forEach(d=>{ const up=d.uptime||0, uph=Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m';
+    h+=`<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:700;color:#2c3a47"><i class="fas fa-network-wired" style="color:var(--pri)"></i> ${esc(d.name)}</div><span class="pill" style="background:#e6f4ea;color:#1e7e34">${esc(d.status)}</span></div>
+    <div style="font-size:12px;color:#9aa5b1;margin:4px 0 12px">${esc(d.kind)} · up ${uph}</div>
+    <div class="fgrid"><label class="lbl" style="margin:0">Ingested</label><div class="mono">${Number(d.ingested||0).toLocaleString()}</div></div>
+    <div class="fgrid"><label class="lbl" style="margin:0">Stored</label><div class="mono">${Number(d.inserted||0).toLocaleString()}</div></div>
+    <div class="fgrid"><label class="lbl" style="margin:0">Skipped</label><div class="mono">${Number(d.skipped||0).toLocaleString()}</div></div>
+    <div class="fgrid"><label class="lbl" style="margin:0">Queue</label><div class="mono">${d.queuePct||0}%</div></div></div>`;});
+  h+='</div>';
+  h+='<div style="font-size:12px;color:#9aa5b1;margin-bottom:14px"><i class="fas fa-circle-info"></i> A single in-process dataplane today; the model supports connecting multiple collectors per capacity.</div>';
+  const sr=await api('/api/v1/system');
+  if(sr.status===200){ const d=await sr.json(); const cpu=d.cpu||{},mem=d.memory||{},disk=d.disk||{},proc=d.process||{};
+    const g=(l,big,sub,p,c)=>`<div class="card" style="padding:16px"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${l}</div><div style="font-size:22px;font-weight:700;color:#2c3a47;margin-top:4px">${big}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div><div class="gauge"><div style="width:${p}%;background:${c}"></div></div></div>`;
+    h+='<div class="ch" style="border:0;padding:0 0 10px"><i class="fas fa-microchip" style="color:var(--pri)"></i><h2>Host resources</h2></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px">';
+    h+=g('CPU load',(cpu.load1||0).toFixed(2),(cpu.cores||0)+' cores · '+(cpu.loadPct||0)+'%',cpu.loadPct||0,'#0077b6');
+    h+=g('Memory',mem.human||'—',(mem.pct||0)+'% of '+(mem.totalHuman||'—'),mem.pct||0,'#2a9d8f');
+    h+=g('Disk',disk.human||'—',(disk.pct||0)+'% of '+(disk.totalHuman||'—'),disk.pct||0,'#e76f51');
+    h+=g('Go heap',proc.heapHuman||'—',(proc.goroutines||0)+' goroutines',0,'#00a3c4');
+    h+='</div>';
+  }
+  b.html(h);
 }
 
 boot();

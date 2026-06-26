@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/natflow/natflow-dataplane/internal/archive"
@@ -48,24 +49,51 @@ type Server struct {
 	secure     bool
 	flowDays   int
 	dummyHash  string // bcrypt hash used to equalize login timing for unknown users
+	startedAt  time.Time
 	log        *slog.Logger
 
-	// retention / archive (optional; set via SetArchive / SetRetentionDays)
+	// retention / archive (optional; set via SetArchive / SetRetentionDays).
+	// Guarded by archMu — written by the applier goroutine, read by handlers.
+	archMu        sync.Mutex
 	arch          *archive.Exporter
 	archBucket    string
 	archFormat    string
 	retentionDays int
+
+	// editable settings (DB-backed source of truth; applied live via applier)
+	settingsMu sync.Mutex
+	settings   Settings
+	applyMu    sync.Mutex     // serializes Apply() so concurrent saves apply in order
+	applier    func(Settings) // set by the host (natlog) to apply changes to the dataplane
+	statsFn    func() DPStats // dataplane stats snapshot (Overview/Dataplanes)
 }
 
 // SetArchive enables the S3 cold-archive feature in the console.
 func (s *Server) SetArchive(exp *archive.Exporter, bucket, format string) {
-	s.arch = exp
-	s.archBucket = bucket
-	s.archFormat = format
+	s.archMu.Lock()
+	defer s.archMu.Unlock()
+	s.arch, s.archBucket, s.archFormat = exp, bucket, format
+}
+
+// archInfo returns the current archive exporter + bucket/format (locked).
+func (s *Server) archInfo() (*archive.Exporter, string, string) {
+	s.archMu.Lock()
+	defer s.archMu.Unlock()
+	return s.arch, s.archBucket, s.archFormat
 }
 
 // SetRetentionDays sets the displayed retention target (days).
-func (s *Server) SetRetentionDays(d int) { s.retentionDays = d }
+func (s *Server) SetRetentionDays(d int) {
+	s.archMu.Lock()
+	s.retentionDays = d
+	s.archMu.Unlock()
+}
+
+func (s *Server) retDays() int {
+	s.archMu.Lock()
+	defer s.archMu.Unlock()
+	return s.retentionDays
+}
 
 // New builds a Server.
 func New(cfg Config, st store.Store, fr *FlowReader, log *slog.Logger) (*Server, error) {
@@ -86,7 +114,7 @@ func New(cfg Config, st store.Store, fr *FlowReader, log *slog.Logger) (*Server,
 	if err != nil {
 		return nil, err
 	}
-	return &Server{store: st, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure, flowDays: days, dummyHash: dummy, log: log}, nil
+	return &Server{store: st, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure, flowDays: days, dummyHash: dummy, startedAt: time.Now(), log: log}, nil
 }
 
 // Handler returns the HTTP handler with all routes.
@@ -115,6 +143,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/v1/retention", s.handleRetention)
 	mux.HandleFunc("POST /api/v1/archive/{date}", s.handleArchive)
+	mux.HandleFunc("PUT /api/v1/devices/{id}", s.apiUpdateDevice)
+	mux.HandleFunc("GET /api/v1/settings", s.handleGetSettings)
+	mux.HandleFunc("PUT /api/v1/settings/{section}", s.handlePutSettings)
+	mux.HandleFunc("GET /api/v1/system", s.handleSystem)
+	mux.HandleFunc("GET /api/v1/overview", s.handleOverview)
+	mux.HandleFunc("GET /api/v1/dataplanes", s.handleDataplanes)
+	mux.HandleFunc("GET /api/v1/policies", s.apiListPolicies)
+	mux.HandleFunc("POST /api/v1/policies", s.apiCreatePolicy)
+	mux.HandleFunc("DELETE /api/v1/policies/{id}", s.apiDeletePolicy)
 
 	// Legacy server-rendered admin pages (session auth).
 	mux.HandleFunc("GET /login", s.handleLoginForm)
@@ -477,7 +514,11 @@ func (s *Server) buildBundle(ctx context.Context) (agentcfg.Bundle, error) {
 			SkipDNS: d.SkipDNS, SkipPrivate: d.SkipPrivate, SkipZero: d.SkipZero,
 		})
 	}
-	b := agentcfg.Bundle{UnknownExporterMode: "reject", Devices: out}
+	mode := s.CurrentSettings().Dataplane.UnknownExporterMode
+	if mode == "" {
+		mode = "reject"
+	}
+	b := agentcfg.Bundle{UnknownExporterMode: mode, Devices: out}
 	raw, _ := json.Marshal(out)
 	sum := sha256.Sum256(raw)
 	b.Version = hex.EncodeToString(sum[:8])

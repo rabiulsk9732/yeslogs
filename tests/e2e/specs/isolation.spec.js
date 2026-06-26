@@ -6,7 +6,7 @@ const { login, ISP_EMAIL, ISP_PW } = require('./helpers');
 test('ISP user does not see the director-only ISPs menu', async ({ page }) => {
   await login(page, ISP_EMAIL, ISP_PW);
   await expect(page.locator('#menu')).toContainText('Devices');
-  await expect(page.locator('#menu')).toContainText('IP Search');
+  await expect(page.locator('#menu')).toContainText('Logs');
   await expect(page.locator('#menu')).not.toContainText('ISPs');
 });
 

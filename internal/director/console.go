@@ -200,31 +200,57 @@ func protoNum(s string) uint8 {
 	return 0
 }
 
-// SearchByPublic is the lawful IPDR lookup: resolve a public (post-NAT) endpoint
-// + time window back to the subscriber/private side. ispID 0 = all (director).
-func (r *FlowReader) SearchByPublic(ctx context.Context, ispID uint32, ip string, port int, proto string, from, to time.Time, limit int) ([]natRecord, error) {
-	where := "nat_public_ip = toIPv4(?)"
-	args := []any{ip}
-	if port > 0 {
-		where += " AND nat_public_port = ?"
-		args = append(args, uint16(port))
+// SearchFilter is a flow-log query. At least one IP or device filter must be set.
+type SearchFilter struct {
+	ISPID                       uint32
+	PublicIP, PrivateIP, DestIP string
+	PublicPort                  int
+	Proto                       string
+	DeviceID                    uint32
+	From, To                    time.Time
+}
+
+// HasSelector reports whether the filter narrows the scan (an IP or device).
+func (f SearchFilter) HasSelector() bool {
+	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0
+}
+
+// Search returns flow-log records matching the filter (tenant-scoped by ISPID).
+func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit int) ([]natRecord, error) {
+	var conds []string
+	var args []any
+	add := func(c string, a any) { conds = append(conds, c); args = append(args, a) }
+	if f.PublicIP != "" {
+		add("nat_public_ip = toIPv4(?)", f.PublicIP)
 	}
-	if pn := protoNum(proto); pn > 0 {
-		where += " AND protocol = ?"
-		args = append(args, pn)
+	if f.PrivateIP != "" {
+		add("src_ip = toIPv4(?)", f.PrivateIP)
 	}
-	if !from.IsZero() {
-		where += " AND flow_start >= ?"
-		args = append(args, from.UTC())
+	if f.DestIP != "" {
+		add("dst_ip = toIPv4(?)", f.DestIP)
 	}
-	if !to.IsZero() {
-		where += " AND flow_start <= ?"
-		args = append(args, to.UTC())
+	if f.PublicPort > 0 {
+		add("nat_public_port = ?", uint16(f.PublicPort))
 	}
-	if ispID != 0 {
-		where += " AND isp_id = ?"
-		args = append(args, ispID)
+	if pn := protoNum(f.Proto); pn > 0 {
+		add("protocol = ?", pn)
 	}
+	if f.DeviceID > 0 {
+		add("device_id = ?", f.DeviceID)
+	}
+	if !f.From.IsZero() {
+		add("flow_start >= ?", f.From.UTC())
+	}
+	if !f.To.IsZero() {
+		add("flow_start <= ?", f.To.UTC())
+	}
+	if f.ISPID != 0 {
+		add("isp_id = ?", f.ISPID)
+	}
+	if len(conds) == 0 {
+		return nil, fmt.Errorf("no filter")
+	}
+	where := strings.Join(conds, " AND ")
 	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, dst_port, protocol, flow_type
 		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
 	rs, err := r.conn.Query(ctx, q, args...)

@@ -13,13 +13,16 @@ type MemStore struct {
 	isps      map[uint32]ISP
 	users     map[string]User // by email
 	devices   map[int64]Device
-	agents    map[string]Agent // by token hash
-	queries   []QueryAudit     // newest first
+	agents    map[string]Agent  // by token hash
+	settings  map[string]string // by section
+	queries   []QueryAudit      // newest first
+	policies  map[int64]CapturePolicy
 	nextISP   uint32
 	nextUser  int64
 	nextDev   int64
 	nextAgt   int64
 	nextQuery int64
+	nextPol   int64
 }
 
 // NewMem returns an empty in-memory Store.
@@ -216,6 +219,66 @@ func (m *MemStore) LogQuery(_ context.Context, q QueryAudit) (int64, error) {
 	q.CreatedAt = time.Now().UTC()
 	m.queries = append([]QueryAudit{q}, m.queries...) // newest first
 	return q.ID, nil
+}
+
+func (m *MemStore) CreatePolicy(_ context.Context, p CapturePolicy) (CapturePolicy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.policies == nil {
+		m.policies = map[int64]CapturePolicy{}
+	}
+	for _, x := range m.policies {
+		if x.ISPID == p.ISPID && x.Name == p.Name {
+			return CapturePolicy{}, ErrDuplicate
+		}
+	}
+	m.nextPol++
+	p.ID = m.nextPol
+	p.CreatedAt = time.Now().UTC()
+	m.policies[p.ID] = p
+	return p, nil
+}
+
+func (m *MemStore) ListPolicies(_ context.Context, ispID uint32) ([]CapturePolicy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]CapturePolicy, 0)
+	for _, p := range m.policies {
+		if ispID == 0 || p.ISPID == 0 || p.ISPID == ispID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func (m *MemStore) DeletePolicy(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.policies[id]; !ok {
+		return ErrNotFound
+	}
+	delete(m.policies, id)
+	return nil
+}
+
+func (m *MemStore) GetSettings(context.Context) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]string{}
+	for k, v := range m.settings {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (m *MemStore) PutSetting(_ context.Context, section, jsonData string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.settings == nil {
+		m.settings = map[string]string{}
+	}
+	m.settings[section] = jsonData
+	return nil
 }
 
 func (m *MemStore) ListQueries(_ context.Context, ispID uint32, limit int) ([]QueryAudit, error) {

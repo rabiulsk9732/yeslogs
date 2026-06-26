@@ -47,6 +47,12 @@ and whether a lookup → report just works.
 7. **Deploy + verify** — systemd restart, public reachability, E2E green, go race green.
 8. **Commit + tag** `v0.6.0-ipdr-console`.
 
+## Delivered after v0.6.0 (settings/system/device-edit)
+- **Settings** (Director, DB-backed + live-applied): Dataplane tuning (batch/flush/workers/queue/backpressure/unknown-mode), global Skip Rules, Retention (days → ClickHouse TTL), S3 Archive (endpoint/bucket/keys, secret-masked). Saved to MySQL `settings` table; applied to the running dataplane immediately via an applier callback (no restart).
+- **Device edit** — full per-device modal (name, exporter IP, device_id, protocol, profile, skip rules, enable) via `PUT /api/v1/devices/{id}` (tenant-scoped).
+- **System** (Director) — host CPU load / memory / disk + natlog process (goroutines, heap, uptime) + ingest (flows today) from `/proc` + runtime.
+- E2E: 14/14 Playwright green.
+
 ## P1 (next)
 Bulk multi-IP search (Excel upload), report history + SFTP delivery, user management UI, scheduled retention/archive jobs, per-ISP retention policy, TLS reverse-proxy guide.
 

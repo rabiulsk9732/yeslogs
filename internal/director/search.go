@@ -35,8 +35,17 @@ func tdisp(t time.Time) string {
 	return t.Format("2006-01-02 15:04")
 }
 
-// handleSearch runs a lawful IPDR lookup (public endpoint + window → subscriber)
-// and records it in the query audit.
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// handleSearch runs a flow-log search (public/private/destination IP + device +
+// time) and records it in the query audit.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
 	if !ok {
@@ -49,19 +58,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "flow store unavailable"})
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	var body struct {
-		IP, Proto, From, To, CaseRef string
-		Port                         int
-		ISPID                        uint32
+		PublicIP, PrivateIP, DestIP string
+		PublicPort                  int
+		Proto, From, To, Reason     string
+		DeviceID                    uint32
+		ISPID                       uint32
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
-		return
-	}
-	ip := strings.TrimSpace(body.IP)
-	if ip == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "public IP is required"})
 		return
 	}
 	scope, err := id.scopeISP(body.ISPID)
@@ -69,27 +75,33 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
-	from, to := parseTime(body.From), parseTime(body.To)
+	f := SearchFilter{
+		ISPID: scope, PublicIP: strings.TrimSpace(body.PublicIP), PrivateIP: strings.TrimSpace(body.PrivateIP),
+		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, Proto: body.Proto,
+		DeviceID: body.DeviceID, From: parseTime(body.From), To: parseTime(body.To),
+	}
+	if !f.HasSelector() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specify at least a Public IP, Private IP, Destination IP, or Device"})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	rows, err := s.flows.SearchByPublic(ctx, scope, ip, body.Port, body.Proto, from, to, searchLimit)
+	rows, err := s.flows.Search(ctx, f, searchLimit)
 	if err != nil {
-		s.log.Error("ipdr search", "error", err)
+		s.log.Error("flow search", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"})
 		return
 	}
-	// Lawful-intercept audit: record every lookup.
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
-		UserEmail: id.Email, ISPID: scope, QueryIP: ip, QueryPort: body.Port,
-		QueryProto: body.Proto, FromTS: from, ToTS: to, ResultCount: len(rows), CaseRef: strings.TrimSpace(body.CaseRef),
+		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
+		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
+		ResultCount: len(rows), CaseRef: strings.TrimSpace(body.Reason),
 	})
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"records": rows, "count": len(rows), "truncated": len(rows) == searchLimit,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"records": rows, "count": len(rows), "truncated": len(rows) == searchLimit})
 }
 
-// handleReport re-runs the lookup and streams it as CSV/PDF/XLSX (read-only GET).
+// handleReport re-runs a search and streams it as CSV/PDF/XLSX (read-only GET),
+// recording the export in the audit.
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.currentIdentity(r)
 	if !ok {
@@ -101,45 +113,44 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	ip := strings.TrimSpace(q.Get("ip"))
-	if ip == "" {
-		http.Error(w, "public IP required", http.StatusBadRequest)
-		return
-	}
 	scope, err := id.scopeISP(parseUint32(q.Get("isp")))
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	port := int(parseUint32(q.Get("port")))
-	proto := q.Get("proto")
-	from, to := parseTime(q.Get("from")), parseTime(q.Get("to"))
+	f := SearchFilter{
+		ISPID: scope, PublicIP: strings.TrimSpace(q.Get("ip")), PrivateIP: strings.TrimSpace(q.Get("priv")),
+		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), Proto: q.Get("proto"),
+		DeviceID: parseUint32(q.Get("device")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
+	}
+	if !f.HasSelector() {
+		http.Error(w, "specify at least one IP or device filter", http.StatusBadRequest)
+		return
+	}
 	format := strings.ToLower(q.Get("format"))
-
+	if format != "pdf" && format != "xlsx" {
+		format = "csv"
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	rows, err := s.flows.SearchByPublic(ctx, scope, ip, port, proto, from, to, searchLimit)
+	rows, err := s.flows.Search(ctx, f, searchLimit)
 	if err != nil {
 		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
-	if format != "pdf" && format != "xlsx" {
-		format = "csv"
-	}
-	// Lawful audit: an export is itself an auditable data extraction.
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
-		UserEmail: id.Email, ISPID: scope, QueryIP: ip, QueryPort: port, QueryProto: proto,
-		FromTS: from, ToTS: to, ResultCount: len(rows),
-		CaseRef: strings.TrimSpace(q.Get("case")) + " [export:" + format + "]",
+		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
+		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
+		ResultCount: len(rows), CaseRef: strings.TrimSpace(q.Get("reason")) + " [export:" + format + "]",
 	})
 	meta := reportMeta{
-		CaseRef: q.Get("case"), GeneratedBy: id.Email,
+		CaseRef: q.Get("reason"), GeneratedBy: id.Email,
 		GeneratedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
-		QueryIP:     ip, QueryPort: port, QueryProto: proto,
-		From: tdisp(from), To: tdisp(to), Count: len(rows), Truncated: len(rows) == searchLimit,
+		QueryIP:     firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP), QueryPort: f.PublicPort, QueryProto: f.Proto,
+		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: len(rows) == searchLimit,
 	}
 	stamp := time.Now().UTC().Format("20060102-150405")
-	base := fmt.Sprintf("ipdr-%s-%s", strings.ReplaceAll(ip, ".", "_"), stamp)
+	base := fmt.Sprintf("flowlog-%s-%s", strings.ReplaceAll(firstNonEmpty(meta.QueryIP, "report"), ".", "_"), stamp)
 
 	var werr error
 	switch format {
@@ -151,7 +162,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+base+`.xlsx"`)
 		werr = writeXLSX(w, meta, rows)
-	default: // csv
+	default:
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+base+`.csv"`)
 		werr = writeCSV(w, meta, rows)
@@ -161,7 +172,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleAudit returns recent lawful-query audit records (tenant-scoped).
+// handleAudit returns recent query/export audit records (tenant-scoped).
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
 	if !ok {

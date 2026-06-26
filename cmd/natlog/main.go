@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/natflow/natflow-dataplane/internal/archive"
 	"github.com/natflow/natflow-dataplane/internal/archive/s3"
 	"github.com/natflow/natflow-dataplane/internal/config"
@@ -39,6 +41,7 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
 	"github.com/natflow/natflow-dataplane/internal/receiver"
+	"github.com/natflow/natflow-dataplane/internal/rules"
 	chwriter "github.com/natflow/natflow-dataplane/internal/writer/clickhouse"
 )
 
@@ -150,22 +153,96 @@ func run() (err error) {
 	if retDays <= 0 {
 		retDays = 180
 	}
-	dirSrv.SetRetentionDays(retDays)
+	csvOr := func(s string) string {
+		if s == "" {
+			return "csvgz"
+		}
+		return s
+	}
 
-	// Optional S3 cold-archive: surfaced in the console's Retention page.
-	if cfg.S3.Bucket != "" {
-		if s3c, e := s3.New(s3.Config{
-			Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket,
-			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, PathPrefix: cfg.S3.PathPrefix,
-		}); e != nil {
-			log.Warn("S3 archive disabled: client init failed", "error", e)
-		} else if aconn, e := chwriter.Connect(cfg.ClickHouse); e != nil {
-			log.Warn("S3 archive disabled: clickhouse connect failed", "error", e)
-		} else {
-			dirSrv.SetArchive(archive.New(aconn, s3c, cfg.ClickHouse.Database, "flow_logs", m, log), cfg.S3.Bucket, cfg.S3.ExportFormat)
-			log.Info("S3 cold-archive enabled", "bucket", cfg.S3.Bucket)
+	// Settings: DB-backed + UI-editable, seeded from YAML, applied live.
+	defaults := director.Settings{
+		Dataplane: director.DataplaneSettings{
+			BatchSize: cfg.ClickHouse.BatchSize, FlushIntervalMs: cfg.ClickHouse.FlushIntervalMS,
+			WriterWorkers: cfg.ClickHouse.WriterWorkers, MaxQueueRows: cfg.ClickHouse.MaxQueueRows,
+			BackpressureMode: cfg.Pipeline.BackpressureMode, UnknownExporterMode: cfg.Security.UnknownExporterMode,
+		},
+		SkipRules: director.SkipRuleSettings{SkipDNS: cfg.Rules.SkipDNS, SkipPrivate: cfg.Rules.SkipPrivateToPrivate, SkipZero: cfg.Rules.SkipZeroBytes},
+		Retention: director.RetentionSettings{Days: retDays},
+		S3: director.S3Settings{
+			Enabled: cfg.S3.Bucket != "", Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket,
+			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, PathPrefix: cfg.S3.PathPrefix, ExportFormat: csvOr(cfg.S3.ExportFormat),
+		},
+	}
+	dirSrv.InitSettings(ctxBg, defaults)
+
+	var lastS3 director.S3Settings
+	lastRet := -1
+	var lastArchConn interface{ Close() error }
+	apply := func(set director.Settings) {
+		lv := cfg.Live()
+		lv.BatchSize = set.Dataplane.BatchSize
+		lv.FlushInterval = time.Duration(set.Dataplane.FlushIntervalMs) * time.Millisecond
+		if bp, e := config.ParseBackpressure(set.Dataplane.BackpressureMode); e == nil {
+			lv.Backpressure = bp
+		}
+		if um, e := devreg.ParseUnknownMode(set.Dataplane.UnknownExporterMode); e == nil {
+			lv.UnknownMode = um
+		}
+		lv.Rules = rules.RuleSet{SkipDNS: set.SkipRules.SkipDNS, SkipPrivateToPrivate: set.SkipRules.SkipPrivate, SkipZeroBytes: set.SkipRules.SkipZero}
+		live.Store(lv)
+		manager.Reload(set.Dataplane.WriterWorkers, set.Dataplane.MaxQueueRows)
+		dirSrv.SetRetentionDays(set.Retention.Days)
+		if fr != nil && set.Retention.Days != lastRet { // ALTER TTL only when it changes
+			lastRet = set.Retention.Days
+			tctx, tc := context.WithTimeout(context.Background(), 30*time.Second)
+			if e := fr.SetTTLDays(tctx, set.Retention.Days); e != nil {
+				log.Warn("apply retention TTL failed", "error", e)
+			}
+			tc()
+		}
+		if set.S3 != lastS3 { // rebuild the archive client only when S3 settings change
+			lastS3 = set.S3
+			if lastArchConn != nil { // close the previous archive ClickHouse pool (no leak)
+				_ = lastArchConn.Close()
+				lastArchConn = nil
+			}
+			if set.S3.Enabled && set.S3.Bucket != "" {
+				if s3c, e := s3.New(s3.Config{Endpoint: set.S3.Endpoint, Region: set.S3.Region, Bucket: set.S3.Bucket, AccessKey: set.S3.AccessKey, SecretKey: set.S3.SecretKey, PathPrefix: set.S3.PathPrefix}); e != nil {
+					log.Warn("S3 archive disabled: client init failed", "error", e)
+					dirSrv.SetArchive(nil, "", "")
+				} else if aconn, e := chwriter.Connect(cfg.ClickHouse); e != nil {
+					log.Warn("S3 archive disabled: clickhouse connect failed", "error", e)
+					dirSrv.SetArchive(nil, "", "")
+				} else {
+					lastArchConn = aconn
+					dirSrv.SetArchive(archive.New(aconn, s3c, cfg.ClickHouse.Database, "flow_logs", m, log), set.S3.Bucket, csvOr(set.S3.ExportFormat))
+					log.Info("S3 cold-archive enabled", "bucket", set.S3.Bucket)
+				}
+			} else {
+				dirSrv.SetArchive(nil, "", "")
+			}
 		}
 	}
+	dirSrv.SetApplier(apply)
+	apply(dirSrv.CurrentSettings()) // push seeded/persisted settings to the dataplane now
+
+	// Dataplane stats snapshot for the Overview / Dataplanes pages.
+	dirSrv.SetStats(func() director.DPStats {
+		dp := dirSrv.CurrentSettings().Dataplane
+		// QueueSize is the AGGREGATE depth across all writer shards, so the
+		// capacity must also be aggregate (per-worker × workers).
+		return director.DPStats{
+			Ingested:     uint64(testutil.ToFloat64(m.FlowsDecoded)),
+			Skipped:      uint64(testutil.ToFloat64(m.FlowsSkipped)),
+			Inserted:     uint64(testutil.ToFloat64(m.FlowsInserted)),
+			ArchiveBytes: uint64(testutil.ToFloat64(m.ArchiveBytes)),
+			QueueSize:    int(testutil.ToFloat64(m.QueueSize)),
+			QueueMax:     dp.MaxQueueRows * dp.WriterWorkers,
+			Collectors:   1,
+			Name:         cfg.Server.Name,
+		}
+	})
 
 	// In-process registry: the collector pulls its device registry directly from
 	// the Director store (no HTTP/token), applying via the managed hot-reload.
@@ -243,6 +320,9 @@ func run() (err error) {
 	_ = metricsSrv.Shutdown(shutCtx)
 	if fr != nil {
 		_ = fr.Close()
+	}
+	if lastArchConn != nil {
+		_ = lastArchConn.Close()
 	}
 	log.Info("shutdown complete")
 	return nil

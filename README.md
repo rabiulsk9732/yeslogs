@@ -11,29 +11,34 @@ Docker, no Kafka, no PostgreSQL — a single static Go binary under systemd.
                          └────────────── Prometheus metrics ───────────────┘
 ```
 
-## NATLog — unified IPDR product
+## YesLogs Director — unified platform
 
 On top of the dataplane, **`cmd/natlog`** is a single-binary, multi-tenant
-**IPDR / CGNAT lawful-logging platform** for ISPs (DoT/CERT-In style: 180-day
-retention, in-country, on-demand to law enforcement). One process runs both the
-**dataplane** (UDP collector → ClickHouse) and the **control plane** (web console
-+ API); the device registry is shared in-process, so a device added in the UI
-applies to ingestion within seconds — no restart, no token.
+**ISP NAT / NetFlow / IPFIX log ingestion & reporting platform**. The
+**Director** (software owner) onboards **ISP tenants**; each ISP's exporter
+devices ship flow logs to a **dataplane** (collector); logs land in **hot
+storage** (ClickHouse) and optionally **S3 archive**. One process runs both the
+dataplane (UDP collector → ClickHouse) and the control plane (web console + API);
+the device registry + capture policies are shared in-process, so changes in the
+UI apply to ingestion within seconds — no restart, no token.
 
 The console (`http://host:8080`) is a self-contained SPA (vendored jQuery +
-Font Awesome, **no CDN**) with:
+Font Awesome, **no CDN**). Director navigation:
 
-- **IP Search** ⭐ — lawful reverse-NAT lookup: `public IP + port + time →
-  subscriber/private IP`, every query **audited**.
-- **Reports** — one-click **CSV / Excel (.xlsx) / PDF** export with a case header.
-- **Audit** — immutable trail of who looked up what, when.
-- **Devices** — per-ISP exporter registry (drives the dataplane in-process).
-- **ISPs** (Director only) — tenant onboarding + ISP-admin logins.
-- **Retention** — 180-day window, storage usage, per-day breakdown, S3 cold archive.
+- **Overview** — flows ingested/stored/skipped today, active dataplanes/exporters, hot storage, archive, queue pressure.
+- **ISPs** — tenant onboarding + ISP-admin logins.
+- **Dataplanes** — collector status + host resources (a single in-process dataplane today; multi-collector ready).
+- **Devices** — exporter devices (exporter IP → isp/device_id/protocol/vendor profile/capture policy).
+- **Capture Policies** — reusable skip-rule presets assigned to devices.
+- **Logs** — flow-log search across NAT mappings (ISP / dataplane / device / public IP / port / private IP / destination / protocol / time), audited.
+- **Reports** — **CSV / Excel (.xlsx) / PDF** exports.
+- **Retention** — hot-storage window, usage, per-day breakdown, S3 cold archive.
+- **Audit** — every search & export recorded.
+- **Settings** — dataplane tuning, skip rules, retention, S3 (DB-backed, applied live).
 
-Roles: **Director** (software owner, sees all) and **ISP** (tenant, scoped;
-cross-tenant access → 403). Auth is bcrypt + signed sessions + CSRF.
-Storage: **MariaDB** (tenants/users/devices/audit) + **ClickHouse** (flow/IPDR).
+Roles: **Director** (sees all) and **ISP** (tenant-scoped; cross-tenant → 403).
+Auth is bcrypt + signed sessions + CSRF. Storage: **MariaDB** (tenants / users /
+devices / capture policies / settings / audit) + **ClickHouse** (flow logs).
 
 ```bash
 sudo CLICKHOUSE_BIN=/path/to/clickhouse ./scripts/install.sh   # systemd: natlog + clickhouse-server + mariadb

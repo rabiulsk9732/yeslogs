@@ -66,6 +66,14 @@ func (r *FlowReader) perDay(ctx context.Context, ispID uint32, days int) []dayCo
 	return out
 }
 
+// SetTTLDays applies the retention window to the ClickHouse table TTL.
+func (r *FlowReader) SetTTLDays(ctx context.Context, days int) error {
+	if days < 1 {
+		days = 1
+	}
+	return r.conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s.flow_logs MODIFY TTL event_date + INTERVAL %d DAY`, r.db, days))
+}
+
 // ---- handlers ----
 
 func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
@@ -81,17 +89,18 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	rows, bytes := s.flows.storageStats(ctx, id.ISPID)
 	mn, mx := s.flows.window(ctx, id.ISPID)
-	retDays := s.retentionDays
+	retDays := s.retDays()
 	if retDays == 0 {
 		retDays = 180
 	}
+	arch, bucket, format := s.archInfo()
 	resp := map[string]any{
 		"available":     true,
 		"retentionDays": retDays,
 		"storage":       map[string]any{"rows": rows, "bytes": bytes, "human": humanBytes(bytes)},
 		"window":        map[string]string{"from": mn, "to": mx},
 		"perDay":        s.flows.perDay(ctx, id.ISPID, 30),
-		"archive":       map[string]any{"enabled": s.arch != nil, "bucket": s.archBucket, "format": s.archFormat, "canRun": s.arch != nil && id.isDirector()},
+		"archive":       map[string]any{"enabled": arch != nil, "bucket": bucket, "format": format, "canRun": arch != nil && id.isDirector()},
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -110,7 +119,8 @@ func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
 	if !s.csrfOK(w, r, id) {
 		return
 	}
-	if s.arch == nil {
+	arch, bucket, format := s.archInfo()
+	if arch == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "S3 archive not configured"})
 		return
 	}
@@ -131,7 +141,7 @@ func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
 	var failed int
 	var firstErr string
 	for _, isp := range isps {
-		res, err := s.arch.ExportDay(ctx, isp.ID, day, s.archFormat)
+		res, err := arch.ExportDay(ctx, isp.ID, day, format)
 		if err != nil {
 			failed++
 			if firstErr == "" {
@@ -146,7 +156,7 @@ func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
 			keys = append(keys, res.Key)
 		}
 	}
-	resp := map[string]any{"rows": totalRows, "bytes": totalBytes, "objects": keys, "bucket": s.archBucket, "isps": len(isps), "failed": failed}
+	resp := map[string]any{"rows": totalRows, "bytes": totalBytes, "objects": keys, "bucket": bucket, "isps": len(isps), "failed": failed}
 	status := http.StatusOK
 	if failed > 0 {
 		resp["error"] = firstErr

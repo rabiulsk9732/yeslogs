@@ -166,7 +166,8 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 		ISPID                          uint32
 		Name, ExporterIP               string
 		DeviceID                       uint32
-		Protocol, Profile              string
+		Protocol, Profile, Dataplane   string
+		CapturePolicy                  string
 		SkipDNS, SkipPrivate, SkipZero bool
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -185,7 +186,12 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 	d := store.Device{
 		ISPID: scope, Name: strings.TrimSpace(body.Name), ExporterIP: strings.TrimSpace(body.ExporterIP),
 		DeviceID: body.DeviceID, Protocol: valOr(body.Protocol, "auto"), Profile: valOr(body.Profile, "generic"),
-		Enabled: true, SkipDNS: body.SkipDNS, SkipPrivate: body.SkipPrivate, SkipZero: body.SkipZero,
+		CapturePolicy: strings.TrimSpace(body.CapturePolicy),
+		Enabled:       true, SkipDNS: body.SkipDNS, SkipPrivate: body.SkipPrivate, SkipZero: body.SkipZero,
+	}
+	// A named capture policy supplies the device's skip rules.
+	if sd, sp, sz, found := s.resolvePolicy(r.Context(), scope, d.CapturePolicy); found {
+		d.SkipDNS, d.SkipPrivate, d.SkipZero = sd, sp, sz
 	}
 	if err := device.Validate([]device.Spec{{
 		Name: d.Name, ExporterIP: d.ExporterIP, ISPID: d.ISPID, DeviceID: d.DeviceID, Protocol: d.Protocol, Profile: d.Profile,
@@ -199,6 +205,56 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, created)
+}
+
+func (s *Server) apiUpdateDevice(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.authJSON(w, r)
+	if !ok {
+		return
+	}
+	if !s.csrfOK(w, r, id) {
+		return
+	}
+	d, err := s.ownedDevice(r, id)
+	if err != nil {
+		jsonErr(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	var body struct {
+		Name, ExporterIP               string
+		DeviceID                       uint32
+		Protocol, Profile              string
+		CapturePolicy                  string
+		SkipDNS, SkipPrivate, SkipZero bool
+		Enabled                        bool
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, errors.New("bad request"))
+		return
+	}
+	d.Name = strings.TrimSpace(body.Name)
+	d.ExporterIP = strings.TrimSpace(body.ExporterIP)
+	d.DeviceID = body.DeviceID
+	d.Protocol = valOr(body.Protocol, "auto")
+	d.Profile = valOr(body.Profile, "generic")
+	d.CapturePolicy = strings.TrimSpace(body.CapturePolicy)
+	d.SkipDNS, d.SkipPrivate, d.SkipZero = body.SkipDNS, body.SkipPrivate, body.SkipZero
+	d.Enabled = body.Enabled
+	if sd, sp, sz, found := s.resolvePolicy(r.Context(), d.ISPID, d.CapturePolicy); found {
+		d.SkipDNS, d.SkipPrivate, d.SkipZero = sd, sp, sz
+	}
+	if err := device.Validate([]device.Spec{{
+		Name: d.Name, ExporterIP: d.ExporterIP, ISPID: d.ISPID, DeviceID: d.DeviceID, Protocol: d.Protocol, Profile: d.Profile,
+	}}); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid device: " + err.Error()})
+		return
+	}
+	if err := s.store.UpdateDevice(r.Context(), d); err != nil {
+		jsonErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 func (s *Server) apiToggleDevice(w http.ResponseWriter, r *http.Request) {

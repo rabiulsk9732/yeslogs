@@ -45,18 +45,30 @@ type User struct {
 // Device is an exporter belonging to an ISP. It maps to one device-registry entry
 // pushed down to the dataplane.
 type Device struct {
+	ID            int64
+	ISPID         uint32
+	Name          string
+	ExporterIP    string
+	DeviceID      uint32
+	Protocol      string // netflow5|netflow9|ipfix|auto
+	Profile       string // mikrotik|cisco|juniper|huawei|generic
+	CapturePolicy string // optional named capture policy this device uses
+	Enabled       bool
+	SkipDNS       bool
+	SkipPrivate   bool
+	SkipZero      bool
+	UpdatedAt     time.Time
+}
+
+// CapturePolicy is a reusable named skip-rule preset for exporter devices.
+type CapturePolicy struct {
 	ID          int64
-	ISPID       uint32
+	ISPID       uint32 // 0 = global (director)
 	Name        string
-	ExporterIP  string
-	DeviceID    uint32
-	Protocol    string // netflow5|netflow9|ipfix|auto
-	Profile     string // mikrotik|cisco|juniper|huawei|generic
-	Enabled     bool
 	SkipDNS     bool
 	SkipPrivate bool
 	SkipZero    bool
-	UpdatedAt   time.Time
+	CreatedAt   time.Time
 }
 
 // Agent is a dataplane collector that pulls its config from the Director.
@@ -112,6 +124,16 @@ type Store interface {
 	// (ispID 0 = all, director only).
 	LogQuery(ctx context.Context, q QueryAudit) (int64, error)
 	ListQueries(ctx context.Context, ispID uint32, limit int) ([]QueryAudit, error)
+
+	// Settings are JSON blobs keyed by section (dataplane, skiprules, retention,
+	// s3) — the editable, DB-backed source of truth (YAML is only bootstrap).
+	GetSettings(ctx context.Context) (map[string]string, error)
+	PutSetting(ctx context.Context, section, jsonData string) error
+
+	// Capture policies (reusable skip-rule presets; ispID 0 = global/all).
+	CreatePolicy(ctx context.Context, p CapturePolicy) (CapturePolicy, error)
+	ListPolicies(ctx context.Context, ispID uint32) ([]CapturePolicy, error)
+	DeletePolicy(ctx context.Context, id int64) error
 
 	Close() error
 }
