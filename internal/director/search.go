@@ -92,6 +92,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"})
 		return
 	}
+	s.nameDevices(ctx, scope, rows)
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
 		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
 		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
@@ -138,6 +139,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
+	s.nameDevices(ctx, scope, rows)
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
 		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
 		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,

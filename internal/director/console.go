@@ -46,6 +46,7 @@ type natRecord struct {
 	Clock    string `json:"clock"`
 	Time     string `json:"time"`
 	Sub      string `json:"sub"`
+	DevID    uint32 `json:"devId"`
 	PrivIP   string `json:"privIp"`
 	PrivPort int    `json:"privPort"`
 	PubIP    string `json:"pubIp"`
@@ -180,7 +181,7 @@ func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int)
 		}
 		out = append(out, natRecord{
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
-			Sub: fmt.Sprintf("DEV-%d", dev), PrivIP: sip.String(), PrivPort: int(sp),
+			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(proto), Dest: dip.String(),
 			Action: strings.ToUpper(ft),
 		})
@@ -271,7 +272,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit int) ([]n
 		}
 		out = append(out, natRecord{
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
-			Sub: fmt.Sprintf("DEV-%d", dev), PrivIP: sip.String(), PrivPort: int(sp),
+			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(pr),
 			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
 		})
@@ -496,7 +497,33 @@ func (s *Server) handleConsoleData(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	writeJSON(w, http.StatusOK, s.flows.ConsoleData(ctx, id.ISPID, s.flowDays))
+	data := s.flows.ConsoleData(ctx, id.ISPID, s.flowDays)
+	s.nameDevices(ctx, id.ISPID, data.Records)
+	writeJSON(w, http.StatusOK, data)
+}
+
+// nameDevices resolves each row's numeric device_id to its friendly device name
+// (so flow tables show "wadhai-edge-01" instead of "DEV-1"). Falls back to the
+// DEV-<id> label when a device is not found.
+func (s *Server) nameDevices(ctx context.Context, ispID uint32, rows []natRecord) {
+	if len(rows) == 0 {
+		return
+	}
+	devs, err := s.store.ListDevices(ctx, ispID)
+	if err != nil {
+		return
+	}
+	m := make(map[uint32]string, len(devs))
+	for _, d := range devs {
+		if d.Name != "" {
+			m[d.DeviceID] = d.Name
+		}
+	}
+	for i := range rows {
+		if n, ok := m[rows[i].DevID]; ok {
+			rows[i].Sub = n
+		}
+	}
 }
 
 // serveConsole serves the embedded single-page console.

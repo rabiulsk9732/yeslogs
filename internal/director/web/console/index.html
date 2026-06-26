@@ -10,7 +10,7 @@
 :root{
   --pri:#1366d6;--pri-d:#0f52ab;--pri6:#2a7ae4;--dark:#0c3b73;--cyan:#0891b2;
   --ok:#16a34a;--ok-bg:#e7f6ec;--warn:#d97706;--warn-bg:#fdf3e3;--bad:#dc2626;--bad-bg:#fdecec;--info:#1366d6;--info-bg:#e9f2fd;
-  --ink:#1b2733;--ink2:#415061;--slate:#64748b;--mut:#94a3b8;--bd:#e3e9f0;--bd2:#eef2f6;--bg:#eef2f7;--card:#fff;
+  --ink:#1b2733;--ink2:#3c4a5a;--slate:#5b6675;--mut:#6b7280;--bd:#e3e9f0;--bd2:#eef2f6;--bg:#eef2f7;--card:#fff;
   --sh-sm:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.07);
   --sh:0 4px 14px rgba(16,24,40,.07),0 2px 5px rgba(16,24,40,.04);
   --sh-lg:0 16px 40px rgba(16,24,40,.16);
@@ -42,7 +42,7 @@ a{text-decoration:none;color:inherit}
 .inp{width:100%;height:40px;border:1px solid var(--bd);border-radius:var(--r-sm);padding:0 12px;font-size:14px;color:var(--ink);outline:none;font-family:inherit;background:#fff;transition:.15s}
 .inp:hover{border-color:#c8d2de}
 .inp:focus{border-color:var(--pri);box-shadow:0 0 0 3.5px rgba(19,102,214,.13)}
-.inp::placeholder{color:#b3bfcd}
+.inp::placeholder{color:#9aa5b4}
 select.inp{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
 .lbl{display:block;font-size:12.5px;font-weight:600;color:var(--ink2);margin-bottom:6px}
 .hint{font-size:12px;color:var(--mut);margin-top:5px;line-height:1.5}
@@ -60,6 +60,8 @@ tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:la
 .pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.warn{background:var(--warn-bg);color:var(--warn)}.pill.bad{background:var(--bad-bg);color:var(--bad)}.pill.info{background:var(--info-bg);color:var(--info)}.pill.mut{background:#eef2f6;color:var(--slate)}
 .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:50;animation:fadeUp .15s}
 .modal{background:#fff;border-radius:14px;box-shadow:var(--sh-lg);width:560px;max-width:94vw;max-height:90vh;overflow:auto;animation:slideIn .2s}
+.modal-x{position:absolute;top:11px;right:13px;width:30px;height:30px;border:none;background:transparent;color:var(--mut);font-size:23px;line-height:1;cursor:pointer;border-radius:7px;z-index:2}
+.modal-x:hover{background:#f1f5f9;color:var(--ink)}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:18px;flex-wrap:wrap}
 .tab{padding:10px 17px;font-size:13.5px;font-weight:600;color:var(--slate);cursor:pointer;border-bottom:2.5px solid transparent;transition:.15s}
 .tab:hover{color:var(--pri)}.tab.on{color:var(--pri);border-bottom-color:var(--pri)}
@@ -84,7 +86,8 @@ tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:la
 .note.amber{background:var(--warn-bg);border-color:#f5e3c4}.note.amber i{color:var(--warn)}
 .chk{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;color:var(--ink2);user-select:none}
 .chk input{width:16px;height:16px;accent-color:var(--pri);cursor:pointer}
-.sect{display:flex;align-items:center;gap:9px;margin:2px 0 13px;font-size:13px;font-weight:700;color:var(--slate);text-transform:uppercase;letter-spacing:.04em}
+.sect{display:flex;align-items:center;gap:10px;margin:2px 0 14px;font-size:14.5px;font-weight:700;color:var(--ink);letter-spacing:-.01em}
+.sect i{color:var(--pri);font-size:15px}
 </style>
 </head>
 <body>
@@ -97,38 +100,38 @@ tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:la
       <div style="position:absolute;right:80px;bottom:-120px;width:300px;height:300px;border:48px solid rgba(255,255,255,.04);border-radius:50%"></div>
       <div style="display:flex;align-items:center;gap:13px;position:relative">
         <i class="fas fa-network-wired" style="font-size:30px"></i>
-        <div style="font-size:26px;font-weight:700">Yes<span style="color:#7CFFB2">Logs</span> <span style="opacity:.55;font-weight:600">Director</span></div>
+        <div style="font-size:26px;font-weight:700">Yes<span style="color:#7CFFB2">Logs</span> <span style="opacity:.82;font-weight:600">Director</span></div>
       </div>
       <div style="position:relative">
         <div style="font-size:34px;font-weight:700;line-height:1.2;max-width:460px">Multi-ISP NAT &amp; NetFlow log ingestion and reporting</div>
         <div style="font-size:16px;color:#bfe0f2;margin-top:16px;max-width:430px;line-height:1.6">Collect flow logs from every ISP's exporters, store them hot, archive to S3, and search &amp; report across tenants.</div>
-        <div style="display:flex;gap:30px;margin-top:34px">
-          <div><div style="font-size:26px;font-weight:700" id="brand-records">—</div><div style="font-size:13px;color:#bfe0f2">flows ingested</div></div>
-          <div><div style="font-size:26px;font-weight:700">Hot+S3</div><div style="font-size:13px;color:#bfe0f2">storage tiers</div></div>
-          <div><div style="font-size:26px;font-weight:700">Multi</div><div style="font-size:13px;color:#bfe0f2">tenant</div></div>
+        <div style="display:flex;gap:34px;margin-top:34px">
+          <div><div style="font-size:24px;font-weight:700">NetFlow · IPFIX</div><div style="font-size:13px;color:#bfe0f2">v5 · v9 · IPFIX ingest</div></div>
+          <div><div style="font-size:24px;font-weight:700">Hot + S3</div><div style="font-size:13px;color:#bfe0f2">tiered storage</div></div>
+          <div><div style="font-size:24px;font-weight:700">Multi-tenant</div><div style="font-size:13px;color:#bfe0f2">per-ISP isolation</div></div>
         </div>
       </div>
-      <div style="font-size:13px;color:#9ec9e3;position:relative">YesLogs Director · ISP infrastructure operations</div>
+      <div style="font-size:13px;color:rgba(255,255,255,.62);position:relative">YesLogs Director · ISP infrastructure operations</div>
     </div>
     <div style="flex:1;background:#f4f6f9;display:flex;align-items:center;justify-content:center;padding:24px">
       <div style="width:380px;background:#fff;border-radius:5px;box-shadow:0 8px 28px rgba(0,0,0,.12);overflow:hidden">
         <div style="height:5px;background:var(--pri)"></div>
         <div style="padding:34px 34px 30px">
-          <h1 style="margin:0 0 5px;font-size:23px;font-weight:700;color:#2c3a47">Sign in</h1>
-          <div style="font-size:14px;color:#7b8794;margin-bottom:24px">Authenticate to access the logging console</div>
-          <div id="login-err" style="display:none;background:#fdecec;color:#c0392b;border-radius:5px;padding:9px 12px;font-size:13px;margin-bottom:16px"></div>
-          <label class="lbl">Analyst ID (email)</label>
+          <h1 style="margin:0 0 5px;font-size:23px;font-weight:700;color:var(--ink)">Sign in</h1>
+          <div style="font-size:14px;color:var(--slate);margin-bottom:24px">Authenticate to access the logging console</div>
+          <div id="login-err" style="display:none;background:#fdecec;color:var(--bad);border-radius:5px;padding:9px 12px;font-size:13px;margin-bottom:16px"></div>
+          <label class="lbl">Email</label>
           <div style="display:flex;align-items:center;border:1px solid #ced4da;border-radius:5px;height:42px;padding:0 12px;margin-bottom:16px;gap:10px">
-            <i class="fas fa-user" style="color:#9aa5b1;font-size:14px"></i>
-            <input id="li-email" placeholder="admin@sayra.io" style="border:none;outline:none;font-size:14px;font-family:inherit;color:#2c3a47;width:100%;background:transparent">
+            <i class="fas fa-user" style="color:var(--mut);font-size:14px"></i>
+            <input id="li-email" placeholder="admin@sayra.io" style="border:none;outline:none;font-size:14px;font-family:inherit;color:var(--ink);width:100%;background:transparent">
           </div>
           <label class="lbl">Password</label>
           <div style="display:flex;align-items:center;border:1px solid #ced4da;border-radius:5px;height:42px;padding:0 12px;margin-bottom:22px;gap:10px">
-            <i class="fas fa-lock" style="color:#9aa5b1;font-size:14px"></i>
-            <input id="li-pass" type="password" placeholder="••••••••" style="border:none;outline:none;font-size:14px;font-family:inherit;color:#2c3a47;width:100%;background:transparent">
+            <i class="fas fa-lock" style="color:var(--mut);font-size:14px"></i>
+            <input id="li-pass" type="password" placeholder="••••••••" style="border:none;outline:none;font-size:14px;font-family:inherit;color:var(--ink);width:100%;background:transparent">
           </div>
           <button id="li-btn" class="btn" style="width:100%;height:44px;justify-content:center;font-size:15px;font-weight:700"><i class="fas fa-right-to-bracket"></i> Sign in to Console</button>
-          <div style="margin-top:18px;font-size:12px;color:#9aa5b1;display:flex;align-items:center;gap:7px;justify-content:center">
+          <div style="margin-top:18px;font-size:12px;color:var(--mut);display:flex;align-items:center;gap:7px;justify-content:center">
             <i class="fas fa-shield-halved" style="color:var(--ok)"></i> Director console · all access is audited
           </div>
         </div>
@@ -142,21 +145,21 @@ tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:la
   <header style="flex:0 0 auto;height:56px;background:var(--pri);display:flex;align-items:center;padding-right:10px;box-shadow:0 2px 4px rgba(0,0,0,.12);position:relative;z-index:20">
     <div style="width:248px;height:56px;display:flex;align-items:center;gap:11px;padding:0 18px;background:var(--dark);color:#fff">
       <i class="fas fa-network-wired" style="font-size:21px"></i>
-      <div style="font-size:19px;font-weight:700">Yes<span style="color:#7CFFB2">Logs</span> <span style="opacity:.55;font-weight:600">Director</span></div>
+      <div style="font-size:19px;font-weight:700">Yes<span style="color:#7CFFB2">Logs</span> <span style="opacity:.82;font-weight:600">Director</span></div>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;background:var(--pri6);border-radius:5px;height:36px;padding:0 13px;min-width:300px;margin-left:18px">
-      <i class="fas fa-magnifying-glass" style="color:#bfe0f2;font-size:13px"></i>
-      <input id="globalSearch" placeholder="Filter records: IP, port, subscriber…" style="border:none;background:transparent;outline:none;color:#fff;font-size:14px;font-family:inherit;width:100%">
+    <div id="globalSearchWrap" style="display:none;align-items:center;gap:9px;background:#fff;border-radius:8px;height:36px;padding:0 13px;min-width:300px;margin-left:18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.5),0 1px 2px rgba(0,0,0,.15)">
+      <i class="fas fa-magnifying-glass" style="color:#6b7280;font-size:13px"></i>
+      <input id="globalSearch" placeholder="Filter recent flows…" style="border:none;background:transparent;outline:none;color:#111827;font-size:14px;font-family:inherit;width:100%">
     </div>
     <div style="flex:1"></div>
-    <div style="display:flex;align-items:center;gap:7px;color:#dff0fa;font-size:12px;font-weight:600;background:rgba(255,255,255,.12);border-radius:5px;padding:6px 11px;margin-right:10px">
-      <span style="width:8px;height:8px;border-radius:50%;background:#7CFFB2;display:inline-block;animation:pulseDot 1.4s infinite"></span> DATAPLANES LIVE
+    <div id="dpLive" style="display:flex;align-items:center;gap:8px;color:#fff;font-size:11.5px;font-weight:700;letter-spacing:.03em;background:rgba(255,255,255,.16);border-radius:7px;padding:6px 12px;margin-right:10px">
+      <span style="width:8px;height:8px;border-radius:50%;background:#4ade80;box-shadow:0 0 0 3px rgba(74,222,128,.35);display:inline-block;animation:pulseDot 1.5s infinite"></span> DATAPLANES LIVE
     </div>
     <div style="display:flex;align-items:center;gap:10px;cursor:pointer;color:#fff;margin-left:4px">
       <div id="hdr-initials" style="width:34px;height:34px;border-radius:5px;background:var(--dark);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">··</div>
       <div style="line-height:1.15">
         <div id="hdr-email" style="font-size:14px;font-weight:600">—</div>
-        <div id="hdr-role" style="font-size:11px;color:#bfe0f2">—</div>
+        <div id="hdr-role" style="font-size:11px;color:rgba(255,255,255,.82)">—</div>
       </div>
     </div>
     <div id="logout" title="Lock console" style="width:38px;height:40px;display:flex;align-items:center;justify-content:center;color:#cfe6f5;cursor:pointer;margin-left:8px"><i class="fas fa-right-from-bracket" style="font-size:16px"></i></div>
@@ -179,7 +182,7 @@ tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:la
 
   <footer style="flex:0 0 auto;background:#fff;border-top:1px solid var(--bd);height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-size:13px;color:var(--slate)">
     <div><span style="color:var(--pri);font-weight:700">YesLogs Director</span> — multi-ISP flow log platform</div>
-    <div style="display:flex;align-items:center;gap:6px">Director console <i class="fas fa-network-wired" style="color:var(--ok)"></i></div>
+    <div style="display:flex;align-items:center;gap:6px"><span id="footRole">Director console</span> <i class="fas fa-network-wired" style="color:var(--ok)"></i></div>
   </footer>
 </div>
 
@@ -202,8 +205,14 @@ const esc = s => $('<div>').text(s==null?'':s).html();
 const humanBytes = n => { n=Number(n)||0; const u=['B','KiB','MiB','GiB','TiB','PiB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i?n.toFixed(1):n)+' '+u[i]; };
 const api = (p,o) => fetch(p,Object.assign({headers:{'Content-Type':'application/json'}},o||{}));
 const apiJSON = (p,method,body) => fetch(p,{method:method||'GET',headers:{'Content-Type':'application/json','X-CSRF-Token':S.csrf},body:body?JSON.stringify(body):undefined});
-function modal(html){ closeModal(); const $m=$('<div class="modal-bg"><div class="modal">'+html+'</div></div>'); $m.on('click',e=>{if(e.target===$m[0])closeModal();}); $('body').append($m); return $m; }
-function closeModal(){ $('.modal-bg').remove(); }
+function modal(html){ closeModal();
+  const $m=$('<div class="modal-bg"><div class="modal" style="position:relative"><button class="modal-x" title="Close (Esc)" aria-label="Close">&times;</button>'+html+'</div></div>');
+  $m.on('click',e=>{if(e.target===$m[0])closeModal();});
+  $m.find('.modal-x').on('click',closeModal);
+  $('body').append($m);
+  $(document).on('keydown.modal',e=>{if(e.key==='Escape')closeModal();});
+  return $m; }
+function closeModal(){ $(document).off('keydown.modal'); $('.modal-bg').remove(); }
 function toast(msg,type){ const ic={ok:'fa-circle-check',err:'fa-circle-exclamation',info:'fa-circle-info'}[type||'ok'];
   const $t=$('<div class="toast '+(type==='err'?'err':type==='info'?'info':'')+'"><i class="fas '+ic+'"></i><span></span></div>'); $t.find('span').text(msg);
   $('body').append($t); setTimeout(()=>$t.fadeOut(300,()=>$t.remove()),2400); }
@@ -217,6 +226,9 @@ function loadingCard(t){ return `<div class="card"><div style="padding:20px;disp
 function kpiCard(label,value,sub,icon,color){ return `<div class="card kpi"><div style="min-width:0"><div class="kl">${esc(label)}</div><div class="kv">${value}</div><div class="ks">${sub||''}</div></div><div class="ki" style="background:${color}1a;color:${color}"><i class="fas ${icon}"></i></div></div>`; }
 // labelled form field with optional what/why hint
 function fld(label,ctrl,hintTxt,req){ return `<div style="flex:1 1 var(--fw,180px);min-width:140px"><label class="lbl">${esc(label)}${req?'<span class="req">*</span>':''}</label>${ctrl}${hintTxt?hint(hintTxt):''}</div>`; }
+// canonical skip-rule summary (one wording everywhere)
+function skipSummary(o){ const p=[]; if(o.SkipDNS)p.push('Skip DNS'); if(o.SkipPrivate)p.push('Skip priv→priv'); if(o.SkipZero)p.push('Skip zero-byte');
+  return p.length?`<span style="color:var(--slate)">${p.join(' · ')}</span>`:'<span style="color:var(--ok);font-weight:600">Capture everything</span>'; }
 
 // ---- auth ----
 function showLogin(){ $('#login').css('display','block'); $('#app').css('display','none'); }
@@ -232,6 +244,9 @@ function afterLogin(){
   $('#hdr-email').text(S.me.email);
   $('#hdr-role').text(S.me.isDirector?'Director · all ISPs':'ISP Analyst · #'+S.me.ispId);
   $('#hdr-initials').text(initials(S.me.email));
+  // operator-only chrome stays out of the tenant view
+  $('#dpLive').css('display', S.me.isDirector?'flex':'none');
+  $('#footRole').text(S.me.isDirector?'Director console':'YesLogs console');
   showApp(); renderMenu(); loadData();
 }
 $('#li-btn').on('click', doLogin);
@@ -251,8 +266,6 @@ async function loadData(){
   if(r.status===401){ showLogin(); return; }
   S.data = await r.json();
   S.records = S.data.records || [];
-  const tot = (S.data.widgets&&S.data.widgets[0])?S.data.widgets[0].value:'—';
-  $('#brand-records').text(tot);
   renderPage();
 }
 
@@ -271,20 +284,22 @@ function setHead(){
 }
 function renderPage(){
   setHead();
+  $('#globalSearchWrap').css('display', S.view==='Overview'?'flex':'none'); // filter box only where it works
   const b=$('#pageBody').empty();
-  if(!S.data){ b.html('<div class="card" style="padding:40px;text-align:center;color:#9aa5b1">Loading…</div>'); return; }
+  if(!S.data){ b.html('<div class="card" style="padding:40px;text-align:center;color:var(--mut)">Loading…</div>'); return; }
   ({Overview:pgOverview,ISPs:pgISPs,Dataplanes:pgDataplanes,Devices:pgDevices,'Capture Policies':pgPolicies,Logs:pgLogs,Reports:pgReports,Retention:pgRetention,Audit:pgAudit,Settings:pgSettings}[S.view]||pgOverview)(b);
 }
 
 // ==================== OVERVIEW ====================
 async function pgOverview(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
+  b.html(loadingCard('Loading dashboard…'));
   const r=await api('/api/v1/overview'); const cards=(r.status===200?((await r.json()).cards||[]):[]);
-  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px;margin-bottom:18px">';
-  cards.forEach(c=>{ h+=`<div class="card kpi" style="flex-direction:column;align-items:stretch">
+  const cols=Math.min(Math.max(cards.length,1),4);
+  let h=`<div style="display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:16px;margin-bottom:18px">`;
+  cards.forEach(c=>{ const ic=c.icon||'fa-chart-simple'; h+=`<div class="card kpi" style="flex-direction:column;align-items:stretch">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
       <div style="min-width:0"><div class="kl">${esc(c.label)}</div><div class="kv">${esc(c.value)}</div><div class="ks">${esc(c.sub)}</div></div>
-      <div class="ki" style="background:${c.color}1a;color:${c.color}"><i class="fas ${c.icon}"></i></div></div>
+      <div class="ki" style="background:${c.color}1a;color:${c.color}"><i class="fas ${ic}"></i></div></div>
     ${c.pct?`<div class="gauge"><div style="width:${c.pct}%;background:${c.color}"></div></div>`:''}</div>`; });
   h+='</div>';
   if(!cards.length) h=`<div class="card"><div class="empty"><div class="ei"><i class="fas fa-satellite-dish"></i></div><div class="et">No flows yet</div><div class="ed">Add an <b>Exporter Device</b> (Devices tab) and point your router's NetFlow/IPFIX export at this collector — flows will appear here within seconds.</div></div></div>`;
@@ -292,13 +307,13 @@ async function pgOverview(b){
   h+=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>Recent Flow Logs</h2></div>
     <div style="display:flex;gap:10px;align-items:center"><input id="tsearch" class="inp" placeholder="filter…" style="width:200px;height:32px" value="${esc(S.search)}"><button id="refresh" class="btn out" style="height:32px"><i class="fas fa-arrows-rotate"></i></button></div></div>
     <div style="overflow-x:auto"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;flex-wrap:wrap;gap:12px"><div id="showing" style="font-size:13px;color:#6c757d"></div><div id="pager" style="display:flex;gap:6px;align-items:center"></div></div></div>`;
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;flex-wrap:wrap;gap:12px"><div id="showing" style="font-size:13px;color:var(--slate)"></div><div id="pager" style="display:flex;gap:6px;align-items:center"></div></div></div>`;
   b.html(h);
   $('#refresh').on('click',async()=>{await loadData(); pgOverview(b);});
   $('#tsearch').on('input',function(){S.search=this.value;S.page=1;renderTable();});
   renderTable();
 }
-const COLS=[['Timestamp','time'],['Device','sub'],['Private (NAT)','priv'],['Public (NAT)','pub'],['Proto','proto'],['Destination','dest'],['Type','action']];
+const COLS=[['Timestamp','time'],['Device','sub'],['Private (NAT)','priv'],['Public (NAT)','pub'],['Proto','proto'],['Destination','dest'],['Export','action']];
 function ipNum(ip){ return (ip||'').split('.').reduce((a,o)=>a*256+(+o||0),0); }
 function computeRows(){
   let rows=S.records.slice();
@@ -311,7 +326,9 @@ function computeRows(){
   rows.sort((a,b)=>{let x=ipk?ipNum(key(a)):key(a),y=ipk?ipNum(key(b)):key(b); if(x<y)return -dir; if(x>y)return dir; return 0;});
   return rows;
 }
-const PB={TCP:['#e7f1fb','#0a66c2'],UDP:['#e1f5f1','#1d8a7d'],ICMP:['#f0f0f3','#6c757d'],OTH:['#f0f0f3','#6c757d']};
+// shared flow-table cell renderers (consistent everywhere)
+const protoPill = p => { const v={TCP:'info',UDP:'ok',ICMP:'warn'}[p]||'mut'; return `<span class="pill ${v}">${esc(p||'—')}</span>`; };
+const typePill  = t => t?`<span class="pill info">${esc(t)}</span>`:'<span style="color:var(--mut)">—</span>';
 function renderTable(){
   const rows=computeRows(), total=rows.length, pages=Math.max(1,Math.ceil(total/S.pageSize));
   S.page=Math.min(S.page,pages); const start=total?(S.page-1)*S.pageSize:0, end=Math.min(start+S.pageSize,total);
@@ -319,16 +336,16 @@ function renderTable(){
   let th=''; COLS.forEach(([lab,k])=>{const on=S.sortKey===k,ar=on?(S.sortDir==='asc'?'fa-caret-up':'fa-caret-down'):'fa-sort';
     th+=`<th data-k="${k}">${lab} <i class="fas ${ar}" style="font-size:12px;margin-left:4px;color:${on?'#0077b6':'#c2ccd6'}"></i></th>`;});
   $('#thead').html(th).find('th').on('click',function(){const k=$(this).data('k'); S.sortDir=(S.sortKey===k&&S.sortDir==='asc')?'desc':'asc'; S.sortKey=k; S.page=1; renderTable();});
-  let tb=''; paged.forEach((r,i)=>{const pb=PB[r.proto]||PB.OTH, ab=r.action==='ALLOCATE'||r.action==='IPFIX'?['#e6f4ea','#1e7e34']:['#e7f1fb','#0a66c2'];
-    tb+=`<tr style="background:${i%2?'#fbfcfd':'#fff'}">
-      <td class="mono"><span style="color:#9aa5b1;font-size:11px">${esc(r.date)}</span><br><span style="color:#3f4b57">${esc(r.clock)}</span></td>
-      <td><a class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</a></td>
-      <td class="mono" style="color:#5a6573">${esc(r.privIp)}:${r.privPort}</td>
-      <td class="mono" style="color:#2c3a47;font-weight:500">${esc(r.pubIp)}:${r.pubPort}</td>
-      <td><span class="pill" style="background:${pb[0]};color:${pb[1]}">${esc(r.proto)}</span></td>
-      <td class="mono" style="color:#5a6573">${esc(r.dest)}</td>
-      <td><span class="pill" style="background:${ab[0]};color:${ab[1]}">${esc(r.action||'FLOW')}</span></td></tr>`;});
-  $('#tbody').html(tb||'<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:30px">No matching records</td></tr>');
+  let tb=''; paged.forEach(r=>{
+    tb+=`<tr>
+      <td class="mono"><span style="color:var(--mut);font-size:11px">${esc(r.date)}</span><br><span style="color:var(--ink2)">${esc(r.clock)}</span></td>
+      <td><span class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</span></td>
+      <td class="mono" style="color:var(--ink2)">${esc(r.privIp)}:${r.privPort}</td>
+      <td class="mono" style="color:var(--ink);font-weight:500">${esc(r.pubIp)}:${r.pubPort}</td>
+      <td>${protoPill(r.proto)}</td>
+      <td class="mono" style="color:var(--ink2)">${esc(r.dest)}</td>
+      <td>${typePill(r.action)}</td></tr>`;});
+  $('#tbody').html(tb||emptyRow(7,'fa-table-list','No matching records','Adjust the filter to see flow logs.'));
   $('#showing').text(`Showing ${total?start+1:0} to ${end} of ${total} entries`);
   let pg=`<button class="pgbtn" data-p="${S.page-1}" style="min-width:34px;height:34px;border:1px solid #dee2e6;border-radius:5px;background:#fff;color:var(--pri);cursor:pointer"><i class="fas fa-angle-left"></i></button>`;
   for(let p=1;p<=pages;p++) pg+=`<button class="pgbtn" data-p="${p}" style="min-width:34px;height:34px;border:1px solid ${p===S.page?'#0077b6':'#dee2e6'};border-radius:5px;background:${p===S.page?'#0077b6':'#fff'};color:${p===S.page?'#fff':'#0077b6'};cursor:pointer;font-weight:600">${p}</button>`;
@@ -353,12 +370,14 @@ async function pgLogs(b){
     <div style="flex:1 1 140px"><label class="lbl">Private IP</label><input id="s-priv" class="inp mono" placeholder="100.64.x.x"></div>
     <div style="flex:1 1 140px"><label class="lbl">Destination IP</label><input id="s-dst" class="inp mono" placeholder="any"></div>
     <div style="flex:1 1 100px"><label class="lbl">Protocol</label><select id="s-proto" class="inp"><option>Any</option><option>TCP</option><option>UDP</option><option>ICMP</option></select></div>
-    <div style="flex:1 1 160px"><label class="lbl">From (IST)</label><input id="s-from" type="datetime-local" class="inp"></div>
-    <div style="flex:1 1 160px"><label class="lbl">To (IST)</label><input id="s-to" type="datetime-local" class="inp"></div>
-    <div style="flex:1 1 170px"><label class="lbl">Audit reason (optional)</label><input id="s-reason" class="inp" placeholder="reason for this search"></div>
+    <div style="flex:2 1 320px;display:flex;gap:12px;min-width:280px">
+      <div style="flex:1"><label class="lbl">From (IST)</label><input id="s-from" type="datetime-local" class="inp"></div>
+      <div style="flex:1"><label class="lbl">To (IST)</label><input id="s-to" type="datetime-local" class="inp"></div>
+    </div>
+    <div style="flex:1 1 180px"><label class="lbl">Audit reason (optional)</label><input id="s-reason" class="inp" placeholder="reason for this search"></div>
     <button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Search</button>
-  </div><div style="padding:0 18px 8px;font-size:12px;color:#9aa5b1">Provide at least one of: Public IP, Private IP, Destination IP, or Device.</div><div id="s-msg" style="padding:0 18px 14px;color:#c0392b;font-size:13px"></div></div>
-  <div id="s-results"></div>`);
+  </div><div style="padding:0 18px 14px;font-size:12px;color:var(--mut)">Provide at least one of: Public IP, Private IP, Destination IP, or Device.</div><div id="s-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>
+  <div id="s-results"><div class="card"><div class="empty"><div class="ei"><i class="fas fa-magnifying-glass"></i></div><div class="et">Run a search to see flow logs</div><div class="ed">Enter a Public IP, Private IP, Destination IP or pick a Device above, optionally narrow by time, then hit Search. Results across hot + S3 cold storage appear here.</div></div></div></div>`);
   $('#s-run').on('click', runLogs);
   $('#s-pub,#s-priv,#s-dst').on('keydown',e=>{if(e.key==='Enter')runLogs();});
 }
@@ -366,7 +385,7 @@ function logBody(){ return {PublicIP:$('#s-pub').val().trim(),PrivateIP:$('#s-pr
 async function runLogs(){
   const body=logBody();
   if(!body.PublicIP&&!body.PrivateIP&&!body.DestIP&&!body.DeviceID){ $('#s-msg').text('Provide a Public IP, Private IP, Destination IP, or Device'); return; }
-  $('#s-msg').text(''); $('#s-results').html('<div class="card" style="padding:24px;color:#9aa5b1">Searching…</div>');
+  $('#s-msg').text(''); $('#s-results').html('<div class="card" style="padding:24px;color:var(--mut)">Searching…</div>');
   const r=await apiJSON('/api/v1/search','POST',body);
   if(r.status!==200){ const e=await r.json().catch(()=>({})); $('#s-results').html(''); $('#s-msg').text(e.error||'search failed'); return; }
   const d=await r.json(); renderLogResults(d.records||[], d.count, d.truncated, body);
@@ -378,31 +397,31 @@ function renderLogResults(rows,count,truncated,body){
     <div style="display:flex;gap:8px"><a class="btn out" style="height:32px" href="/api/v1/report?format=csv&${qs}"><i class="fas fa-file-csv"></i> CSV</a>
     <a class="btn out" style="height:32px" href="/api/v1/report?format=xlsx&${qs}"><i class="fas fa-file-excel"></i> Excel</a>
     <a class="btn out" style="height:32px" href="/api/v1/report?format=pdf&${qs}"><i class="fas fa-file-pdf"></i> PDF</a></div></div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Private (NAT)</th><th>Public (NAT)</th><th>Proto</th><th>Destination</th><th>Type</th></tr></thead><tbody>`;
+    <div style="overflow-x:auto"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Private (NAT)</th><th>Public (NAT)</th><th>Proto</th><th>Destination</th><th>Export</th></tr></thead><tbody>`;
   if(!rows.length) h+=emptyRow(7,'fa-magnifying-glass','No matching flow logs','Nothing matched these filters and time window. Widen the time range, or check the IP/device — months-old searches also include the S3 cold archive.');
-  rows.forEach((r,i)=>{const pb=PB[r.proto]||PB.OTH;
-    h+=`<tr style="background:${i%2?'#fbfcfd':'#fff'}"><td class="mono"><span style="color:#9aa5b1;font-size:11px">${esc(r.date)}</span><br>${esc(r.clock)}</td>
+  rows.forEach(r=>{
+    h+=`<tr><td class="mono"><span style="color:var(--mut);font-size:11px">${esc(r.date)}</span><br>${esc(r.clock)}</td>
     <td class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</td>
-    <td class="mono" style="font-weight:700;color:#2c3a47">${esc(r.privIp)}:${r.privPort}</td>
-    <td class="mono" style="color:#5a6573">${esc(r.pubIp)}:${r.pubPort}</td>
-    <td><span class="pill" style="background:${pb[0]};color:${pb[1]}">${esc(r.proto)}</span></td>
-    <td class="mono" style="color:#5a6573">${esc(r.dest)}</td><td>${esc(r.action||'')}</td></tr>`;});
+    <td class="mono" style="font-weight:600;color:var(--ink)">${esc(r.privIp)}:${r.privPort}</td>
+    <td class="mono" style="color:var(--ink2)">${esc(r.pubIp)}:${r.pubPort}</td>
+    <td>${protoPill(r.proto)}</td>
+    <td class="mono" style="color:var(--ink2)">${esc(r.dest)}</td><td>${typePill(r.action)}</td></tr>`;});
   h+='</tbody></table></div></div>';
   $('#s-results').html(h);
 }
 
 // ==================== REPORTS ====================
 async function pgReports(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading reports…</div>');
-  const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load reports.</div>'); return; }
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading reports…</div>');
+  const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load reports.</div>'); return; }
   const exports=((await r.json()).queries||[]).filter(q=>(q.CaseRef||'').includes('[export:'));
   const fmt=cr=>{ const m=/\[export:(\w+)\]/.exec(cr||''); return m?m[1]:'csv'; };
   const reason=cr=>(cr||'').replace(/\s*\[export:\w+\]\s*/,'')||'—';
   const dl=q=>{ const p=new URLSearchParams(); if(q.QueryIP)p.set('ip',q.QueryIP); if(q.QueryPort)p.set('port',q.QueryPort); if(q.QueryProto&&q.QueryProto!=='Any')p.set('proto',q.QueryProto); p.set('format',fmt(q.CaseRef)); return '/api/v1/report?'+p.toString(); };
-  let h=`<div class="card" style="margin-bottom:16px;padding:16px;font-size:13.5px;color:#4a5560"><i class="fas fa-circle-info" style="color:var(--pri)"></i> Reports are generated from <b>Logs Search</b> — run a search and use the CSV / Excel / PDF buttons. Recent exports are listed below and can be re-downloaded.</div>`;
+  let h=`<div style="margin-bottom:16px">${note('Reports are generated from <b>Logs Search</b> — run a search and use the CSV / Excel / PDF buttons. Recent exports are listed below and can be re-downloaded.','fa-circle-info')}</div>`;
   h+='<div class="card"><div class="ch"><i class="fas fa-file-export" style="color:var(--pri)"></i><h2>Recent Reports</h2></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>By</th><th>Format</th><th>Filter (IP)</th><th>Rows</th><th>Reason</th><th></th></tr></thead><tbody>';
-  if(!exports.length) h+='<tr><td colspan="7" style="text-align:center;color:#9aa5b1;padding:24px">No reports generated yet.</td></tr>';
-  exports.forEach(q=>{ h+=`<tr><td class="mono" style="color:#5a6573">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td>
+  if(!exports.length) h+='<tr><td colspan="7" style="text-align:center;color:var(--mut);padding:24px">No reports generated yet.</td></tr>';
+  exports.forEach(q=>{ h+=`<tr><td class="mono" style="color:var(--ink2)">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td>
     <td><span class="pill" style="background:#eef7fc;color:#0077b6">${esc(fmt(q.CaseRef).toUpperCase())}</span></td>
     <td class="mono">${esc(q.QueryIP||'—')}</td><td class="mono">${q.ResultCount}</td><td>${esc(reason(q.CaseRef))}</td>
     <td><a class="btn out" style="height:28px" href="${dl(q)}"><i class="fas fa-download"></i></a></td></tr>`;});
@@ -412,50 +431,50 @@ async function pgReports(b){
 
 // ==================== AUDIT ====================
 async function pgAudit(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading audit…</div>');
-  const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load audit.</div>'); return; }
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading audit…</div>');
+  const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load audit.</div>'); return; }
   const {queries=[]}=await r.json();
   const t=s=>(s&&!String(s).startsWith('0001'))?String(s).replace('T',' ').slice(0,16):'any';
-  let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
-  if(!queries.length) h+='<tr><td colspan="9" style="text-align:center;color:#9aa5b1;padding:24px">No queries yet.</td></tr>';
-  queries.forEach(q=>{ h+=`<tr><td class="mono" style="color:#5a6573">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td><td class="mono">${q.ISPID||'all'}</td>
+  let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:var(--mut)">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
+  if(!queries.length) h+='<tr><td colspan="9" style="text-align:center;color:var(--mut);padding:24px">No queries yet.</td></tr>';
+  queries.forEach(q=>{ h+=`<tr><td class="mono" style="color:var(--ink2)">${(q.CreatedAt||'').replace('T',' ').slice(0,19)}</td><td>${esc(q.UserEmail)}</td><td class="mono">${q.ISPID||'all'}</td>
     <td class="mono" style="font-weight:600">${esc(q.QueryIP)}</td><td class="mono">${q.QueryPort||'any'}</td><td>${esc(q.QueryProto||'any')}</td>
-    <td class="mono" style="font-size:12px;color:#7b8794">${t(q.FromTS)} → ${t(q.ToTS)}</td><td class="mono">${q.ResultCount}</td><td>${esc(q.CaseRef||'—')}</td></tr>`;});
+    <td class="mono" style="font-size:12px;color:var(--slate)">${t(q.FromTS)} → ${t(q.ToTS)}</td><td class="mono">${q.ResultCount}</td><td>${esc(q.CaseRef||'—')}</td></tr>`;});
   h+='</tbody></table></div></div>';
   b.html(h);
 }
 
 // ==================== RETENTION & ARCHIVE ====================
 async function pgRetention(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading retention…</div>');
-  const r=await api('/api/v1/retention'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load retention.</div>'); return; }
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading retention…</div>');
+  const r=await api('/api/v1/retention'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load retention.</div>'); return; }
   const d=await r.json();
-  if(!d.available){ b.html('<div class="card" style="padding:24px;color:#7b8794">Flow store unavailable.</div>'); return; }
+  if(!d.available){ b.html('<div class="card" style="padding:24px;color:var(--slate)">Flow store unavailable.</div>'); return; }
   const st=d.storage||{}, win=d.window||{}, arch=d.archive||{};
   let h='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px">';
-  const kpi=(l,v,sub,ic,c)=>`<div class="card" style="padding:14px 16px;display:flex;justify-content:space-between;align-items:flex-start"><div><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${l}</div><div style="font-size:24px;font-weight:700;color:#2c3a47;margin-top:4px">${v}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div></div><i class="fas ${ic}" style="font-size:26px;color:${c};opacity:.85"></i></div>`;
+  const kpi=(l,v,sub,ic,c)=>`<div class="card kpi"><div style="min-width:0"><div class="kl">${l}</div><div class="kv" style="font-size:24px">${v}</div><div class="ks">${sub}</div></div><div class="ki" style="background:${c}1a;color:${c}"><i class="fas ${ic}"></i></div></div>`;
   h+=kpi('Retention target', d.retentionDays+' days', 'regulatory window', 'fa-clock', '#0077b6');
   h+=kpi('Stored records', Number(st.rows||0).toLocaleString(), 'on disk', 'fa-table-list', '#2a9d8f');
   h+=kpi('Disk used', st.human||'0 B', 'compressed', 'fa-hard-drive', '#00a3c4');
   h+=kpi('Data window', (win.from||'—'), 'to '+(win.to||'—'), 'fa-calendar-days', '#e76f51');
   h+='</div>';
   // S3 archive card
-  const autoPill = arch.auto?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">auto-archive ON · after ${arch.afterDays||7}d</span>`:`<span class="pill" style="background:#f1f4f7;color:#9aa5b1">auto-archive OFF</span>`;
+  const autoPill = arch.auto?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">auto-archive ON · after ${arch.afterDays||7}d</span>`:`<span class="pill" style="background:#f1f4f7;color:var(--mut)">auto-archive OFF</span>`;
   h+=`<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-box-archive" style="color:var(--pri)"></i><h2>S3 Cold Archive</h2>${arch.enabled?`<span class="pill" style="background:#e6f4ea;color:#1e7e34">enabled · ${esc(arch.bucket)}</span>`:'<span class="pill" style="background:#fff4e0;color:#a86700">not configured</span>'}${arch.enabled?autoPill:''}</div>
-    <div style="padding:16px 18px;font-size:13.5px;color:#4a5560">${arch.enabled?`Days older than the hot window (<b>${arch.afterDays||7} days</b>) ${arch.auto?'are <b>automatically moved to S3</b> and dropped from hot storage':'can be archived to S3 manually below'}. Configure in <b>Settings → S3 Archive</b>.`:'Enable S3 in <b>Settings → S3 Archive</b> (endpoint, bucket, keys) for off-box cold storage. Hot storage + search work without it.'}
-    ${(arch.canRun&&arch.auto)?'<div style="margin-top:12px"><button class="btn" id="sweep-now"><i class="fas fa-cloud-arrow-up"></i> Run auto-archive now</button> <span id="sweep-msg" style="font-size:12.5px;color:#7b8794"></span></div>':''}</div>`;
+    <div style="padding:16px 18px;font-size:13.5px;color:var(--ink2)">${arch.enabled?`Days older than the hot window (<b>${arch.afterDays||7} days</b>) ${arch.auto?'are <b>automatically moved to S3</b> and dropped from hot storage':'can be archived to S3 manually below'}. Configure in <b>Settings → S3 Archive</b>.`:'Enable S3 in <b>Settings → S3 Archive</b> (endpoint, bucket, keys) for off-box cold storage. Hot storage + search work without it.'}
+    ${(arch.canRun&&arch.auto)?'<div style="margin-top:12px"><button class="btn" id="sweep-now"><i class="fas fa-cloud-arrow-up"></i> Run auto-archive now</button> <span id="sweep-msg" style="font-size:12.5px;color:var(--slate)"></span></div>':''}</div>`;
   // archived days (director)
   const ad = arch.archivedDays||[];
   if(arch.canRun){
-    h+='<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-clock-rotate-left" style="color:var(--pri)"></i><h2>Archived to S3</h2><span class="pill" style="background:#f1f4f7;color:#9aa5b1">'+ad.length+' days</span></div><div style="overflow-x:auto"><table><thead><tr><th>Day</th><th>Objects</th><th>Rows</th><th>Bytes</th><th>Archived at (IST)</th></tr></thead><tbody>';
-    if(!ad.length) h+='<tr><td colspan="5" style="text-align:center;color:#9aa5b1;padding:18px">Nothing archived yet.</td></tr>';
+    h+='<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-clock-rotate-left" style="color:var(--pri)"></i><h2>Archived to S3</h2><span class="pill" style="background:#f1f4f7;color:var(--mut)">'+ad.length+' days</span></div><div style="overflow-x:auto"><table><thead><tr><th>Day</th><th>Objects</th><th>Rows</th><th>Bytes</th><th>Archived at (IST)</th></tr></thead><tbody>';
+    if(!ad.length) h+='<tr><td colspan="5" style="text-align:center;color:var(--mut);padding:18px">Nothing archived yet.</td></tr>';
     ad.forEach(a=>{ h+=`<tr><td class="mono">${esc(a.Day)}</td><td class="mono">${a.Objects||0}</td><td class="mono">${Number(a.Rows||0).toLocaleString()}</td><td class="mono">${humanBytes(a.Bytes||0)}</td><td class="mono">${esc((a.ArchivedAt||'').replace('T',' ').slice(0,19))}</td></tr>`;});
     h+='</tbody></table></div></div>';
   }
   // per-day table
   h+='<div class="card"><div class="ch"><i class="fas fa-calendar-week" style="color:var(--pri)"></i><h2>Records by day (last 30)</h2></div><div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Records</th><th>Coverage</th>'+(arch.canRun?'<th>Archive</th>':'')+'</tr></thead><tbody>';
   const days=d.perDay||[]; const max=days.reduce((m,x)=>Math.max(m,x.count),0)||1;
-  if(!days.length) h+='<tr><td colspan="4" style="text-align:center;color:#9aa5b1;padding:24px">No data yet.</td></tr>';
+  if(!days.length) h+='<tr><td colspan="4" style="text-align:center;color:var(--mut);padding:24px">No data yet.</td></tr>';
   days.forEach(x=>{ h+=`<tr><td class="mono">${esc(x.date)}</td><td class="mono">${Number(x.count).toLocaleString()}</td>
     <td style="width:40%"><div style="height:8px;background:#eef1f4;border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(x.count/max*100)}%;background:var(--pri);border-radius:5px"></div></div></td>`
     +(arch.canRun?`<td><button class="btn out arch-run" data-d="${esc(x.date)}" style="height:28px"><i class="fas fa-cloud-arrow-up"></i> S3</button></td>`:'')+'</tr>';});
@@ -474,9 +493,9 @@ async function pgRetention(b){
 
 // ==================== ISPs (Director) ====================
 async function pgISPs(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading ISPs…</div>');
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading ISPs…</div>');
   const r=await api('/api/v1/isps');
-  if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load ISPs (Director only).</div>'); return; }
+  if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load ISPs (Director only).</div>'); return; }
   const {isps=[]}=await r.json();
   let h=`<div class="card" style="margin-bottom:20px">${chead('fa-building','Onboard ISP (tenant)')}
   <div style="padding:16px 18px 4px">${note("Each ISP is an isolated tenant — its users only ever see their own devices, flows and reports. Optionally create the ISP's first admin login now; you can add more users later.",'fa-circle-info')}</div>
@@ -505,9 +524,9 @@ async function pgISPs(b){
 async function loadPolicies(){ const r=await api('/api/v1/policies'); return r.status===200?((await r.json()).policies||[]):[]; }
 function policyOpts(pols,sel){ return `<option value="">Custom rules</option>`+pols.map(p=>`<option ${p.Name===sel?'selected':''}>${esc(p.Name)}</option>`).join(''); }
 async function pgDevices(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading devices…</div>');
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading devices…</div>');
   const r=await api('/api/v1/devices');
-  if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load devices.</div>'); return; }
+  if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load devices.</div>'); return; }
   const data=await r.json(); const devs=data.devices||[], isps=data.isps||[], dir=data.isDirector;
   const pols=await loadPolicies();
   const ispSel = dir ? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="d-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>` : '';
@@ -518,10 +537,10 @@ async function pgDevices(b){
     <div style="flex:1 1 110px"><label class="lbl">Dataplane</label><select id="d-dp" class="inp"><option>local</option></select></div>
     <div style="flex:1 1 150px"><label class="lbl">Device name<span class="req">*</span></label><input id="d-name" class="inp" placeholder="edge-router-01">${hint('A friendly label')}</div>
     <div style="flex:1 1 140px"><label class="lbl">Exporter IP<span class="req">*</span></label><input id="d-ip" class="inp mono" placeholder="103.187.167.154">${hint('Source IP the router exports from')}</div>
-    <div style="flex:1 1 95px"><label class="lbl">device_id<span class="req">*</span></label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1">${hint('Stamped on every flow')}</div>
+    <div style="flex:1 1 95px"><label class="lbl">Device ID<span class="req">*</span></label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1">${hint('Stamped on every flow')}</div>
     <div style="flex:1 1 120px"><label class="lbl">Protocol</label><select id="d-proto" class="inp"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select>${hint('auto = detect')}</div>
     <div style="flex:1 1 120px"><label class="lbl">Vendor profile</label><select id="d-profile" class="inp"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select></div>
-    <div style="flex:1 1 150px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select>${hint('Overrides custom rules →')}</div>
+    <div style="flex:1 1 150px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select>${hint('A policy replaces custom rules')}</div>
     <div style="align-self:flex-start;padding-top:23px"><button id="d-add" class="btn"><i class="fas fa-plus"></i> Add Device</button></div>
   </div>
   <div id="d-custom" style="padding:4px 18px 16px;display:flex;gap:18px;font-size:13px;color:var(--ink2);align-items:center;flex-wrap:wrap">
@@ -531,16 +550,17 @@ async function pgDevices(b){
     <label class="chk"><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
     <span id="d-msg" style="color:var(--bad);font-weight:600"></span>
   </div></div>`;
-  h+='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn'))+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>device_id</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Rules</th><th>Status</th><th></th></tr></thead><tbody>';
+  h+='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn'))+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>Device ID</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Capture</th><th>Status</th><th></th></tr></thead><tbody>';
   if(!devs.length) h+=emptyRow(10,'fa-server','No exporter devices yet','Add your first exporter above, then point its NetFlow/IPFIX export at this collector to start ingesting flows.');
   devs.forEach(d=>{ h+=`<tr><td class="mono">${d.ISPID}</td><td style="font-weight:600;color:var(--ink)">${esc(d.Name)}</td><td class="mono">${esc(d.ExporterIP)}</td><td class="mono">${d.DeviceID}</td><td>${esc(d.Protocol)}</td><td>${esc(d.Profile)}</td>
     <td>${d.CapturePolicy?pill(d.CapturePolicy,'info'):'<span style="color:var(--mut)">custom</span>'}</td>
-    <td style="font-size:12px;color:var(--slate)">${d.SkipDNS?'dns ':''}${d.SkipPrivate?'priv ':''}${d.SkipZero?'zero':''}${!d.SkipDNS&&!d.SkipPrivate&&!d.SkipZero?'—':''}</td>
+    <td style="font-size:12px">${skipSummary(d)}</td>
     <td>${d.Enabled?pill('enabled','ok'):pill('disabled','mut')}</td>
     <td style="white-space:nowrap;text-align:right"><button class="btn out sm d-edit" data-id="${d.ID}" title="Edit"><i class="fas fa-pen"></i></button> <button class="btn out sm d-tog" data-id="${d.ID}">${d.Enabled?'Disable':'Enable'}</button> <button class="btn danger sm d-del" data-id="${d.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`; });
   h+='</tbody></table></div></div>';
   b.html(h);
-  $('#d-pol').on('change',function(){ $('#d-custom').css('opacity', this.value?'.4':'1'); });
+  const dpolSync=()=>{ const off=!!$('#d-pol').val(); $('#d-custom').css('opacity',off?'.45':'1'); $('#d-dns,#d-priv,#d-zero').prop('disabled',off); };
+  $('#d-pol').on('change',dpolSync); dpolSync();
   $('#d-add').on('click', async ()=>{
     const body={ISPID:dir?+($('#d-isp').val()||0):0,Name:$('#d-name').val(),ExporterIP:$('#d-ip').val(),DeviceID:+($('#d-id').val()||0),Protocol:$('#d-proto').val(),Profile:$('#d-profile').val(),CapturePolicy:$('#d-pol').val(),SkipDNS:$('#d-dns').is(':checked'),SkipPrivate:$('#d-priv').is(':checked'),SkipZero:$('#d-zero').is(':checked')};
     const r=await apiJSON('/api/v1/devices','POST',body);
@@ -557,8 +577,8 @@ const srow=(label,ctrl,h)=>`<div class="fgrid"><label class="lbl">${label}</labe
 const chk=(id,v,lbl)=>`<label class="chk"><input type="checkbox" id="${id}" ${v?'checked':''}> ${lbl||'enabled'}</label>`;
 function saveSetting(section,body){ apiJSON('/api/v1/settings/'+section,'PUT',body).then(async r=>{ if(r.status===200){ toast('Saved · applied to dataplane'); } else { const e=await r.json().catch(()=>({})); toast(e.error||'save failed','err'); } }); }
 async function pgSettings(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading settings…</div>');
-  const r=await api('/api/v1/settings'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load settings (Director only).</div>'); return; }
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading settings…</div>');
+  const r=await api('/api/v1/settings'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load settings (Director only).</div>'); return; }
   const j=await r.json(); const cfg=j.settings||{}, secretSet=j.secretSet;
   const tabs=[['Dataplane',()=>dpTab(cfg)],['Skip Rules',()=>skipTab(cfg)],['Retention',()=>retTab(cfg)],['S3 Archive',()=>s3Tab(cfg,secretSet)]];
   b.html('<div class="tabs">'+tabs.map((t,i)=>`<div class="tab${i?'':' on'}" data-i="${i}">${t[0]}</div>`).join('')+'</div><div id="set-body" class="card" style="padding:18px"></div>');
@@ -612,9 +632,9 @@ function s3Tab(cfg,secretSet){ const s=cfg.s3||{};
 
 // ==================== SYSTEM (Director) ====================
 function pgSystem(b){
-  const gc=(title,icon,p,big,sub,color)=>`<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${title}</div><i class="fas ${icon}" style="color:${color}"></i></div><div style="font-size:24px;font-weight:700;color:#2c3a47;margin-top:6px">${big}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div><div class="gauge"><div style="width:${p}%;background:${color}"></div></div></div>`;
+  const gc=(title,icon,p,big,sub,color)=>`<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${title}</div><i class="fas ${icon}" style="color:${color}"></i></div><div style="font-size:24px;font-weight:700;color:var(--ink);margin-top:6px">${big}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div><div class="gauge"><div style="width:${p}%;background:${color}"></div></div></div>`;
   async function load(){
-    const r=await api('/api/v1/system'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load system (Director only).</div>'); return; }
+    const r=await api('/api/v1/system'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load system (Director only).</div>'); return; }
     const d=await r.json(); const cpu=d.cpu||{},mem=d.memory||{},disk=d.disk||{},proc=d.process||{},ing=d.ingest||{};
     const up=proc.uptime||0, uph=Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m';
     let h='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">';
@@ -623,26 +643,28 @@ function pgSystem(b){
     h+=gc('Disk','fa-hard-drive',disk.pct||0,disk.human||'—',(disk.pct||0)+'% of '+(disk.totalHuman||'—'),'#e76f51');
     h+=gc('Flows today','fa-bolt',Math.min(100,(ing.flowsToday||0)/10000),Number(ing.flowsToday||0).toLocaleString(),(ing.bytesHuman||'0 B')+' · '+(ing.devices||0)+' dev','#00a3c4');
     h+='</div><div class="card"><div class="ch"><i class="fas fa-gears" style="color:var(--pri)"></i><h2>natlog process</h2><span style="flex:1"></span><button class="btn out" id="sys-refresh" style="height:30px"><i class="fas fa-arrows-rotate"></i> Refresh</button></div><div style="padding:18px">';
-    h+=`<div class="fgrid"><label class="lbl" style="margin:0">Goroutines</label><div class="mono">${proc.goroutines||0}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Go heap</label><div class="mono">${proc.heapHuman||'—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Process memory</label><div class="mono">${proc.sysHuman||'—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Uptime</label><div class="mono">${uph}</div></div></div></div>`;
+    h+=`<div class="fgrid"><label class="lbl" style="margin:0">Worker routines</label><div class="mono">${proc.goroutines||0}</div></div><div class="fgrid"><label class="lbl" style="margin:0">App memory (heap)</label><div class="mono">${proc.heapHuman||'—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Process memory</label><div class="mono">${proc.sysHuman||'—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Uptime</label><div class="mono">${uph}</div></div></div></div>`;
     b.html(h); $('#sys-refresh').on('click',load);
   }
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading system…</div>'); load();
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading system…</div>'); load();
 }
 
 // ==================== DEVICE EDIT ====================
 function editDevice(dev,pols,onSave){
   pols=pols||[];
-  modal(`<div class="ch"><i class="fas fa-pen" style="color:var(--pri)"></i><h2>Edit exporter — ${esc(dev.Name)} (ISP #${dev.ISPID})</h2></div><div style="padding:18px">
+  modal(chead('fa-pen','Edit exporter — '+dev.Name+' (ISP #'+dev.ISPID+')')+`<div style="padding:18px">
     ${srow('Device name',`<input id="e-name" class="inp" value="${esc(dev.Name)}">`)}
     ${srow('Exporter IP',`<input id="e-ip" class="inp mono" value="${esc(dev.ExporterIP)}">`)}
-    ${srow('device_id',`<input id="e-id" type="number" class="inp mono" value="${dev.DeviceID}">`)}
+    ${srow('Device ID',`<input id="e-id" type="number" class="inp mono" value="${dev.DeviceID}">`)}
     ${srow('Protocol',`<select id="e-proto" class="inp">${opts(['auto','netflow5','netflow9','ipfix'],dev.Protocol)}</select>`)}
     ${srow('Vendor profile',`<select id="e-profile" class="inp">${opts(['generic','mikrotik','cisco','juniper','huawei'],dev.Profile)}</select>`)}
-    ${srow('Capture policy',`<select id="e-pol" class="inp">${policyOpts(pols,dev.CapturePolicy)}</select>`)}
-    ${srow('Custom skip rules',`<div style="display:flex;gap:16px"><label><input type="checkbox" id="e-dns" ${dev.SkipDNS?'checked':''}> dns</label><label><input type="checkbox" id="e-priv" ${dev.SkipPrivate?'checked':''}> priv</label><label><input type="checkbox" id="e-zero" ${dev.SkipZero?'checked':''}> zero</label></div>`)}
-    ${srow('Enabled',`<label><input type="checkbox" id="e-en" ${dev.Enabled?'checked':''}> enabled</label>`)}
-    <div id="e-msg" style="color:#c0392b;font-size:13px;margin-top:6px"></div>
-    <div style="display:flex;gap:10px;margin-top:14px"><button class="btn" id="e-save"><i class="fas fa-floppy-disk"></i> Save</button><button class="btn out" id="e-cancel">Cancel</button></div></div>`);
+    ${srow('Capture policy',`<select id="e-pol" class="inp">${policyOpts(pols,dev.CapturePolicy)}</select>`,'A policy replaces the custom skip rules below.')}
+    ${srow('Custom skip rules',`<div id="e-custom" style="display:flex;gap:18px"><label class="chk"><input type="checkbox" id="e-dns" ${dev.SkipDNS?'checked':''}> Skip DNS</label><label class="chk"><input type="checkbox" id="e-priv" ${dev.SkipPrivate?'checked':''}> Skip priv→priv</label><label class="chk"><input type="checkbox" id="e-zero" ${dev.SkipZero?'checked':''}> Skip zero-byte</label></div>`)}
+    ${srow('Enabled',`<label class="chk"><input type="checkbox" id="e-en" ${dev.Enabled?'checked':''}> enabled</label>`)}
+    <div id="e-msg" style="color:var(--bad);font-size:13px;font-weight:600;margin-top:8px"></div>
+    <div style="display:flex;gap:10px;margin-top:16px"><button class="btn" id="e-save"><i class="fas fa-floppy-disk"></i> Save changes</button><button class="btn out" id="e-cancel">Cancel</button></div></div>`);
+  const epolSync=()=>{ const off=!!$('#e-pol').val(); $('#e-custom').css('opacity',off?'.45':'1'); $('#e-dns,#e-priv,#e-zero').prop('disabled',off); };
+  $('#e-pol').on('change',epolSync); epolSync();
   $('#e-cancel').on('click',closeModal);
   $('#e-save').on('click',async()=>{
     const body={Name:$('#e-name').val(),ExporterIP:$('#e-ip').val(),DeviceID:+$('#e-id').val(),Protocol:$('#e-proto').val(),Profile:$('#e-profile').val(),CapturePolicy:$('#e-pol').val(),SkipDNS:$('#e-dns').is(':checked'),SkipPrivate:$('#e-priv').is(':checked'),SkipZero:$('#e-zero').is(':checked'),Enabled:$('#e-en').is(':checked')};
@@ -653,8 +675,8 @@ function editDevice(dev,pols,onSave){
 
 // ==================== CAPTURE POLICIES ====================
 async function pgPolicies(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
-  const r=await api('/api/v1/policies'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load capture policies.</div>'); return; }
+  b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading…</div>');
+  const r=await api('/api/v1/policies'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load capture policies.</div>'); return; }
   const j=await r.json(); const pols=j.policies||[];
   let h=`<div class="card" style="margin-bottom:18px">${chead('fa-shield-halved','Create Capture Policy')}
   <div style="padding:16px 18px 4px">${note("A capture policy is a reusable named set of skip rules. Assign it to exporter devices instead of setting rules one by one — change the policy once and every device using it updates. Tick nothing for <b>full capture</b> (store everything).",'fa-circle-info')}</div>
@@ -667,9 +689,9 @@ async function pgPolicies(b){
   </div><div id="p-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>`;
   h+='<div class="card">'+chead('fa-list-check','Capture Policies',pill('applied to devices','mut'))+'<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Scope</th><th>Skip rules</th><th></th></tr></thead><tbody>';
   if(!pols.length) h+=emptyRow(4,'fa-shield-halved','No capture policies yet','Create one above, then assign it to exporter devices on the Devices page.');
-  pols.forEach(p=>{ const none=!p.SkipDNS&&!p.SkipPrivate&&!p.SkipZero;
-    h+=`<tr><td style="font-weight:600;color:var(--ink)">${esc(p.Name)}</td><td>${p.ISPID===0?pill('global','info'):pill('ISP #'+p.ISPID,'mut')}</td>
-    <td style="font-size:12px;color:var(--slate)">${none?'<span style="color:var(--ok);font-weight:600">capture everything</span>':((p.SkipDNS?'skip dns · ':'')+(p.SkipPrivate?'skip priv→priv · ':'')+(p.SkipZero?'skip zero':'')).replace(/ · $/,'')}</td>
+  pols.forEach(p=>{
+    h+=`<tr><td>${pill(p.Name,'info')}</td><td>${p.ISPID===0?pill('global','mut'):pill('ISP #'+p.ISPID,'mut')}</td>
+    <td style="font-size:12px">${skipSummary(p)}</td>
     <td style="text-align:right"><button class="btn danger sm p-del" data-id="${p.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`;});
   h+='</tbody></table></div></div>';
   b.html(h);
@@ -683,27 +705,31 @@ async function pgPolicies(b){
 
 // ==================== DATAPLANES ====================
 async function pgDataplanes(b){
-  b.html('<div class="card" style="padding:30px;color:#9aa5b1">Loading…</div>');
-  const r=await api('/api/v1/dataplanes'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:#c0392b">Cannot load dataplanes (Director only).</div>'); return; }
+  b.html(loadingCard('Loading collectors…'));
+  const r=await api('/api/v1/dataplanes'); if(r.status!==200){ b.html('<div class="card"><div class="empty"><div class="ei"><i class="fas fa-lock"></i></div><div class="et">Director only</div><div class="ed">Dataplane status is visible to the Director role.</div></div></div>'); return; }
   const dps=(await r.json()).dataplanes||[];
-  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:18px">';
-  dps.forEach(d=>{ const up=d.uptime||0, uph=Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m';
-    h+=`<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:700;color:#2c3a47"><i class="fas fa-network-wired" style="color:var(--pri)"></i> ${esc(d.name)}</div><span class="pill" style="background:#e6f4ea;color:#1e7e34">${esc(d.status)}</span></div>
-    <div style="font-size:12px;color:#9aa5b1;margin:4px 0 12px">${esc(d.kind)} · up ${uph}</div>
-    <div class="fgrid"><label class="lbl" style="margin:0">Ingested</label><div class="mono">${Number(d.ingested||0).toLocaleString()}</div></div>
-    <div class="fgrid"><label class="lbl" style="margin:0">Stored</label><div class="mono">${Number(d.inserted||0).toLocaleString()}</div></div>
-    <div class="fgrid"><label class="lbl" style="margin:0">Skipped</label><div class="mono">${Number(d.skipped||0).toLocaleString()}</div></div>
-    <div class="fgrid"><label class="lbl" style="margin:0">Queue</label><div class="mono">${d.queuePct||0}%</div></div></div>`;});
+  let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-bottom:14px">';
+  dps.forEach(d=>{ const up=d.uptime||0, uph=Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m'; const qc=d.queuePct>=85?'bad':d.queuePct>=60?'warn':'ok';
+    h+=`<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:700;color:var(--ink)"><i class="fas fa-network-wired" style="color:var(--pri);margin-right:6px"></i>${esc(d.name)}</div>${pill(d.status,'ok')}</div>
+    <div style="font-size:12px;color:var(--mut);margin:5px 0 12px">${esc(d.kind)} · up ${uph}</div>
+    <div class="fgrid" style="padding:8px 0"><label class="lbl">Ingested</label><div class="mono">${Number(d.ingested||0).toLocaleString()}</div></div>
+    <div class="fgrid" style="padding:8px 0"><label class="lbl">Stored</label><div class="mono">${Number(d.inserted||0).toLocaleString()}</div></div>
+    <div class="fgrid" style="padding:8px 0"><label class="lbl">Skipped</label><div class="mono">${Number(d.skipped||0).toLocaleString()}</div></div>
+    <div class="fgrid" style="padding:8px 0"><label class="lbl">Queue pressure</label><div>${pill((d.queuePct||0)+'%',qc)}</div></div></div>`;});
+  // forward-looking ghost card (multi-collector "per capacity") so a single DP isn't lopsided
+  h+=`<div class="card" style="padding:16px;border-style:dashed;background:#fafbfd;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:var(--mut);min-height:150px">
+    <i class="fas fa-circle-plus" style="font-size:26px;color:#c2ccd6;margin-bottom:10px"></i>
+    <div style="font-weight:600;color:var(--slate)">More collectors</div>
+    <div style="font-size:12px;max-width:220px;margin-top:4px;line-height:1.5">Multi-dataplane ready — attach additional collectors per capacity as ingest grows.</div></div>`;
   h+='</div>';
-  h+='<div style="font-size:12px;color:#9aa5b1;margin-bottom:14px"><i class="fas fa-circle-info"></i> A single in-process dataplane today; the model supports connecting multiple collectors per capacity.</div>';
   const sr=await api('/api/v1/system');
   if(sr.status===200){ const d=await sr.json(); const cpu=d.cpu||{},mem=d.memory||{},disk=d.disk||{},proc=d.process||{};
-    const g=(l,big,sub,p,c)=>`<div class="card" style="padding:16px"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${l}</div><div style="font-size:22px;font-weight:700;color:#2c3a47;margin-top:4px">${big}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div><div class="gauge"><div style="width:${p}%;background:${c}"></div></div></div>`;
-    h+='<div class="ch" style="border:0;padding:0 0 10px"><i class="fas fa-microchip" style="color:var(--pri)"></i><h2>Host resources</h2></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px">';
-    h+=g('CPU load',(cpu.load1||0).toFixed(2),(cpu.cores||0)+' cores · '+(cpu.loadPct||0)+'%',cpu.loadPct||0,'#0077b6');
-    h+=g('Memory',mem.human||'—',(mem.pct||0)+'% of '+(mem.totalHuman||'—'),mem.pct||0,'#2a9d8f');
-    h+=g('Disk',disk.human||'—',(disk.pct||0)+'% of '+(disk.totalHuman||'—'),disk.pct||0,'#e76f51');
-    h+=g('Go heap',proc.heapHuman||'—',(proc.goroutines||0)+' goroutines',0,'#00a3c4');
+    const g=(l,ic,big,sub,p,c)=>`<div class="card kpi" style="flex-direction:column;align-items:stretch"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div class="kl">${l}</div><div class="kv" style="font-size:23px">${big}</div><div class="ks">${sub}</div></div><div class="ki" style="background:${c}1a;color:${c}"><i class="fas ${ic}"></i></div></div>${p>=0?`<div class="gauge"><div style="width:${Math.min(p,100)}%;background:${c}"></div></div>`:''}</div>`;
+    h+='<div class="sect"><i class="fas fa-microchip"></i> Host resources</div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px">';
+    h+=g('CPU load','fa-microchip',(cpu.load1||0).toFixed(2),(cpu.cores||0)+' cores · '+(cpu.loadPct||0)+'%',cpu.loadPct||0,'#1366d6');
+    h+=g('Memory','fa-memory',mem.human||'—',(mem.pct||0)+'% of '+(mem.totalHuman||'—'),mem.pct||0,'#16a34a');
+    h+=g('Disk','fa-hard-drive',disk.human||'—',(disk.pct||0)+'% of '+(disk.totalHuman||'—'),disk.pct||0,'#e76f51');
+    h+=g('App memory','fa-layer-group',proc.heapHuman||'—','in-process heap',-1,'#0891b2');
     h+='</div>';
   }
   b.html(h);

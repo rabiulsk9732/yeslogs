@@ -79,7 +79,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 			qpct = 100
 		}
 		cards = append(cards,
-			ovCard{"Flows Ingested", group(st.Ingested), "decoded · since start", "fa-arrow-down-to-line", "#0077b6", 0},
+			ovCard{"Flows Ingested", group(st.Ingested), "decoded · since start", "fa-bolt", "#0077b6", 0},
 			ovCard{"Flows Stored Today", group(storedToday), "written to hot storage", "fa-database", "#2a9d8f", 0},
 			ovCard{"Flows Skipped", group(st.Skipped), "dropped by skip rules", "fa-filter-circle-xmark", "#7b8794", 0},
 			ovCard{"Active Dataplanes", fmt.Sprintf("%d", st.Collectors), "collectors connected", "fa-network-wired", "#00a3c4", 0},
@@ -92,7 +92,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		cards = append(cards,
 			ovCard{"Flows Stored Today", group(storedToday), "your ISP", "fa-database", "#2a9d8f", 0},
 			ovCard{"Active Exporters", fmt.Sprintf("%d", activeExporters), "your enabled devices", "fa-server", "#0077b6", 0},
-			ovCard{"Hot Storage Used", humanBytes(hotBytes), "your logged volume", "fa-hard-drive", "#e76f51", 0},
+			ovCard{"Logged Volume", humanBytes(hotBytes), "uncompressed traffic logged", "fa-wave-square", "#e76f51", 0},
 		)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cards": cards})

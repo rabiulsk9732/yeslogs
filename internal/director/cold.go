@@ -142,7 +142,7 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		ts = ts.In(istLoc)
 		out = append(out, natRecord{
 			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"),
-			Sub: fmt.Sprintf("DEV-%d", dev), PrivIP: sip, PrivPort: int(sp),
+			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip, PrivPort: int(sp),
 			PubIP: pip, PubPort: int(pp), Proto: protoName(pr),
 			Dest: fmt.Sprintf("%s:%d", dip, dp), Action: strings.ToUpper(ft),
 		})
