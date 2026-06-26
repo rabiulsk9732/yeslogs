@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-import json, subprocess, time, urllib.request, http.cookiejar
-BG="/opt/yeslogs/natflow-dataplane/bin/benchgen"
-TARGET="127.0.0.1:2055"; MET="http://127.0.0.1:9101/metrics"; API="http://127.0.0.1:8080"
+# Capacity sweep: writer-worker/batch ladder against a running collector.
+# Credentials come from the environment (never hard-code):
+#   ADMIN_EMAIL=admin@you.io ADMIN_PW=*** BENCH_API=http://127.0.0.1:8080 python3 scripts/capacity-test.py
+import json, os, subprocess, time, urllib.request, http.cookiejar
+BG=os.environ.get("BENCHGEN", "./bin/benchgen")
+TARGET=os.environ.get("BENCH_TARGET", "127.0.0.1:2055")
+MET=os.environ.get("BENCH_METRICS", "http://127.0.0.1:9101/metrics")
+API=os.environ.get("BENCH_API", "http://127.0.0.1:8080")
+ADMIN_EMAIL=os.environ.get("ADMIN_EMAIL", "admin@example.com")
+ADMIN_PW=os.environ.get("ADMIN_PW", "")
 cj=http.cookiejar.CookieJar(); op=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 def metric(k):
     for ln in op.open(MET).read().decode().splitlines():
@@ -9,7 +16,7 @@ def metric(k):
     return 0.0
 def login():
     r=op.open(urllib.request.Request(API+"/api/v1/login",
-        data=json.dumps({"email":"admin@sayra.io","password":"REDACTED-PW"}).encode(),
+        data=json.dumps({"email":ADMIN_EMAIL,"password":ADMIN_PW}).encode(),
         headers={"Content-Type":"application/json"})); return json.load(r)["csrf"]
 def get_dp(): return json.load(op.open(API+"/api/v1/settings"))["settings"]["dataplane"]
 def apply(csrf, dp, **kw):
