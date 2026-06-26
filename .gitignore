@@ -7,3 +7,11 @@ node_modules/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 tests/e2e/.last-run.json
+
+# ad-hoc screenshot/probe scripts (may embed live creds) — never commit
+tests/e2e/capture.js
+tests/e2e/cap2.js
+tests/e2e/shot.js
+tests/e2e/f.js
+tests/e2e/v.js
+tests/e2e/*.tmp.js
