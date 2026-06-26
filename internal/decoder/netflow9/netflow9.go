@@ -67,6 +67,13 @@ const (
 	fIPV6_DST_ADDR  = 28
 	fNAT_SRC_IPV4   = 225 // postNATSourceIPv4Address
 	fNAT_SRC_PORT   = 227 // postNAPTSourceTransportPort
+	// Absolute-time IEs (not sysUptime-relative). iptables/conntrack NAT-event
+	// exporters (e.g. ipt-netflow) timestamp records with these instead of
+	// FIRST/LAST_SWITCHED — without mapping them flow_start would be zero.
+	fFLOW_START_MS = 152 // flowStartMilliseconds (IPFIX)
+	fFLOW_END_MS   = 153 // flowEndMilliseconds (IPFIX)
+	fOBS_TIME_SEC  = 322 // observationTimeSeconds
+	fOBS_TIME_MS   = 323 // observationTimeMilliseconds
 )
 
 type field struct {
@@ -269,6 +276,26 @@ func applyField(f *decoder.Flow, typ uint16, v []byte, bootMS int64) {
 		f.NatPublicIP = cloneIP(v)
 	case fNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
+	case fFLOW_START_MS:
+		f.FlowStart = msToTime(int64(beUint(v)))
+	case fFLOW_END_MS:
+		f.FlowEnd = msToTime(int64(beUint(v)))
+	case fOBS_TIME_MS: // absolute ms since epoch (NAT events)
+		t := msToTime(int64(beUint(v)))
+		if f.FlowStart.IsZero() {
+			f.FlowStart = t
+		}
+		if f.FlowEnd.IsZero() {
+			f.FlowEnd = t
+		}
+	case fOBS_TIME_SEC: // absolute seconds since epoch
+		t := msToTime(int64(beUint(v)) * 1000)
+		if f.FlowStart.IsZero() {
+			f.FlowStart = t
+		}
+		if f.FlowEnd.IsZero() {
+			f.FlowEnd = t
+		}
 	}
 }
 

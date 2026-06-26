@@ -45,6 +45,17 @@ func New() *Normalizer { return &Normalizer{} }
 // Normalize maps a decoder.Flow to a FlowRecord, tagging it with flowType and
 // the supplied ISP/device identity.
 func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID uint32) FlowRecord {
+	// Fallback timestamp: some exporters (e.g. iptables/conntrack NAT-event NetFlow)
+	// carry the time in an IE the decoder may not map. Without a valid time the row
+	// would land in an ancient partition and be silently dropped by the TTL, so we
+	// fall back to the collector's receive time.
+	start, end := f.FlowStart, f.FlowEnd
+	if start.IsZero() {
+		start = time.Now()
+	}
+	if end.IsZero() {
+		end = start
+	}
 	return FlowRecord{
 		ISPID:         ispID,
 		DeviceID:      deviceID,
@@ -57,8 +68,8 @@ func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID 
 		Protocol:      f.Protocol,
 		Bytes:         f.Bytes,
 		Packets:       f.Packets,
-		FlowStart:     f.FlowStart,
-		FlowEnd:       f.FlowEnd,
+		FlowStart:     start,
+		FlowEnd:       end,
 		FlowType:      flowType,
 		ExporterIP:    f.ExporterIP,
 	}
