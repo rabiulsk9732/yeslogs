@@ -159,30 +159,42 @@ func quote(s string) string {
 	return "'" + s + "'"
 }
 
-// searchAll runs the hot search and, when the query window overlaps archived
-// days, also the cold (S3) search for exactly those days, then merges
-// newest-first up to limit. The bool reports whether cold storage was consulted.
-func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit int) ([]natRecord, bool, error) {
-	hot, err := s.flows.Search(ctx, f, limit)
-	if err != nil {
-		return nil, false, err
-	}
-	cold := s.coldInfo()
+// searchAll returns ONE page (limit/offset) of results plus the total match count,
+// so the client only ever holds a single page even over millions of rows. When
+// the query window overlaps archived days it also consults the S3 cold archive
+// (bounded, paginated in-memory); otherwise it is a pure server-side hot
+// LIMIT/OFFSET query. The bool reports whether cold storage was consulted.
+func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset int) (rows []natRecord, total uint64, cold bool, err error) {
+	cs := s.coldInfo()
 	days := s.archivedDaysInRange(ctx, f)
-	if !cold.enabled() || len(days) == 0 {
-		return hot, false, nil
+	if !cs.enabled() || len(days) == 0 {
+		// Hot-only: true server-side pagination — only `limit` rows leave the DB.
+		total = s.flows.SearchCount(ctx, f)
+		rows, err = s.flows.Search(ctx, f, limit, offset)
+		return rows, total, false, err
 	}
-	cr, cerr := s.flows.SearchCold(ctx, f, limit, cold, days)
+	// Cold overlap: merge hot + the relevant archived days (each bounded by the
+	// search cap), then paginate the merged set in memory (server-side, bounded).
+	hot, herr := s.flows.Search(ctx, f, searchLimit, 0)
+	if herr != nil {
+		return nil, 0, false, herr
+	}
+	cr, cerr := s.flows.SearchCold(ctx, f, searchLimit, cs, days)
 	if cerr != nil {
-		s.log.Error("cold search failed; returning hot results only", "error", cerr)
-		return hot, true, nil // degrade gracefully — never fail a search because S3 is slow/down
+		s.log.Error("cold search failed; returning hot page only", "error", cerr)
+		cr = nil
 	}
 	merged := append(hot, cr...)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Time > merged[j].Time })
-	if len(merged) > limit {
-		merged = merged[:limit]
+	total = uint64(len(merged))
+	if offset > len(merged) {
+		offset = len(merged)
 	}
-	return merged, true, nil
+	end := offset + limit
+	if end > len(merged) {
+		end = len(merged)
+	}
+	return merged[offset:end], total, true, nil
 }
 
 // archivedDaysInRange returns archived days (YYYY-MM-DD) overlapping the query's

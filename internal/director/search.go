@@ -65,10 +65,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Proto, From, To, Reason     string
 		DeviceID                    uint32
 		ISPID                       uint32
+		Limit, Offset               int
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 		return
+	}
+	limit := body.Limit
+	if limit < 1 || limit > 200 { // page size: 1..200 rows, default 50
+		limit = 50
+	}
+	offset := body.Offset
+	if offset < 0 {
+		offset = 0
 	}
 	scope, err := id.scopeISP(body.ISPID)
 	if err != nil {
@@ -86,19 +95,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second) // cold (S3) search can be slower
 	defer cancel()
-	rows, cold, err := s.searchAll(ctx, f, searchLimit)
+	rows, total, cold, err := s.searchAll(ctx, f, limit, offset)
 	if err != nil {
 		s.log.Error("flow search", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"})
 		return
 	}
 	s.nameDevices(ctx, scope, rows)
-	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
-		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
-		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
-		ResultCount: len(rows), CaseRef: strings.TrimSpace(body.Reason),
+	if offset == 0 { // audit the query once (on the first page), not every page-flip
+		_, _ = s.store.LogQuery(ctx, store.QueryAudit{
+			UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
+			QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
+			ResultCount: int(total), CaseRef: strings.TrimSpace(body.Reason),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"records": rows, "count": len(rows), "total": total, "offset": offset, "limit": limit,
+		"capped": total >= countCap, "cold": cold,
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"records": rows, "count": len(rows), "truncated": len(rows) == searchLimit, "cold": cold})
 }
 
 // handleReport re-runs a search and streams it as CSV/PDF/XLSX (read-only GET),
@@ -140,7 +154,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second) // reports may span cold (S3) days
 	defer cancel()
-	rows, _, err := s.searchAll(ctx, f, searchLimit)
+	rows, _, _, err := s.searchAll(ctx, f, searchLimit, 0)
 	if err != nil {
 		http.Error(w, "search failed", http.StatusInternalServerError)
 		return

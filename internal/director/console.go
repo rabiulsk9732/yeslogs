@@ -125,8 +125,9 @@ func (r *FlowReader) ConsoleData(ctx context.Context, ispID uint32, days int) co
 		{Label: "Avg Session Duration", Value: dur(avgDur), Pct: "48%", Note: "flow_end − flow_start", Icon: "fa-clock", Color: "#e76f51"},
 	}
 
-	// records (latest 200)
-	d.Records = r.records(ctx, ispID, days, 200)
+	// records (latest 50 — a light dashboard snippet; the Logs page is the
+	// server-paginated explorer for large result sets)
+	d.Records = r.records(ctx, ispID, days, 50)
 
 	// hourly (24)
 	d.Hourly = r.hourly(ctx, ispID)
@@ -216,8 +217,8 @@ func (f SearchFilter) HasSelector() bool {
 	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0
 }
 
-// Search returns flow-log records matching the filter (tenant-scoped by ISPID).
-func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit int) ([]natRecord, error) {
+// hotWhere builds the WHERE clause + bound args for the hot flow_logs table.
+func hotWhere(f SearchFilter) (string, []any, bool) {
 	var conds []string
 	var args []any
 	add := func(c string, a any) { conds = append(conds, c); args = append(args, a) }
@@ -249,11 +250,38 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit int) ([]n
 		add("isp_id = ?", f.ISPID)
 	}
 	if len(conds) == 0 {
+		return "", nil, false
+	}
+	return strings.Join(conds, " AND "), args, true
+}
+
+// countCap bounds how far SearchCount counts so a broad filter over millions of
+// rows can't turn the total into an expensive full scan; beyond it we report N+.
+const countCap = 100000
+
+// SearchCount returns the number of hot rows matching f, capped at countCap
+// (a returned value == countCap means "countCap or more").
+func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) uint64 {
+	where, args, ok := hotWhere(f)
+	if !ok {
+		return 0
+	}
+	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT %d)`, r.db, where, countCap)
+	var n uint64
+	_ = r.conn.QueryRow(ctx, q, args...).Scan(&n)
+	return n
+}
+
+// Search returns one page of flow-log records matching the filter (tenant-scoped
+// by ISPID), ordered newest-first, using LIMIT/OFFSET server-side pagination so
+// the client only ever holds a single page.
+func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset int) ([]natRecord, error) {
+	where, args, ok := hotWhere(f)
+	if !ok {
 		return nil, fmt.Errorf("no filter")
 	}
-	where := strings.Join(conds, " AND ")
 	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, dst_port, protocol, flow_type
-		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
+		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d OFFSET %d`, r.db, where, limit, offset)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err

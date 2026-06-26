@@ -88,6 +88,10 @@ tbody tr{transition:background .1s}tbody tr:hover{background:#f7faff}tbody tr:la
 .chk input{width:16px;height:16px;accent-color:var(--pri);cursor:pointer}
 .sect{display:flex;align-items:center;gap:10px;margin:2px 0 14px;font-size:14.5px;font-weight:700;color:var(--ink);letter-spacing:-.01em}
 .sect i{color:var(--pri);font-size:15px}
+.tbl-compact td{padding:8px 12px;font-size:12.5px}.tbl-compact th{padding:8px 12px}
+.pgb{min-width:34px;height:32px;padding:0 11px;border:1px solid var(--bd);border-radius:7px;background:#fff;color:var(--pri);cursor:pointer;font-size:13px;font-weight:600;transition:.12s}
+.pgb:hover:not(:disabled){background:var(--info-bg);border-color:#c8d2de}
+.pgb:disabled{color:var(--mut);cursor:not-allowed;opacity:.55}
 </style>
 </head>
 <body>
@@ -379,36 +383,59 @@ async function pgLogs(b){
     <button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Search</button>
   </div><div style="padding:0 18px 14px;font-size:12px;color:var(--mut)">Provide at least one of: Public IP, Private IP, Destination IP, or Device.</div><div id="s-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>
   <div id="s-results"><div class="card"><div class="empty"><div class="ei"><i class="fas fa-magnifying-glass"></i></div><div class="et">Run a search to see flow logs</div><div class="ed">Enter a Public IP, Private IP, Destination IP or pick a Device above, optionally narrow by time, then hit Search. Results across hot + S3 cold storage appear here.</div></div></div></div>`);
-  $('#s-run').on('click', runLogs);
-  $('#s-pub,#s-priv,#s-dst').on('keydown',e=>{if(e.key==='Enter')runLogs();});
+  $('#s-run').on('click', ()=>runLogs(true));
+  $('#s-pub,#s-priv,#s-dst,#s-port').on('keydown',e=>{if(e.key==='Enter')runLogs(true);});
 }
 function logBody(){ return {PublicIP:$('#s-pub').val().trim(),PrivateIP:$('#s-priv').val().trim(),DestIP:$('#s-dst').val().trim(),PublicPort:+($('#s-port').val()||0),Proto:$('#s-proto').val(),DeviceID:+($('#s-dev').val()||0),ISPID:+($('#s-isp').length?$('#s-isp').val():0),From:$('#s-from').val(),To:$('#s-to').val(),Reason:$('#s-reason').val()}; }
-async function runLogs(){
-  const body=logBody();
-  if(!body.PublicIP&&!body.PrivateIP&&!body.DestIP&&!body.DeviceID){ $('#s-msg').text('Provide a Public IP, Private IP, Destination IP, or Device'); return; }
-  $('#s-msg').text(''); $('#s-results').html('<div class="card" style="padding:24px;color:var(--mut)">Searching…</div>');
-  const r=await apiJSON('/api/v1/search','POST',body);
+// runLogs(true)=new search (reset to page 1); runLogs(false)=page/size change (keep filter).
+async function runLogs(reset){
+  if(!S.lq) S.lq={pageSize:50,offset:0};
+  if(reset!==false){ S.lq.offset=0; S.lq.body=logBody(); }
+  const b=S.lq.body;
+  if(!b.PublicIP&&!b.PrivateIP&&!b.DestIP&&!b.DeviceID){ $('#s-msg').text('Provide a Public IP, Private IP, Destination IP, or Device'); return; }
+  $('#s-msg').text(''); $('#s-results').html('<div class="card" style="padding:26px;color:var(--mut)"><i class="fas fa-spinner fa-spin"></i> Searching…</div>');
+  const req=Object.assign({},b,{Limit:S.lq.pageSize,Offset:S.lq.offset});
+  const r=await apiJSON('/api/v1/search','POST',req);
   if(r.status!==200){ const e=await r.json().catch(()=>({})); $('#s-results').html(''); $('#s-msg').text(e.error||'search failed'); return; }
-  const d=await r.json(); renderLogResults(d.records||[], d.count, d.truncated, body);
+  const d=await r.json();
+  S.lq.total=d.total||0; S.lq.capped=!!d.capped; S.lq.cold=!!d.cold;
+  renderLogResults(d.records||[], b);
 }
 function logQstr(body){ const p=new URLSearchParams(); if(body.PublicIP)p.set('ip',body.PublicIP); if(body.PrivateIP)p.set('priv',body.PrivateIP); if(body.DestIP)p.set('dst',body.DestIP); if(body.PublicPort)p.set('port',body.PublicPort); if(body.Proto&&body.Proto!=='Any')p.set('proto',body.Proto); if(body.DeviceID)p.set('device',body.DeviceID); if(body.ISPID)p.set('isp',body.ISPID); if(body.From)p.set('from',body.From); if(body.To)p.set('to',body.To); if(body.Reason)p.set('reason',body.Reason); p.set('csrf',S.csrf); return p.toString(); }
-function renderLogResults(rows,count,truncated,body){
-  const qs=logQstr(body);
-  let h=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px"><i class="fas fa-table-list" style="color:var(--pri)"></i><h2>${count} record${count===1?'':'s'}${truncated?' (capped at 5000)':''}</h2></div>
-    <div style="display:flex;gap:8px"><a class="btn out" style="height:32px" href="/api/v1/report?format=csv&${qs}"><i class="fas fa-file-csv"></i> CSV</a>
-    <a class="btn out" style="height:32px" href="/api/v1/report?format=xlsx&${qs}"><i class="fas fa-file-excel"></i> Excel</a>
-    <a class="btn out" style="height:32px" href="/api/v1/report?format=pdf&${qs}"><i class="fas fa-file-pdf"></i> PDF</a></div></div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Private (NAT)</th><th>Public (NAT)</th><th>Proto</th><th>Destination</th><th>Export</th></tr></thead><tbody>`;
+function renderLogResults(rows, body){
+  const qs=logQstr(body), lq=S.lq;
+  const total=lq.total, ps=lq.pageSize, off=lq.offset;
+  const totDisp=(lq.capped?total.toLocaleString()+'+':total.toLocaleString());
+  const a=total?off+1:0, b2=off+rows.length, pages=Math.max(1,Math.ceil(total/ps)), cur=Math.floor(off/ps)+1;
+  const coldPill = lq.cold?pill('hot + S3 cold','info'):'';
+  let h=`<div class="card"><div class="ch" style="justify-content:space-between;flex-wrap:wrap;gap:10px"><div style="display:flex;align-items:center;gap:10px"><span class="ci"><i class="fas fa-table-list"></i></span><h2>${totDisp} record${total===1?'':'s'}</h2>${coldPill}</div>
+    <div style="display:flex;gap:8px"><a class="btn out sm" href="/api/v1/report?format=csv&${qs}"><i class="fas fa-file-csv"></i> CSV</a>
+    <a class="btn out sm" href="/api/v1/report?format=xlsx&${qs}"><i class="fas fa-file-excel"></i> Excel</a>
+    <a class="btn out sm" href="/api/v1/report?format=pdf&${qs}"><i class="fas fa-file-pdf"></i> PDF</a></div></div>
+    <div style="overflow-x:auto"><table class="tbl-compact"><thead><tr><th>Timestamp</th><th>Device</th><th>Private (NAT)</th><th>Public (NAT)</th><th>Proto</th><th>Destination</th><th>Export</th></tr></thead><tbody>`;
   if(!rows.length) h+=emptyRow(7,'fa-magnifying-glass','No matching flow logs','Nothing matched these filters and time window. Widen the time range, or check the IP/device — months-old searches also include the S3 cold archive.');
   rows.forEach(r=>{
-    h+=`<tr><td class="mono"><span style="color:var(--mut);font-size:11px">${esc(r.date)}</span><br>${esc(r.clock)}</td>
+    h+=`<tr><td class="mono"><span style="color:var(--mut);font-size:11px">${esc(r.date)}</span> ${esc(r.clock)}</td>
     <td class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</td>
     <td class="mono" style="font-weight:600;color:var(--ink)">${esc(r.privIp)}:${r.privPort}</td>
     <td class="mono" style="color:var(--ink2)">${esc(r.pubIp)}:${r.pubPort}</td>
     <td>${protoPill(r.proto)}</td>
     <td class="mono" style="color:var(--ink2)">${esc(r.dest)}</td><td>${typePill(r.action)}</td></tr>`;});
-  h+='</tbody></table></div></div>';
+  h+='</tbody></table></div>';
+  // server-side pagination footer
+  const pbtn=(off2,lbl,dis,title)=>`<button class="pgb" data-off="${off2}" title="${title||''}" ${dis?'disabled':''}>${lbl}</button>`;
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px;flex-wrap:wrap;gap:12px;border-top:1px solid var(--bd2)">
+    <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--slate)">Rows per page
+      <select id="lq-size" class="inp" style="height:32px;width:auto;padding:0 28px 0 10px">${[25,50,100,200].map(n=>`<option ${n===ps?'selected':''}>${n}</option>`).join('')}</select>
+      <span style="margin-left:6px">Showing <b style="color:var(--ink)">${a.toLocaleString()}–${b2.toLocaleString()}</b> of <b style="color:var(--ink)">${totDisp}</b></span></div>
+    <div style="display:flex;align-items:center;gap:6px">
+      ${pbtn(0,'«',off===0,'First')}${pbtn(off-ps,'‹ Prev',off===0)}
+      <span style="font-size:13px;color:var(--slate);padding:0 6px">Page <b style="color:var(--ink)">${cur.toLocaleString()}</b> of ${pages.toLocaleString()}${lq.capped?'+':''}</span>
+      ${pbtn(off+ps,'Next ›',off+ps>=total)}${pbtn((pages-1)*ps,'»',off+ps>=total||lq.capped,'Last')}</div>
+  </div></div>`;
   $('#s-results').html(h);
+  $('.pgb').on('click',function(){ if($(this).prop('disabled'))return; S.lq.offset=Math.max(0,+$(this).data('off')); runLogs(false); });
+  $('#lq-size').on('change',function(){ S.lq.pageSize=+this.value; S.lq.offset=0; runLogs(false); });
 }
 
 // ==================== REPORTS ====================
