@@ -280,12 +280,6 @@ function renderTable(){
   pg+=`<button class="pgbtn" data-p="${S.page+1}" style="min-width:34px;height:34px;border:1px solid #dee2e6;border-radius:5px;background:#fff;color:var(--pri);cursor:pointer"><i class="fas fa-angle-right"></i></button>`;
   $('#pager').html(pg).find('.pgbtn').on('click',function(){const p=+$(this).data('p'); if(p>=1&&p<=pages){S.page=p;renderTable();}});
 }
-function exportCsv(){
-  const rows=computeRows(); const head=['timestamp','subscriber','private','public','proto','destination','event'];
-  const lines=[head.join(',')].concat(rows.map(r=>[r.time,r.sub,r.privIp+':'+r.privPort,r.pubIp+':'+r.pubPort,r.proto,r.dest,r.action].join(',')));
-  const blob=new Blob([lines.join('\n')],{type:'text/csv'}); const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download='ipdr-records.csv'; a.click();
-}
 
 // ==================== LOGS SEARCH ====================
 async function pgLogs(b){

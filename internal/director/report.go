@@ -24,7 +24,7 @@ type reportMeta struct {
 	Truncated   bool
 }
 
-var reportCols = []string{"timestamp", "subscriber", "private_cgnat", "public_endpoint", "protocol", "destination", "event"}
+var reportCols = []string{"timestamp", "device", "private_nat", "public_nat", "protocol", "destination", "type"}
 
 func rowCells(r natRecord) []string {
 	return []string{
@@ -120,7 +120,7 @@ func writePDF(w io.Writer, m reportMeta, rows []natRecord) error {
 	pdf.SetFont("Helvetica", "B", 8)
 	pdf.SetFillColor(0, 119, 182)
 	pdf.SetTextColor(255, 255, 255)
-	heads := []string{"Timestamp", "Subscriber", "Private (CGNAT)", "Public Endpoint", "Proto", "Destination", "Event"}
+	heads := []string{"Timestamp", "Device", "Private (NAT)", "Public (NAT)", "Proto", "Destination", "Type"}
 	for i, h := range heads {
 		pdf.CellFormat(widths[i], 6, h, "1", 0, "L", true, 0, "")
 	}
@@ -237,7 +237,7 @@ const relsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 
 const workbookXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 	`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-	`<sheets><sheet name="IPDR" sheetId="1" r:id="rId1"/></sheets></workbook>`
+	`<sheets><sheet name="FlowLogs" sheetId="1" r:id="rId1"/></sheets></workbook>`
 
 const workbookRelsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
 	`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
