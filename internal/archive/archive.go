@@ -4,14 +4,10 @@
 package archive
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/csv"
 	"fmt"
 	"log/slog"
-	"net"
-	"os"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -20,11 +16,9 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 )
 
-var csvHeader = []string{
-	"isp_id", "device_id", "src_ip", "src_port", "dst_ip", "dst_port",
-	"nat_public_ip", "nat_public_port", "protocol", "bytes", "packets",
-	"flow_start", "flow_end", "flow_type", "exporter_ip",
-}
+// chLit escapes a value for inlining as a ClickHouse string literal. Used only
+// for server-side config (S3 URL + credentials), not for user input.
+func chLit(s string) string { return strings.ReplaceAll(s, "'", "\\'") }
 
 // Exporter reads from ClickHouse and writes day partitions to S3.
 type Exporter struct {
@@ -62,101 +56,50 @@ func (e *Exporter) ExportDay(ctx context.Context, ispID uint32, day time.Time, f
 }
 
 func (e *Exporter) exportDay(ctx context.Context, ispID uint32, day time.Time, format string) (Result, error) {
-	if format == "parquet" {
-		e.log.Warn("parquet export not implemented in v0.3.1; writing CSV.gz instead")
-	}
 	dateStr := day.UTC().Format("2006-01-02")
 
-	tmp, err := os.CreateTemp("", "natflow-archive-*.csv.gz")
-	if err != nil {
-		return Result{}, fmt.Errorf("temp file: %w", err)
+	// Count first — an empty day writes no object.
+	var cu uint64
+	cq := fmt.Sprintf(`SELECT count() FROM %s.%s WHERE event_date = ? AND isp_id = ?`, e.db, e.table)
+	if err := e.conn.QueryRow(ctx, cq, dateStr, ispID).Scan(&cu); err != nil {
+		return Result{}, fmt.Errorf("count: %w", err)
 	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
+	if cu == 0 {
+		return Result{}, nil
+	}
+	count := int64(cu)
 
-	gz := gzip.NewWriter(tmp)
-	cw := csv.NewWriter(gz)
-	if err := cw.Write(csvHeader); err != nil {
-		return Result{}, err
+	chFormat, ext := "Parquet", "parquet"
+	if format == "csvgz" || format == "csv" {
+		chFormat, ext = "CSVWithNames", "csv.gz"
 	}
+	rel := s3.ArchiveRel(ispID, day, ext)
+	url := e.s3.ObjectURL(rel)
 
-	q := fmt.Sprintf(`SELECT isp_id, device_id, src_ip, src_port, dst_ip, dst_port,
-		nat_public_ip, nat_public_port, protocol, bytes, packets,
-		flow_start, flow_end, flow_type, exporter_ip
-		FROM %s.%s WHERE event_date = ? AND isp_id = ?`, e.db, e.table)
-	rows, err := e.conn.Query(ctx, q, dateStr, ispID)
-	if err != nil {
-		return Result{}, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	var (
-		count                      int64
-		dbISP, devID               uint32
-		srcIP, dstIP, natIP, expIP net.IP
-		srcPort, dstPort, natPort  uint16
-		proto                      uint8
-		nbytes, npkts              uint64
-		fstart, fend               time.Time
-		ftype                      string
-	)
-	for rows.Next() {
-		if err := rows.Scan(&dbISP, &devID, &srcIP, &srcPort, &dstIP, &dstPort,
-			&natIP, &natPort, &proto, &nbytes, &npkts, &fstart, &fend, &ftype, &expIP); err != nil {
-			return Result{}, fmt.Errorf("scan: %w", err)
-		}
-		rec := []string{
-			strconv.FormatUint(uint64(dbISP), 10), strconv.FormatUint(uint64(devID), 10),
-			srcIP.String(), strconv.FormatUint(uint64(srcPort), 10),
-			dstIP.String(), strconv.FormatUint(uint64(dstPort), 10),
-			natIP.String(), strconv.FormatUint(uint64(natPort), 10),
-			strconv.FormatUint(uint64(proto), 10),
-			strconv.FormatUint(nbytes, 10), strconv.FormatUint(npkts, 10),
-			fstart.UTC().Format(time.RFC3339), fend.UTC().Format(time.RFC3339),
-			ftype, expIP.String(),
-		}
-		if err := cw.Write(rec); err != nil {
-			return Result{}, err
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		return Result{}, fmt.Errorf("rows: %w", err)
-	}
-	cw.Flush()
-	if err := cw.Error(); err != nil {
-		return Result{}, err
-	}
-	if err := gz.Close(); err != nil {
-		return Result{}, err
-	}
-	if count == 0 {
-		return Result{}, nil // nothing to archive for this day; don't upload an empty object
-	}
-	if err := tmp.Sync(); err != nil {
-		return Result{}, err
-	}
-
-	info, err := tmp.Stat()
-	if err != nil {
-		return Result{}, err
-	}
-	size := info.Size()
-	if _, err := tmp.Seek(0, 0); err != nil {
-		return Result{}, err
-	}
-
-	rel := s3.ArchiveRel(ispID, day, "csv.gz")
+	// ClickHouse streams the partition straight to S3 (no Go-side buffering /
+	// temp file) — scales to very large days. IPs as dotted strings, times as
+	// native DateTime. event_date/isp_id stay bound params; only server config
+	// (URL + credentials) is interpolated.
 	start := time.Now()
-	key, err := e.s3.Upload(ctx, rel, tmp, size, "application/gzip")
-	if err != nil {
-		return Result{}, err
+	ins := fmt.Sprintf(`INSERT INTO FUNCTION s3('%s','%s','%s','%s')
+		SELECT isp_id, device_id,
+			IPv4NumToString(src_ip) AS src_ip, src_port,
+			IPv4NumToString(dst_ip) AS dst_ip, dst_port,
+			IPv4NumToString(nat_public_ip) AS nat_public_ip, nat_public_port,
+			protocol, bytes, packets, flow_start, flow_end, flow_type,
+			IPv4NumToString(exporter_ip) AS exporter_ip
+		FROM %s.%s WHERE event_date = ? AND isp_id = ?`,
+		chLit(url), chLit(e.s3.AccessKey()), chLit(e.s3.SecretKey()), chFormat, e.db, e.table)
+	if err := e.conn.Exec(ctx, ins, dateStr, ispID); err != nil {
+		return Result{}, fmt.Errorf("export to s3: %w", err)
 	}
+	size, _ := e.s3.Stat(ctx, rel)
+	key := e.s3.Key(rel)
 	if e.metrics != nil {
 		e.metrics.ArchiveUploadLatency.Observe(float64(time.Since(start).Milliseconds()))
 		e.metrics.ArchiveRows.Add(float64(count))
 		e.metrics.ArchiveBytes.Add(float64(size))
 	}
-	e.log.Info("archived day", "date", dateStr, "isp_id", ispID, "rows", count, "bytes", size, "key", key)
+	e.log.Info("archived day", "date", dateStr, "isp_id", ispID, "rows", count, "bytes", size, "key", key, "format", chFormat)
 	return Result{Rows: count, Bytes: size, Key: key}, nil
 }

@@ -71,6 +71,9 @@ func (f *fakePutter) BucketExists(context.Context, string) (bool, error) { retur
 func (f *fakePutter) MakeBucket(context.Context, string, minio.MakeBucketOptions) error {
 	return nil
 }
+func (f *fakePutter) StatObject(context.Context, string, string, minio.StatObjectOptions) (minio.ObjectInfo, error) {
+	return minio.ObjectInfo{Size: f.size}, nil
+}
 
 func TestUploadKeyConstruction(t *testing.T) {
 	fp := &fakePutter{}

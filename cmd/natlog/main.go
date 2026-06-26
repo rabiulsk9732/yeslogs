@@ -154,9 +154,9 @@ func run() (err error) {
 	if retDays <= 0 {
 		retDays = 180
 	}
-	csvOr := func(s string) string {
+	fmtOr := func(s string) string {
 		if s == "" {
-			return "csvgz"
+			return "parquet" // columnar default: smaller + fast cold-search pushdown
 		}
 		return s
 	}
@@ -172,7 +172,7 @@ func run() (err error) {
 		Retention: director.RetentionSettings{Days: retDays},
 		S3: director.S3Settings{
 			Enabled: cfg.S3.Bucket != "", Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket,
-			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, PathPrefix: cfg.S3.PathPrefix, ExportFormat: csvOr(cfg.S3.ExportFormat),
+			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, PathPrefix: cfg.S3.PathPrefix, ExportFormat: fmtOr(cfg.S3.ExportFormat),
 		},
 	}
 	dirSrv.InitSettings(ctxBg, defaults)
@@ -222,9 +222,10 @@ func run() (err error) {
 						log.Warn("S3 archive: could not ensure bucket (uploads may fail)", "bucket", set.S3.Bucket, "error", eb)
 					}
 					ebc()
-					dirSrv.SetArchive(archive.New(aconn, s3c, cfg.ClickHouse.Database, "flow_logs", m, log), set.S3.Bucket, csvOr(set.S3.ExportFormat))
+					dirSrv.SetArchive(archive.New(aconn, s3c, cfg.ClickHouse.Database, "flow_logs", m, log), set.S3.Bucket, fmtOr(set.S3.ExportFormat))
 					dirSrv.SetColdSource(director.ColdS3{Endpoint: set.S3.Endpoint, Bucket: set.S3.Bucket,
-						Prefix: set.S3.PathPrefix, AccessKey: set.S3.AccessKey, SecretKey: set.S3.SecretKey, Region: set.S3.Region})
+						Prefix: set.S3.PathPrefix, AccessKey: set.S3.AccessKey, SecretKey: set.S3.SecretKey,
+						Region: set.S3.Region, Format: fmtOr(set.S3.ExportFormat)})
 					log.Info("S3 cold-archive enabled", "bucket", set.S3.Bucket)
 				}
 			} else {

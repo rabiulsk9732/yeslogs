@@ -17,33 +17,69 @@ type ColdS3 struct {
 	AccessKey string
 	SecretKey string
 	Region    string
+	Format    string // "parquet" (default) or "csvgz" — must match the archive format
 }
 
 func (c ColdS3) enabled() bool { return c.Endpoint != "" && c.Bucket != "" }
 
-// coldSchema mirrors the archived CSV columns written by archive.ExportDay (IPs
-// and timestamps are stored as strings in the CSV).
+// chFormat maps the configured archive format to the ClickHouse format name + the
+// object extension used in the S3 key.
+func (c ColdS3) chFormat() (name, ext string) {
+	if c.Format == "csvgz" || c.Format == "csv" {
+		return "CSVWithNames", "csv.gz"
+	}
+	return "Parquet", "parquet"
+}
+
+// coldSchema describes the archived CSV columns (only needed for CSVWithNames;
+// Parquet carries its own schema). Matches archive.ExportDay output.
 const coldSchema = "isp_id UInt32, device_id UInt32, src_ip String, src_port UInt16, " +
 	"dst_ip String, dst_port UInt16, nat_public_ip String, nat_public_port UInt16, " +
 	"protocol UInt8, bytes UInt64, packets UInt64, flow_start String, flow_end String, " +
 	"flow_type String, exporter_ip String"
 
-// coldURL builds the s3() glob for the archived objects in scope. ISP-scoped
-// queries only read that tenant's prefix; a director (ispID 0) reads all.
-func (c ColdS3) url(ispID uint32) string {
+// urlForDays builds an s3() path that reads ONLY the given archived days (date
+// pruning) instead of globbing the whole bucket. ISP 0 (director) reads all ISPs.
+func (c ColdS3) urlForDays(ispID uint32, days []string) string {
 	parts := []string{strings.TrimRight(c.Endpoint, "/"), c.Bucket}
 	if p := strings.Trim(c.Prefix, "/"); p != "" {
 		parts = append(parts, p)
 	}
+	base := strings.Join(parts, "/")
+	isp := "isp_id=*"
 	if ispID != 0 {
-		parts = append(parts, fmt.Sprintf("isp_id=%d", ispID))
+		isp = fmt.Sprintf("isp_id=%d", ispID)
 	}
-	return strings.Join(parts, "/") + "/**/*.csv.gz"
+	_, ext := c.chFormat()
+	var segs []string
+	for _, d := range days {
+		t, err := time.Parse("2006-01-02", d)
+		if err != nil {
+			continue
+		}
+		segs = append(segs, fmt.Sprintf("year=%04d/month=%02d/day=%02d/part-000.%s", t.Year(), int(t.Month()), t.Day(), ext))
+	}
+	switch len(segs) {
+	case 0:
+		return base + "/" + isp + "/**/*." + ext // fallback (shouldn't happen)
+	case 1:
+		return base + "/" + isp + "/" + segs[0]
+	default:
+		return base + "/" + isp + "/{" + strings.Join(segs, ",") + "}"
+	}
 }
 
-// SearchCold runs the same filter against the archived CSVs in S3 via the s3()
-// table function. Returns natRecords identical in shape to the hot Search.
-func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, c ColdS3) ([]natRecord, error) {
+// SearchCold reads the given archived days back from S3 via the s3() table
+// function, applying the same filter. Returns natRecords identical to hot Search.
+func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, c ColdS3, days []string) ([]natRecord, error) {
+	name, _ := c.chFormat()
+	parquet := name == "Parquet"
+	// flow_start is native DateTime in Parquet; a string in CSV.
+	tsExpr := "flow_start"
+	if !parquet {
+		tsExpr = "parseDateTimeBestEffortOrNull(flow_start)"
+	}
+
 	var conds []string
 	var args []any
 	add := func(cond string, a any) { conds = append(conds, cond); args = append(args, a) }
@@ -66,10 +102,10 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		add("device_id = ?", f.DeviceID)
 	}
 	if !f.From.IsZero() {
-		add("parseDateTimeBestEffortOrNull(flow_start) >= ?", f.From.UTC())
+		add(tsExpr+" >= ?", f.From.UTC())
 	}
 	if !f.To.IsZero() {
-		add("parseDateTimeBestEffortOrNull(flow_start) <= ?", f.To.UTC())
+		add(tsExpr+" <= ?", f.To.UTC())
 	}
 	if f.ISPID != 0 {
 		add("isp_id = ?", f.ISPID)
@@ -77,14 +113,17 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	if len(conds) == 0 {
 		return nil, fmt.Errorf("no filter")
 	}
-	// The s3() endpoint + credentials are server config (not user input), so they
-	// are interpolated; all filter values remain bound parameters.
-	src := fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)",
-		quote(c.url(f.ISPID)), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
-	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port,
-		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s
-		ORDER BY parseDateTimeBestEffortOrNull(flow_start) DESC LIMIT %d`,
-		src, strings.Join(conds, " AND "), limit)
+
+	url := c.urlForDays(f.ISPID, days)
+	var src string
+	if parquet {
+		src = fmt.Sprintf("s3(%s, %s, %s, 'Parquet')", quote(url), quote(c.AccessKey), quote(c.SecretKey))
+	} else {
+		src = fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
+	}
+	q := fmt.Sprintf(`SELECT %s AS ts, device_id, src_ip, src_port, nat_public_ip, nat_public_port,
+		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT %d`,
+		tsExpr, src, strings.Join(conds, " AND "), limit)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -92,14 +131,14 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	defer rs.Close()
 	out := make([]natRecord, 0, 64)
 	for rs.Next() {
-		var fstart, sip, pip, dip, ft string
+		var ts time.Time
+		var sip, pip, dip, ft string
 		var dev uint32
 		var sp, pp, dp uint16
 		var pr uint8
-		if err := rs.Scan(&fstart, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft); err != nil {
+		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft); err != nil {
 			return out, err
 		}
-		ts, _ := time.Parse(time.RFC3339, fstart)
 		ts = ts.In(istLoc)
 		out = append(out, natRecord{
 			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"),
@@ -114,19 +153,20 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 // quote single-quotes a literal for inlining into a ClickHouse query.
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "\\'") + "'" }
 
-// searchAll runs the hot search and, when the query window reaches into archived
-// days, also the cold (S3) search, then merges newest-first up to limit. The
-// bool reports whether cold storage was consulted.
+// searchAll runs the hot search and, when the query window overlaps archived
+// days, also the cold (S3) search for exactly those days, then merges
+// newest-first up to limit. The bool reports whether cold storage was consulted.
 func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit int) ([]natRecord, bool, error) {
 	hot, err := s.flows.Search(ctx, f, limit)
 	if err != nil {
 		return nil, false, err
 	}
 	cold := s.coldInfo()
-	if !cold.enabled() || !s.rangeHasArchived(ctx, f) {
+	days := s.archivedDaysInRange(ctx, f)
+	if !cold.enabled() || len(days) == 0 {
 		return hot, false, nil
 	}
-	cr, cerr := s.flows.SearchCold(ctx, f, limit, cold)
+	cr, cerr := s.flows.SearchCold(ctx, f, limit, cold, days)
 	if cerr != nil {
 		s.log.Error("cold search failed; returning hot results only", "error", cerr)
 		return hot, true, nil // degrade gracefully — never fail a search because S3 is slow/down
@@ -139,13 +179,14 @@ func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit int) ([]na
 	return merged, true, nil
 }
 
-// rangeHasArchived reports whether any archived day overlaps the query's time
-// window (so we only pay the S3 round-trip when there is cold data to find).
-func (s *Server) rangeHasArchived(ctx context.Context, f SearchFilter) bool {
+// archivedDaysInRange returns archived days (YYYY-MM-DD) overlapping the query's
+// time window — used to read only the needed S3 objects (date pruning).
+func (s *Server) archivedDaysInRange(ctx context.Context, f SearchFilter) []string {
 	ad, err := s.store.ListArchivedDays(ctx, 4000)
 	if err != nil || len(ad) == 0 {
-		return false
+		return nil
 	}
+	var out []string
 	for _, a := range ad {
 		day, e := time.ParseInLocation("2006-01-02", a.Day, istLoc)
 		if e != nil {
@@ -158,7 +199,7 @@ func (s *Server) rangeHasArchived(ctx context.Context, f SearchFilter) bool {
 		if !f.To.IsZero() && day.After(f.To) {
 			continue
 		}
-		return true
+		out = append(out, a.Day)
 	}
-	return false
+	return out
 }

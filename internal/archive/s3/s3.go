@@ -30,14 +30,44 @@ type putter interface {
 	PutObject(ctx context.Context, bucket, object string, r io.Reader, size int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	BucketExists(ctx context.Context, bucket string) (bool, error)
 	MakeBucket(ctx context.Context, bucket string, opts minio.MakeBucketOptions) error
+	StatObject(ctx context.Context, bucket, object string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
 }
 
 // Client uploads objects to an S3-compatible bucket.
 type Client struct {
-	mc     putter
-	bucket string
-	prefix string
-	region string
+	mc        putter
+	bucket    string
+	prefix    string
+	region    string
+	endpoint  string // original endpoint (with scheme) for building ClickHouse s3() URLs
+	accessKey string
+	secretKey string
+}
+
+// Bucket returns the configured bucket name.
+func (c *Client) Bucket() string { return c.bucket }
+
+// AccessKey / SecretKey expose credentials for ClickHouse-native s3() transfers
+// (server-side INSERT INTO FUNCTION s3 / SELECT FROM s3). Same module only.
+func (c *Client) AccessKey() string { return c.accessKey }
+func (c *Client) SecretKey() string { return c.secretKey }
+
+// ObjectURL returns the full https URL of a relative key, for ClickHouse s3().
+func (c *Client) ObjectURL(rel string) string {
+	ep := c.endpoint
+	if !strings.Contains(ep, "://") {
+		ep = "https://" + ep
+	}
+	return strings.TrimRight(ep, "/") + "/" + c.bucket + "/" + c.Key(rel)
+}
+
+// Stat returns the object size in bytes (0 if missing).
+func (c *Client) Stat(ctx context.Context, rel string) (int64, error) {
+	info, err := c.mc.StatObject(ctx, c.bucket, c.Key(rel), minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return info.Size, nil
 }
 
 // EnsureBucket creates the bucket if it does not already exist. Best-effort and
@@ -69,7 +99,8 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("s3 client: %w", err)
 	}
-	return &Client{mc: mc, bucket: cfg.Bucket, prefix: strings.Trim(cfg.PathPrefix, "/"), region: cfg.Region}, nil
+	return &Client{mc: mc, bucket: cfg.Bucket, prefix: strings.Trim(cfg.PathPrefix, "/"), region: cfg.Region,
+		endpoint: cfg.Endpoint, accessKey: cfg.AccessKey, secretKey: cfg.SecretKey}, nil
 }
 
 // Key joins the configured path prefix with a relative object key.
