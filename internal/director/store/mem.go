@@ -114,6 +114,54 @@ func (m *MemStore) CountUsers(context.Context) (int, error) {
 	return len(m.users), nil
 }
 
+func (m *MemStore) GetUser(_ context.Context, id int64) (User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, u := range m.users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return User{}, ErrNotFound
+}
+
+func (m *MemStore) ListUsers(_ context.Context, ispID uint32) ([]User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]User, 0, len(m.users))
+	for _, u := range m.users {
+		if ispID == 0 || u.ISPID == ispID {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func (m *MemStore) UpdateUserPassword(_ context.Context, id int64, hash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, u := range m.users {
+		if u.ID == id {
+			u.PasswordHash = hash
+			m.users[k] = u
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *MemStore) DeleteUser(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, u := range m.users {
+		if u.ID == id {
+			delete(m.users, k)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 func (m *MemStore) CreateDevice(_ context.Context, d Device) (Device, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

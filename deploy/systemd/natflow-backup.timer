@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily YesLogs Director control-plane backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

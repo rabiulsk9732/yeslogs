@@ -1,0 +1,12 @@
+# Caddy: automatic HTTPS (Let's Encrypt) in front of YesLogs Director.
+# 1) Point your domain's A record at this server.
+# 2) Put the binary behind the proxy: in /etc/natlog/natlog.yaml set
+#       cp.bind: "127.0.0.1:8080"   and   cp.cookie_secure: true
+# 3) caddy run --config ./Caddyfile   (or install the caddy package + systemd)
+director.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-For {remote_host}
+    }
+}

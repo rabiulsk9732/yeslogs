@@ -107,6 +107,11 @@ type Store interface {
 
 	CreateUser(ctx context.Context, u User) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetUser(ctx context.Context, id int64) (User, error)
+	// ListUsers returns users for ispID, or all users when ispID == 0 (director).
+	ListUsers(ctx context.Context, ispID uint32) ([]User, error)
+	UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error
+	DeleteUser(ctx context.Context, id int64) error
 	CountUsers(ctx context.Context) (int, error)
 
 	CreateDevice(ctx context.Context, d Device) (Device, error)

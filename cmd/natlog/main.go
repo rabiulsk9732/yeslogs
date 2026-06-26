@@ -395,8 +395,11 @@ func resolveCP(cp config.CPConfig) (config.CPConfig, error) {
 	if cp.RegistryRefreshS <= 0 {
 		cp.RegistryRefreshS = 15
 	}
-	if len(cp.SessionKey) < 16 {
-		return cp, errors.New("cp.session_key must be at least 16 characters")
+	if len(cp.SessionKey) < 32 {
+		return cp, errors.New("cp.session_key must be at least 32 random characters (sessions + CSRF are signed with it)")
+	}
+	if strings.HasPrefix(cp.SessionKey, "CHANGE-ME") {
+		return cp, errors.New("cp.session_key is still the shipped placeholder — set a unique random secret (e.g. `openssl rand -base64 48`)")
 	}
 	if cp.MySQLDSN == "" {
 		return cp, errors.New("cp.mysql_dsn is required")

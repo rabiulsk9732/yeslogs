@@ -204,6 +204,61 @@ func (s *MySQLStore) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
+func (s *MySQLStore) GetUser(ctx context.Context, id int64) (User, error) {
+	var u User
+	var role string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, isp_id, email, password_hash, role, created_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &role, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	u.Role = Role(role)
+	return u, err
+}
+
+func (s *MySQLStore) ListUsers(ctx context.Context, ispID uint32) ([]User, error) {
+	q := `SELECT id, isp_id, email, role, created_at FROM users`
+	var args []any
+	if ispID != 0 {
+		q += ` WHERE isp_id=?`
+		args = append(args, ispID)
+	}
+	q += ` ORDER BY isp_id, email`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		var u User
+		var role string
+		if err := rows.Scan(&u.ID, &u.ISPID, &u.Email, &role, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		u.Role = Role(role)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *MySQLStore) UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, passwordHash, id)
+	if err != nil {
+		return err
+	}
+	return rowsAffectedErr(res)
+}
+
+func (s *MySQLStore) DeleteUser(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	return rowsAffectedErr(res)
+}
+
 func (s *MySQLStore) CreateDevice(ctx context.Context, d Device) (Device, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO devices (isp_id, name, exporter_ip, device_id, protocol, profile, capture_policy, enabled, skip_dns, skip_private, skip_zero)

@@ -199,6 +199,7 @@ const MENU = [
   ['Reports','fa-file-export','Generated exports — CSV / Excel / PDF','all'],
   ['Retention','fa-database','Hot storage window & S3 archive','all'],
   ['Audit','fa-clipboard-list','Search & export audit trail','all'],
+  ['Users','fa-users','Operators &amp; access','all'],
   ['Settings','fa-sliders','Dataplane, skip rules, retention & S3','director'],
 ];
 const esc = s => $('<div>').text(s==null?'':s).html();
@@ -287,7 +288,7 @@ function renderPage(){
   $('#globalSearchWrap').css('display', S.view==='Overview'?'flex':'none'); // filter box only where it works
   const b=$('#pageBody').empty();
   if(!S.data){ b.html('<div class="card" style="padding:40px;text-align:center;color:var(--mut)">Loading…</div>'); return; }
-  ({Overview:pgOverview,ISPs:pgISPs,Dataplanes:pgDataplanes,Devices:pgDevices,'Capture Policies':pgPolicies,Logs:pgLogs,Reports:pgReports,Retention:pgRetention,Audit:pgAudit,Settings:pgSettings}[S.view]||pgOverview)(b);
+  ({Overview:pgOverview,ISPs:pgISPs,Dataplanes:pgDataplanes,Devices:pgDevices,'Capture Policies':pgPolicies,Logs:pgLogs,Reports:pgReports,Retention:pgRetention,Audit:pgAudit,Users:pgUsers,Settings:pgSettings}[S.view]||pgOverview)(b);
 }
 
 // ==================== OVERVIEW ====================
@@ -569,6 +570,47 @@ async function pgDevices(b){
   $('.d-edit').on('click', function(){ const dev=devs.find(x=>String(x.ID)===String($(this).data('id'))); if(dev) editDevice(dev,pols,()=>pgDevices(b)); });
   $('.d-tog').on('click', async function(){ await apiJSON('/api/v1/devices/'+$(this).data('id')+'/toggle','POST'); pgDevices(b); });
   $('.d-del').on('click', async function(){ if(confirm('Delete device?')){ await apiJSON('/api/v1/devices/'+$(this).data('id'),'DELETE'); pgDevices(b); } });
+}
+
+// ==================== USERS ====================
+async function pgUsers(b){
+  b.html(loadingCard('Loading users…'));
+  const r=await api('/api/v1/users');
+  if(r.status!==200){ b.html('<div class="card"><div class="empty"><div class="ei"><i class="fas fa-users"></i></div><div class="et">Cannot load users</div></div></div>'); return; }
+  const d=await r.json(); const users=d.users||[], dir=d.isDirector;
+  let isps=[]; if(dir){ const ir=await api('/api/v1/isps'); if(ir.status===200) isps=(await ir.json()).isps||[]; }
+  const ispSel = dir?`<div style="flex:1 1 180px"><label class="lbl">ISP</label><select id="u-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select>${hint('or set role = Director')}</div>`:'';
+  const roleSel = dir?`<div style="flex:1 1 140px"><label class="lbl">Role</label><select id="u-role" class="inp"><option value="isp">ISP user</option><option value="director">Director</option></select></div>`:'';
+  let h=`<div style="margin-bottom:16px">${note('Give every operator their <b>own</b> login — shared credentials break the per-user audit trail. '+(dir?'You manage users across all ISPs.':'You manage users within your ISP.'),'fa-users')}</div>`;
+  h+=`<div class="card" style="margin-bottom:18px">${chead('fa-user-plus','Add User')}
+   <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
+    <div style="flex:1 1 220px"><label class="lbl">Email<span class="req">*</span></label><input id="u-email" class="inp" placeholder="analyst@isp.in"></div>
+    <div style="flex:1 1 170px"><label class="lbl">Password<span class="req">*</span></label><input id="u-pass" type="password" class="inp" placeholder="min 8 characters"></div>
+    ${ispSel}${roleSel}
+    <div style="padding-top:23px"><button id="u-add" class="btn"><i class="fas fa-plus"></i> Add User</button></div>
+   </div><div id="u-msg" style="padding:0 18px 14px;color:var(--bad);font-weight:600;font-size:13px"></div></div>`;
+  h+='<div class="card">'+chead('fa-users','Users',pill(users.length+(users.length===1?' user':' users'),'mut')+'<button class="btn out sm" id="u-mypw" style="margin-left:auto"><i class="fas fa-key"></i> Change my password</button>')+'<div style="overflow-x:auto"><table><thead><tr><th>Email</th><th>Role</th><th>ISP</th><th>Created (IST)</th><th></th></tr></thead><tbody>';
+  if(!users.length) h+=emptyRow(5,'fa-users','No users yet','Add a login above so each operator signs in as themselves.');
+  users.forEach(u=>{ h+=`<tr><td style="font-weight:600;color:var(--ink)">${esc(u.email)}${u.self?' '+pill('you','info'):''}</td>
+    <td>${u.role==='director'?pill('Director','info'):pill('ISP user','mut')}</td>
+    <td class="mono">${u.ispId||'—'}</td><td class="mono" style="color:var(--slate)">${esc(u.createdAt)}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="btn out sm u-reset" data-id="${u.id}" data-email="${esc(u.email)}"><i class="fas fa-key"></i> Reset</button> ${u.self?'':`<button class="btn danger sm u-del" data-id="${u.id}" data-email="${esc(u.email)}" title="Delete"><i class="fas fa-trash"></i></button>`}</td></tr>`;});
+  h+='</tbody></table></div></div>';
+  b.html(h);
+  $('#u-add').on('click', async ()=>{
+    const body={Email:$('#u-email').val(),Password:$('#u-pass').val(),ISPID:+($('#u-isp').length?$('#u-isp').val()||0:0),Role:($('#u-role').length?$('#u-role').val():'isp')};
+    const rr=await apiJSON('/api/v1/users','POST',body);
+    if(rr.status===200){ toast('User added'); pgUsers(b); } else { const e=await rr.json().catch(()=>({})); $('#u-msg').text(e.error||'failed'); }
+  });
+  $('.u-del').on('click', async function(){ const em=$(this).data('email'); if(confirm('Delete user '+em+'? They will lose access.')){ const rr=await apiJSON('/api/v1/users/'+$(this).data('id'),'DELETE'); if(rr.status===200){toast('User deleted');pgUsers(b);} else {const e=await rr.json().catch(()=>({}));toast(e.error||'failed','err');} } });
+  $('.u-reset').on('click', function(){ const uid=$(this).data('id'), em=$(this).data('email');
+    modal(chead('fa-key','Reset password — '+em)+`<div style="padding:18px">${srow('New password',`<input id="rp-pw" type="password" class="inp" placeholder="min 8 characters">`,'The user should change it after next sign-in.')}<div id="rp-msg" style="color:var(--bad);font-weight:600;font-size:13px;margin-top:6px"></div><div style="display:flex;gap:10px;margin-top:16px"><button class="btn" id="rp-go"><i class="fas fa-floppy-disk"></i> Set password</button><button class="btn out" onclick="closeModal()">Cancel</button></div></div>`);
+    $('#rp-go').on('click', async ()=>{ const rr=await apiJSON('/api/v1/users/'+uid+'/reset','POST',{Password:$('#rp-pw').val()}); if(rr.status===200){closeModal();toast('Password reset');} else {const e=await rr.json().catch(()=>({}));$('#rp-msg').text(e.error||'failed');} });
+  });
+  $('#u-mypw').on('click', function(){
+    modal(chead('fa-key','Change my password')+`<div style="padding:18px">${srow('Current password',`<input id="mp-old" type="password" class="inp">`)}${srow('New password',`<input id="mp-new" type="password" class="inp" placeholder="min 8 characters">`)}<div id="mp-msg" style="color:var(--bad);font-weight:600;font-size:13px;margin-top:6px"></div><div style="display:flex;gap:10px;margin-top:16px"><button class="btn" id="mp-go"><i class="fas fa-floppy-disk"></i> Update password</button><button class="btn out" onclick="closeModal()">Cancel</button></div></div>`);
+    $('#mp-go').on('click', async ()=>{ const rr=await apiJSON('/api/v1/account/password','POST',{OldPassword:$('#mp-old').val(),NewPassword:$('#mp-new').val()}); if(rr.status===200){closeModal();toast('Password updated');} else {const e=await rr.json().catch(()=>({}));$('#mp-msg').text(e.error||'failed');} });
+  });
 }
 
 // ==================== SETTINGS (Director) ====================

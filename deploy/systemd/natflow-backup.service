@@ -1,0 +1,9 @@
+[Unit]
+Description=YesLogs Director control-plane backup (MariaDB natflow_cp)
+After=mariadb.service
+
+[Service]
+Type=oneshot
+# Reads /root/.my.cnf or the mariadb socket auth by default; set Environment to override.
+Environment=BACKUP_DIR=/var/backups/natflow/cp RETENTION=14
+ExecStart=/opt/yeslogs/natflow-dataplane/scripts/backup-cp.sh
