@@ -144,6 +144,7 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip, PrivPort: int(sp),
 			PubIP: pip, PubPort: int(pp), Proto: protoName(pr),
+			DstIP: dip, DstPort: int(dp),
 			Dest: fmt.Sprintf("%s:%d", dip, dp), Action: strings.ToUpper(ft),
 		})
 	}

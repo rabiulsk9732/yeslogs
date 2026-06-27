@@ -171,8 +171,10 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		QueryIP:     firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP), QueryPort: f.PublicPort, QueryProto: f.Proto,
 		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: len(rows) == searchLimit,
 	}
-	stamp := time.Now().UTC().Format("20060102-150405")
-	base := fmt.Sprintf("flowlog-%s-%s", strings.ReplaceAll(firstNonEmpty(meta.QueryIP, "report"), ".", "_"), stamp)
+	// e.g. iplog-report-45.115.107.52-222000_02.03.2026_IST_0530.pdf
+	now := time.Now().In(istLoc)
+	base := fmt.Sprintf("iplog-report-%s-%s_%s_IST_0530",
+		firstNonEmpty(meta.QueryIP, "all"), now.Format("150405"), now.Format("02.01.2006"))
 
 	var werr error
 	switch format {

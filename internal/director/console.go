@@ -53,6 +53,8 @@ type natRecord struct {
 	PubPort  int    `json:"pubPort"`
 	Proto    string `json:"proto"`
 	Dest     string `json:"dest"`
+	DstIP    string `json:"dstIp"`
+	DstPort  int    `json:"dstPort"`
 	Action   string `json:"action"`
 }
 type protoSlice struct {
@@ -302,6 +304,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(pr),
+			DstIP: dip.String(), DstPort: int(dp),
 			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
 		})
 	}
