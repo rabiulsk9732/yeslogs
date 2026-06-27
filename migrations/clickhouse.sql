@@ -32,7 +32,14 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_logs
 
     flow_type LowCardinality(String),
     exporter_ip IPv4,
-    created_at DateTime DEFAULT now()
+    created_at DateTime DEFAULT now(),
+
+    -- Data-skipping indexes for the reverse-NAT / subscriber lookups. These IPs
+    -- are NOT in the primary key, so without them a time-unbounded IP search must
+    -- scan the tenant's history; the bloom filter lets ClickHouse skip 32k-row
+    -- blocks that cannot contain the IP, keeping point lookups fast at TB scale.
+    INDEX idx_nat_ip nat_public_ip TYPE bloom_filter(0.01) GRANULARITY 4,
+    INDEX idx_src_ip src_ip TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = MergeTree
 PARTITION BY event_date

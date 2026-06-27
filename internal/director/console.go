@@ -244,9 +244,15 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 	}
 	if !f.From.IsZero() {
 		add("flow_start >= ?", f.From.UTC())
+		// Also bound the partition key (event_date is the IST date of the flow) so
+		// ClickHouse prunes whole day-partitions instead of scanning all of them
+		// via weaker part min/max — this is what keeps dated search fast at TB scale.
+		// 1-day margin absorbs any IST/UTC boundary skew; flow_start above is exact.
+		add("event_date >= toDate(?)", f.From.In(istLoc).AddDate(0, 0, -1).Format("2006-01-02"))
 	}
 	if !f.To.IsZero() {
 		add("flow_start <= ?", f.To.UTC())
+		add("event_date <= toDate(?)", f.To.In(istLoc).AddDate(0, 0, 1).Format("2006-01-02"))
 	}
 	if f.ISPID != 0 {
 		add("isp_id = ?", f.ISPID)
