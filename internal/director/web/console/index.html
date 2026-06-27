@@ -551,11 +551,17 @@ async function pgISPs(b){
 // ==================== DEVICES ====================
 async function loadPolicies(){ const r=await api('/api/v1/policies'); return r.status===200?((await r.json()).policies||[]):[]; }
 function policyOpts(pols,sel){ return `<option value="">Custom rules</option>`+pols.map(p=>`<option ${p.Name===sel?'selected':''}>${esc(p.Name)}</option>`).join(''); }
+function agoStr(s){ s=Math.max(0,s|0); if(s<60)return s+'s'; if(s<3600)return (s/60|0)+'m'; if(s<86400)return (s/3600|0)+'h'; return (s/86400|0)+'d'; }
+function healthBadge(h){
+  if(!h||h.status==='nodata') return pill('no data','mut');
+  if(h.status==='silent') return pill('silent','bad')+` <span style="color:var(--bad);font-size:11px">${agoStr(h.agoSecs)} ago</span>`;
+  return pill('online','ok')+` <span style="color:var(--mut);font-size:11px">${agoStr(h.agoSecs)} ago</span>`;
+}
 async function pgDevices(b){
   b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading devices…</div>');
   const r=await api('/api/v1/devices');
   if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load devices.</div>'); return; }
-  const data=await r.json(); const devs=data.devices||[], isps=data.isps||[], dir=data.isDirector;
+  const data=await r.json(); const devs=data.devices||[], isps=data.isps||[], dir=data.isDirector, health=data.health||{};
   const pols=await loadPolicies();
   const ispSel = dir ? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="d-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>` : '';
   let h=`<div class="card" style="margin-bottom:20px">${chead('fa-server','Add Exporter Device')}
@@ -578,12 +584,13 @@ async function pgDevices(b){
     <label class="chk"><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
     <span id="d-msg" style="color:var(--bad);font-weight:600"></span>
   </div></div>`;
-  h+='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn'))+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>Device ID</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Capture</th><th>Status</th><th></th></tr></thead><tbody>';
-  if(!devs.length) h+=emptyRow(10,'fa-server','No exporter devices yet','Add your first exporter above, then point its NetFlow/IPFIX export at this collector to start ingesting flows.');
+  h+='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn'))+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>Device ID</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Capture</th><th>Status</th><th>Flow (live)</th><th></th></tr></thead><tbody>';
+  if(!devs.length) h+=emptyRow(11,'fa-server','No exporter devices yet','Add your first exporter above, then point its NetFlow/IPFIX export at this collector to start ingesting flows.');
   devs.forEach(d=>{ h+=`<tr><td class="mono">${d.ISPID}</td><td style="font-weight:600;color:var(--ink)">${esc(d.Name)}</td><td class="mono">${esc(d.ExporterIP)}</td><td class="mono">${d.DeviceID}</td><td>${esc(d.Protocol)}</td><td>${esc(d.Profile)}</td>
     <td>${d.CapturePolicy?pill(d.CapturePolicy,'info'):'<span style="color:var(--mut)">custom</span>'}</td>
     <td style="font-size:12px">${skipSummary(d)}</td>
     <td>${d.Enabled?pill('enabled','ok'):pill('disabled','mut')}</td>
+    <td style="white-space:nowrap">${healthBadge(health[d.ID])}</td>
     <td style="white-space:nowrap;text-align:right"><button class="btn out sm d-edit" data-id="${d.ID}" title="Edit"><i class="fas fa-pen"></i></button> <button class="btn out sm d-tog" data-id="${d.ID}">${d.Enabled?'Disable':'Enable'}</button> <button class="btn danger sm d-del" data-id="${d.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`; });
   h+='</tbody></table></div></div>';
   b.html(h);
@@ -648,8 +655,8 @@ function saveSetting(section,body){ apiJSON('/api/v1/settings/'+section,'PUT',bo
 async function pgSettings(b){
   b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading settings…</div>');
   const r=await api('/api/v1/settings'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load settings (Director only).</div>'); return; }
-  const j=await r.json(); const cfg=j.settings||{}, secretSet=j.secretSet;
-  const tabs=[['Dataplane',()=>dpTab(cfg)],['Skip Rules',()=>skipTab(cfg)],['Retention',()=>retTab(cfg)],['S3 Archive',()=>s3Tab(cfg,secretSet)]];
+  const j=await r.json(); const cfg=j.settings||{}, secretSet=j.secretSet, notifyPassSet=j.notifyPassSet;
+  const tabs=[['Dataplane',()=>dpTab(cfg)],['Skip Rules',()=>skipTab(cfg)],['Retention',()=>retTab(cfg)],['S3 Archive',()=>s3Tab(cfg,secretSet)],['Notifications',()=>notifyTab(cfg,notifyPassSet)]];
   b.html('<div class="tabs">'+tabs.map((t,i)=>`<div class="tab${i?'':' on'}" data-i="${i}">${t[0]}</div>`).join('')+'</div><div id="set-body" class="card" style="padding:18px"></div>');
   const open=i=>{ $('.tab').removeClass('on').eq(i).addClass('on'); tabs[i][1](); };
   $('.tab').on('click',function(){open(+$(this).data('i'));}); open(0);
@@ -697,6 +704,25 @@ function s3Tab(cfg,secretSet){ const s=cfg.s3||{};
     srow('Archive after (days)',`<input id="s3-after" type="number" min="1" class="inp mono" value="${s.archiveAfterDays||7}">`,'Hot window length. Days older than this are archived &amp; dropped from hot storage. 7 is typical; lower it if hot disk fills under heavy load.')+
     `<div style="margin-top:16px"><button class="btn" id="s3-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
   $('#s3-save').on('click',()=>saveSetting('s3',{enabled:$('#s3-en').is(':checked'),endpoint:$('#s3-ep').val(),region:$('#s3-rg').val(),bucket:$('#s3-bk').val(),accessKey:$('#s3-ak').val(),secretKey:$('#s3-sk').val(),pathPrefix:$('#s3-pp').val(),exportFormat:$('#s3-fmt').val(),autoArchive:$('#s3-auto').is(':checked'),archiveAfterDays:+$('#s3-after').val()}));
+}
+
+function notifyTab(cfg,passSet){ const n=cfg.notifications||{};
+  $('#set-body').html('<div class="sect"><i class="fas fa-bell"></i> Device alerts (email)</div>'+
+    note('Get an email the moment a registered exporter <b>stops sending flows</b> (device down), and again when it <b>recovers</b>. Liveness is checked every minute against ClickHouse. <b>Director-only.</b>','fa-bell')+'<div style="height:14px"></div>'+
+    srow('Enabled',chk('nf-en',n.enabled,'enable device-down email alerts'),'Master switch. When off, no emails are sent — the liveness badges on the Devices page still work.')+
+    srow('SMTP host',`<input id="nf-host" class="inp mono" placeholder="smtp.gmail.com" value="${esc(n.smtpHost||'')}">`,'Your SMTP relay hostname.')+
+    srow('SMTP port',`<input id="nf-port" type="number" min="1" max="65535" class="inp mono" value="${n.smtpPort||587}">`,'<b>587</b> = STARTTLS · <b>465</b> = implicit TLS · <b>25</b> = none.')+
+    srow('Security',`<select id="nf-tls" class="inp">${opts(['starttls','tls','none'],n.smtpTls||'starttls')}</select>`,'<b>starttls</b> (port 587) or <b>tls</b> (port 465) recommended. <b>none</b> only for a trusted local relay.')+
+    srow('Username',`<input id="nf-user" class="inp mono" placeholder="alerts@yourisp.in" value="${esc(n.smtpUser||'')}">`,'SMTP login. Leave blank for a relay that needs no AUTH.')+
+    srow('Password',`<input id="nf-pass" type="password" class="inp mono" placeholder="${passSet?'•••••••• (unchanged — leave blank to keep)':'SMTP password / app password'}">`,'Stored in the DB; never shown again. For Gmail use an <b>App Password</b>, not your account password. Leave blank to keep the current one.')+
+    srow('From address',`<input id="nf-from" class="inp mono" placeholder="alerts@yourisp.in" value="${esc(n.fromAddr||'')}">`,'Sender shown on the email. Defaults to the username if blank.')+
+    srow('Recipients',`<textarea id="nf-rcpt" class="inp mono" rows="2" placeholder="noc@yourisp.in, ops@yourisp.in">${esc(n.recipients||'')}</textarea>`,'Comma / newline separated. Everyone listed receives every alert.')+
+    srow('Silent after (min)',`<input id="nf-silence" type="number" min="1" max="1440" class="inp mono" value="${n.silenceMins||15}">`,'A device with no flows for this long is flagged <b>DOWN</b> and an email fires. 15 minutes is typical.')+
+    srow('Re-remind (hours)',`<input id="nf-remind" type="number" min="0" max="168" class="inp mono" value="${n.remindHours==null?6:n.remindHours}">`,'While a device stays down, re-send the alert every N hours. <b>0</b> = alert once, then stay quiet until it recovers.')+
+    `<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center"><button class="btn" id="nf-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button><button class="btn out" id="nf-test"><i class="fas fa-paper-plane"></i> Send test email</button><span id="nf-tmsg" style="font-weight:600;font-size:13px"></span></div>`+
+    note('Test email uses the <b>saved</b> settings — click Save first if you just changed them.','fa-circle-info'));
+  $('#nf-save').on('click',()=>saveSetting('notifications',{enabled:$('#nf-en').is(':checked'),smtpHost:$('#nf-host').val(),smtpPort:+$('#nf-port').val(),smtpTls:$('#nf-tls').val(),smtpUser:$('#nf-user').val(),smtpPassword:$('#nf-pass').val(),fromAddr:$('#nf-from').val(),recipients:$('#nf-rcpt').val(),silenceMins:+$('#nf-silence').val(),remindHours:+$('#nf-remind').val()}));
+  $('#nf-test').on('click', async ()=>{ const m=$('#nf-tmsg').css('color','var(--mut)').text('Sending…'); const r=await apiJSON('/api/v1/notifications/test','POST',{}); if(r.status===200){ m.css('color','var(--ok)').text('✓ Sent — check the inbox'); } else { const e=await r.json().catch(()=>({})); m.css('color','var(--bad)').text('✗ '+(e.error||'failed')); } });
 }
 
 // ==================== SYSTEM (Director) ====================

@@ -171,6 +171,9 @@ func (s *Server) apiListDevices(w http.ResponseWriter, r *http.Request) {
 			out["isps"] = isps
 		}
 	}
+	if h := s.deviceHealthMap(r.Context(), devs); len(h) > 0 {
+		out["health"] = h // per-device liveness for status badges (keyed by device ID)
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

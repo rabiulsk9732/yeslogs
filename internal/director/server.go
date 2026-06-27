@@ -67,6 +67,12 @@ type Server struct {
 	applyMu    sync.Mutex     // serializes Apply() so concurrent saves apply in order
 	applier    func(Settings) // set by the host (natlog) to apply changes to the dataplane
 	statsFn    func() DPStats // dataplane stats snapshot (Overview/Dataplanes)
+
+	// device-liveness alerting (optional; notifier set via SetNotifier).
+	notifyMu sync.Mutex
+	notifier Notifier
+	healthMu sync.Mutex                 // guards health (written only by the monitor goroutine)
+	health   map[string]*devHealthState // per-exporter liveness state
 }
 
 // SetArchive enables the S3 cold-archive feature in the console.
@@ -162,6 +168,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/devices/{id}", s.apiUpdateDevice)
 	mux.HandleFunc("GET /api/v1/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/v1/settings/{section}", s.handlePutSettings)
+	mux.HandleFunc("POST /api/v1/notifications/test", s.handleTestNotification)
 	mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	mux.HandleFunc("GET /api/v1/overview", s.handleOverview)
 	mux.HandleFunc("GET /api/v1/dataplanes", s.handleDataplanes)

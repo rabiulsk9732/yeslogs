@@ -125,6 +125,32 @@ func (r *FlowReader) PerDevice(ctx context.Context, ispID uint32, days int) ([]D
 	return out, rows.Err()
 }
 
+// LastSeenByExporter returns the most recent flow_start per (isp_id, exporter_ip)
+// within the lookback window, keyed by "ispID|dotted-ip". Used by the device
+// liveness monitor and the Devices status badges. The map values are correct
+// instants regardless of display timezone (safe to compare with time.Now()).
+func (r *FlowReader) LastSeenByExporter(ctx context.Context, days int) (map[string]time.Time, error) {
+	q := fmt.Sprintf(`SELECT isp_id, exporter_ip, max(flow_start) AS last
+		FROM %s.flow_logs WHERE event_date >= today() - %d
+		GROUP BY isp_id, exporter_ip`, r.db, days)
+	rows, err := r.conn.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var isp uint32
+		var ip net.IP
+		var ts time.Time
+		if err := rows.Scan(&isp, &ip, &ts); err != nil {
+			return nil, err
+		}
+		out[fmt.Sprintf("%d|%s", isp, ip.String())] = ts
+	}
+	return out, rows.Err()
+}
+
 // RecentFlow is one recent flow row for display.
 type RecentFlow struct {
 	ISPID     uint32

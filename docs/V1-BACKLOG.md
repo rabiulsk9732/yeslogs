@@ -26,7 +26,7 @@ with independent verification). 40 gaps found; 4 verified launch-blockers.
 
 ### Product
 - **High** — Bulk / multi-IP / CSV-upload search + CIDR ranges (one combined audited report). `L`
-- **High** — Operational alerting/notifications (email/webhook/Slack). `L`
+- ~~**High** — Operational alerting/notifications (email)~~ **DONE (v1.3.0):** device-down/recovered SMTP email alerts (per-minute liveness monitor, Settings → Notifications, device "Flow (live)" badges). Webhook/Slack channels still TODO. `L`
 - **Med** — Scheduled / delivered reports (SMTP/SFTP, cron cadence). `L`
 - **Med** — Multi-collector fleet: agent token provisioning + fleet view (last-seen/version/devices). `M`
 - **Med** — Per-ISP retention/S3/archive settings (currently global). `M`

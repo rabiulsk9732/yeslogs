@@ -41,6 +41,7 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/managed"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
+	"github.com/natflow/natflow-dataplane/internal/notify"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
 	"github.com/natflow/natflow-dataplane/internal/receiver"
 	"github.com/natflow/natflow-dataplane/internal/rules"
@@ -175,8 +176,28 @@ func run() (err error) {
 			Enabled: cfg.S3.Bucket != "", Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket,
 			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, PathPrefix: cfg.S3.PathPrefix, ExportFormat: fmtOr(cfg.S3.ExportFormat),
 		},
+		Notifications: director.NotificationSettings{SMTPPort: 587, SMTPTLS: "starttls", SilenceMins: 15, RemindHours: 6},
 	}
 	dirSrv.InitSettings(ctxBg, defaults)
+
+	// Device-liveness SMTP alerting: the notifier reads live settings each call,
+	// so credential/recipient changes apply without restart. No-op until enabled.
+	dirSrv.SetNotifier(func(ctx context.Context, subject, body string) error {
+		n := dirSrv.CurrentSettings().Notifications
+		if !n.Enabled || strings.TrimSpace(n.SMTPHost) == "" {
+			return nil
+		}
+		rcpts := notify.SplitRecipients(n.Recipients)
+		if len(rcpts) == 0 {
+			return nil
+		}
+		from := n.FromAddr
+		if strings.TrimSpace(from) == "" {
+			from = n.SMTPUser
+		}
+		sm := notify.SMTP{Host: n.SMTPHost, Port: n.SMTPPort, User: n.SMTPUser, Pass: n.SMTPPassword, TLS: n.SMTPTLS, From: from}
+		return sm.Send(ctx, rcpts, subject, body)
+	})
 
 	var lastS3 director.S3Settings
 	lastRet := -1
@@ -355,6 +376,11 @@ func run() (err error) {
 			}
 		}
 	}()
+
+	// ---- device-liveness alert monitor ----
+	// Checks each enabled device's last flow every minute and emails on
+	// silent/recovered transitions. No-op unless notifications are enabled.
+	go dirSrv.RunDeviceMonitor(managedCtx)
 
 	log.Info("natlog running; SIGINT/SIGTERM to stop",
 		"receivers", len(receivers), "metrics", cfg.Metrics.Bind)
