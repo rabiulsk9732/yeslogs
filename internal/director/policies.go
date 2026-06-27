@@ -40,7 +40,7 @@ func (s *Server) apiListPolicies(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"policies": pols, "isDirector": id.isDirector()})
+	writeJSON(w, http.StatusOK, map[string]any{"policies": nz(pols), "isDirector": id.isDirector()})
 }
 
 func (s *Server) apiCreatePolicy(w http.ResponseWriter, r *http.Request) {

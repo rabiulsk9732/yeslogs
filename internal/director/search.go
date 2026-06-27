@@ -217,5 +217,5 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 			q[i].ToTS = q[i].ToTS.In(istLoc)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"queries": q})
+	writeJSON(w, http.StatusOK, map[string]any{"queries": nz(q)})
 }

@@ -39,6 +39,15 @@ type uiError struct{ msg string }
 func (e uiError) Error() string { return e.msg }
 func clientErr(m string) error  { return uiError{m} }
 
+// nz returns a non-nil slice so empty lists serialize as JSON [] (not null),
+// which the console's destructuring/`.length` rely on.
+func nz[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 func (s *Server) jsonErr(w http.ResponseWriter, err error) {
 	var ue uiError
 	switch {
@@ -71,7 +80,7 @@ func (s *Server) apiListISPs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"isps": isps})
+	writeJSON(w, http.StatusOK, map[string]any{"isps": nz(isps)})
 }
 
 func (s *Server) apiCreateISP(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +165,7 @@ func (s *Server) apiListDevices(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	out := map[string]any{"devices": devs, "isDirector": id.isDirector()}
+	out := map[string]any{"devices": nz(devs), "isDirector": id.isDirector()}
 	if id.isDirector() {
 		if isps, e := s.store.ListISPs(r.Context()); e == nil {
 			out["isps"] = isps

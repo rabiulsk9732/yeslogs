@@ -461,7 +461,7 @@ async function pgReports(b){
 async function pgAudit(b){
   b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading audit…</div>');
   const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load audit.</div>'); return; }
-  const {queries=[]}=await r.json();
+  const queries=(await r.json()).queries||[]; // null-safe
   const t=s=>(s&&!String(s).startsWith('0001'))?String(s).replace('T',' ').slice(0,16):'any';
   let h='<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:var(--mut)">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
   if(!queries.length) h+='<tr><td colspan="9" style="text-align:center;color:var(--mut);padding:24px">No queries yet.</td></tr>';
@@ -524,7 +524,7 @@ async function pgISPs(b){
   b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading ISPs…</div>');
   const r=await api('/api/v1/isps');
   if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load ISPs (Director only).</div>'); return; }
-  const {isps=[]}=await r.json();
+  const isps=(await r.json()).isps||[]; // null-safe (empty list serializes as null)
   let h=`<div class="card" style="margin-bottom:20px">${chead('fa-building','Onboard ISP (tenant)')}
   <div style="padding:16px 18px 4px">${note("Each ISP is an isolated tenant — its users only ever see their own devices, flows and reports. Optionally create the ISP's first admin login now; you can add more users later.",'fa-circle-info')}</div>
   <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
