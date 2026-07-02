@@ -96,7 +96,9 @@ func humanBytes2(b uint64) string { return humanBytes(b) }
 
 // ConsoleData assembles the dashboard/analytics payload from ClickHouse, scoped
 // to ispID (0 = all, director only). Each section is best-effort.
-func (r *FlowReader) ConsoleData(ctx context.Context, ispID uint32, days int) consoleData {
+// consoleDataRaw aggregates straight from flow_logs. Used only until the rollup
+// is populated (fresh installs); see ConsoleData in rollup.go for the fast path.
+func (r *FlowReader) consoleDataRaw(ctx context.Context, ispID uint32, days int) consoleData {
 	var d consoleData
 	where, args := scope(ispID, days)
 

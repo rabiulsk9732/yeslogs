@@ -145,6 +145,20 @@ func run() (err error) {
 		log.Warn("flow dashboards disabled: clickhouse read unavailable", "error", ferr)
 		fr = nil
 	}
+	if fr != nil {
+		// Create the dashboard rollup tables + materialized views and backfill
+		// past days (idempotent, once). Runs in the background so it never blocks
+		// startup; until it finishes, the dashboard falls back to raw aggregation.
+		go func() {
+			rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer rcancel()
+			if e := fr.EnsureRollups(rctx); e != nil {
+				log.Warn("dashboard rollup setup failed (falling back to raw aggregation)", "error", e)
+			} else {
+				log.Info("dashboard rollups ready")
+			}
+		}()
+	}
 	dirSrv, err := director.New(director.Config{
 		SessionKey: []byte(cp.SessionKey), CookieSecure: cp.CookieSecure, FlowDays: cp.FlowDays,
 	}, st, fr, log)
