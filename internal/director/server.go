@@ -73,6 +73,10 @@ type Server struct {
 	notifier Notifier
 	healthMu sync.Mutex                 // guards health (written only by the monitor goroutine)
 	health   map[string]*devHealthState // per-exporter liveness state
+
+	// short-TTL cache for the (expensive) dashboard aggregates, per tenant.
+	consoleMu    sync.Mutex
+	consoleCache map[uint32]consoleCacheEntry
 }
 
 // SetArchive enables the S3 cold-archive feature in the console.

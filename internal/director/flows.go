@@ -24,7 +24,7 @@ func NewFlowReader(addr, db, user, pass string) (*FlowReader, error) {
 		Addr:         []string{addr},
 		Auth:         clickhouse.Auth{Database: db, Username: user, Password: pass},
 		DialTimeout:  5 * time.Second,
-		MaxOpenConns: 4,
+		MaxOpenConns: 8, // dashboard fans out ~7 concurrent aggregations per load
 	})
 	if err != nil {
 		return nil, err
@@ -61,7 +61,7 @@ type Summary struct {
 
 func (r *FlowReader) Summary(ctx context.Context, ispID uint32, days int) (Summary, error) {
 	where, args := scope(ispID, days)
-	q := fmt.Sprintf(`SELECT count(), sum(bytes), sum(packets), uniqExact(device_id)
+	q := fmt.Sprintf(`SELECT count(), sum(bytes), sum(packets), uniq(device_id)
 		FROM %s.flow_logs WHERE %s`, r.db, where)
 	var s Summary
 	err := r.conn.QueryRow(ctx, q, args...).Scan(&s.Rows, &s.Bytes, &s.Packets, &s.Devices)

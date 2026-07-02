@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -99,14 +100,32 @@ func (r *FlowReader) ConsoleData(ctx context.Context, ispID uint32, days int) co
 	var d consoleData
 	where, args := scope(ispID, days)
 
-	// summary counts
-	var rows, subs, devs, totBytes uint64
-	_ = r.conn.QueryRow(ctx, fmt.Sprintf(
-		`SELECT count(), uniqExact(src_ip), uniqExact(device_id), sum(bytes) FROM %s.flow_logs WHERE %s`, r.db, where), args...).
-		Scan(&rows, &subs, &devs, &totBytes)
-	var today uint64
-	_ = r.conn.QueryRow(ctx, fmt.Sprintf(
-		`SELECT count() FROM %s.flow_logs WHERE event_date = today()%s`, r.db, ispClause(ispID)), ispArgs(ispID)...).Scan(&today)
+	// The dashboard fires several independent aggregations over a large window.
+	// Run them CONCURRENTLY (the ClickHouse conn is a pool) so total latency is
+	// the slowest single query, not their sum. uniq (HyperLogLog, ~1.6% error)
+	// keeps the distinct counts ~5x cheaper than uniqExact over 100M+ rows, and
+	// the scalars/records/charts are combined into one aggregate scan each.
+	var rows, subs, devs, totBytes, natIPs, avgDur, today uint64
+	var wg sync.WaitGroup
+	run := func(f func()) { wg.Add(1); go func() { defer wg.Done(); f() }() }
+
+	run(func() {
+		_ = r.conn.QueryRow(ctx, fmt.Sprintf(
+			`SELECT count(), uniq(src_ip), uniq(device_id), sum(bytes), uniq(nat_public_ip), toUInt64(avg(flow_end - flow_start))
+			 FROM %s.flow_logs WHERE %s`, r.db, where), args...).
+			Scan(&rows, &subs, &devs, &totBytes, &natIPs, &avgDur)
+	})
+	run(func() {
+		_ = r.conn.QueryRow(ctx, fmt.Sprintf(
+			`SELECT count() FROM %s.flow_logs WHERE event_date = today()%s`, r.db, ispClause(ispID)), ispArgs(ispID)...).Scan(&today)
+	})
+	run(func() { d.Records = r.records(ctx, ispID, days, 50) }) // distinct struct fields: no shared write
+	run(func() { d.Hourly = r.hourly(ctx, ispID) })
+	run(func() { d.ProtoMix = r.protoMix(ctx, ispID, days) })
+	run(func() { d.Region = r.regionByDevice(ctx, ispID, days) })
+	run(func() { d.TopSubs = r.topSubsByBytes(ctx, ispID, days) })
+	wg.Wait()
+
 	d.Empty = rows == 0
 	d.Widgets = []widget{
 		{Value: group(rows), Label: "NAT Flows (window)", Icon: "fa-diagram-project", Color: "#0077b6"},
@@ -114,35 +133,12 @@ func (r *FlowReader) ConsoleData(ctx context.Context, ispID uint32, days int) co
 		{Value: group(subs), Label: "Subscribers Seen", Icon: "fa-users", Color: "#2a9d8f"},
 		{Value: humanBytes2(totBytes), Label: "Logged Volume", Icon: "fa-shield-halved", Color: "#e76f51"},
 	}
-
-	// info boxes (real where possible)
-	var natIPs, avgDur uint64
-	_ = r.conn.QueryRow(ctx, fmt.Sprintf(
-		`SELECT uniqExact(nat_public_ip), toUInt64(avg(flow_end - flow_start)) FROM %s.flow_logs WHERE %s`, r.db, where), args...).
-		Scan(&natIPs, &avgDur)
 	poolPct := pctOf(natIPs, 256)
 	d.InfoBoxes = []infoBox{
 		{Label: "CGNAT Public IPs Seen", Value: group(natIPs), Pct: poolPct, Note: fmt.Sprintf("%s of /24 pool", poolPct), Icon: "fa-server", Color: "#0077b6"},
 		{Label: "Active Devices", Value: group(devs), Pct: pctOf(devs, 50), Note: "exporters reporting", Icon: "fa-plug", Color: "#2a9d8f"},
 		{Label: "Avg Session Duration", Value: dur(avgDur), Pct: "48%", Note: "flow_end − flow_start", Icon: "fa-clock", Color: "#e76f51"},
 	}
-
-	// records (latest 50 — a light dashboard snippet; the Logs page is the
-	// server-paginated explorer for large result sets)
-	d.Records = r.records(ctx, ispID, days, 50)
-
-	// hourly (24)
-	d.Hourly = r.hourly(ctx, ispID)
-
-	// protocol mix
-	d.ProtoMix = r.protoMix(ctx, ispID, days, rows)
-
-	// region by device
-	d.Region = r.regionByDevice(ctx, ispID, days)
-
-	// top subscribers
-	d.TopSubs = r.topSubsByBytes(ctx, ispID, days)
-
 	return d
 }
 
@@ -336,10 +332,7 @@ func (r *FlowReader) hourly(ctx context.Context, ispID uint32) []uint64 {
 	return out
 }
 
-func (r *FlowReader) protoMix(ctx context.Context, ispID uint32, days int, total uint64) []protoSlice {
-	if total == 0 {
-		return nil
-	}
+func (r *FlowReader) protoMix(ctx context.Context, ispID uint32, days int) []protoSlice {
 	where, args := scope(ispID, days)
 	q := fmt.Sprintf(`SELECT protocol, count() c FROM %s.flow_logs WHERE %s GROUP BY protocol ORDER BY c DESC`, r.db, where)
 	rs, err := r.conn.Query(ctx, q, args...)
@@ -536,11 +529,82 @@ func (s *Server) handleConsoleData(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, consoleData{Empty: true})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	// Serve a recent snapshot if fresh: the dashboard aggregates over a large
+	// window are expensive at high volume, so cache per tenant for a short TTL
+	// (dashboards don't need per-second freshness) — repeated loads are instant
+	// and the box is scanned at most once per TTL per tenant.
+	// Serve-stale-while-revalidate: if we have ANY cached snapshot, return it
+	// instantly; if it's past the TTL, kick off a background refresh. Only the
+	// very first load per tenant blocks on the (expensive) compute.
+	if d, fresh, exists := s.cachedConsole(id.ISPID); exists {
+		writeJSON(w, http.StatusOK, d)
+		if !fresh {
+			s.refreshConsoleAsync(id.ISPID)
+		}
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 	data := s.flows.ConsoleData(ctx, id.ISPID, s.flowDays)
 	s.nameDevices(ctx, id.ISPID, data.Records)
+	s.storeConsole(id.ISPID, data)
 	writeJSON(w, http.StatusOK, data)
+}
+
+const consoleCacheTTL = 45 * time.Second
+
+type consoleCacheEntry struct {
+	at         time.Time
+	data       consoleData
+	refreshing bool
+}
+
+// cachedConsole returns the snapshot, whether it's within TTL (fresh), and
+// whether any snapshot exists.
+func (s *Server) cachedConsole(ispID uint32) (data consoleData, fresh, exists bool) {
+	s.consoleMu.Lock()
+	defer s.consoleMu.Unlock()
+	e, ok := s.consoleCache[ispID]
+	if !ok {
+		return consoleData{}, false, false
+	}
+	return e.data, time.Since(e.at) < consoleCacheTTL, true
+}
+
+func (s *Server) storeConsole(ispID uint32, d consoleData) {
+	s.consoleMu.Lock()
+	defer s.consoleMu.Unlock()
+	if s.consoleCache == nil {
+		s.consoleCache = map[uint32]consoleCacheEntry{}
+	}
+	s.consoleCache[ispID] = consoleCacheEntry{at: time.Now(), data: d}
+}
+
+// refreshConsoleAsync recomputes a tenant's dashboard in the background, at most
+// one refresh in flight per tenant (so a burst of stale hits can't stampede).
+func (s *Server) refreshConsoleAsync(ispID uint32) {
+	if s.flows == nil {
+		return
+	}
+	s.consoleMu.Lock()
+	e := s.consoleCache[ispID]
+	if e.refreshing {
+		s.consoleMu.Unlock()
+		return
+	}
+	e.refreshing = true
+	s.consoleCache[ispID] = e
+	s.consoleMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		data := s.flows.ConsoleData(ctx, ispID, s.flowDays)
+		s.nameDevices(ctx, ispID, data.Records)
+		s.consoleMu.Lock()
+		s.consoleCache[ispID] = consoleCacheEntry{at: time.Now(), data: data}
+		s.consoleMu.Unlock()
+	}()
 }
 
 // nameDevices resolves each row's numeric device_id to its friendly device name
