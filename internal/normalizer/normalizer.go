@@ -42,18 +42,35 @@ type Normalizer struct{}
 // New returns a Normalizer.
 func New() *Normalizer { return &Normalizer{} }
 
+// Clock-skew guard bounds: the stored timestamp must always be a sane IST time
+// regardless of what the exporter reports. A device with a broken/frozen clock
+// (e.g. no NTP after a reboot) would otherwise stamp EVERY flow with a wrong time
+// and silently corrupt time-based IPDR lookups. We trust the exporter's flow time
+// only when it is plausible relative to the collector's receive time; otherwise we
+// fall back to receive time (now, stored as IST). skewPast is generous so genuinely
+// long-lived/late-exported flows (NetFlow active-timeout is typically ≤30m) are kept.
+const (
+	skewPast   = 2 * time.Hour
+	skewFuture = 2 * time.Minute
+)
+
+func plausible(t, now time.Time) bool {
+	return !t.IsZero() && !t.After(now.Add(skewFuture)) && !t.Before(now.Add(-skewPast))
+}
+
 // Normalize maps a decoder.Flow to a FlowRecord, tagging it with flowType and
 // the supplied ISP/device identity.
 func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID uint32) FlowRecord {
-	// Fallback timestamp: some exporters (e.g. iptables/conntrack NAT-event NetFlow)
-	// carry the time in an IE the decoder may not map. Without a valid time the row
-	// would land in an ancient partition and be silently dropped by the TTL, so we
-	// fall back to the collector's receive time.
+	// Whatever timestamp a device sends, the logged time must be sane IST: use the
+	// exporter's flow time only when plausible; otherwise stamp with receive time.
+	// This also covers exporters (e.g. iptables NAT-event NetFlow) that carry no
+	// mappable time IE — those arrive zero and fall back here too.
+	now := time.Now()
 	start, end := f.FlowStart, f.FlowEnd
-	if start.IsZero() {
-		start = time.Now()
+	if !plausible(start, now) {
+		start = now
 	}
-	if end.IsZero() {
+	if end.IsZero() || end.Before(start) || end.After(now.Add(skewFuture)) {
 		end = start
 	}
 	return FlowRecord{

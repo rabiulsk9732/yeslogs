@@ -22,7 +22,11 @@ CRED_FILE="$ETC_NATLOG/admin-credentials.txt"
 rand() { head -c "${1:-24}" /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "${1:-24}"; }
 
 echo "==> build"
-./scripts/build.sh
+if [[ "${SKIP_BUILD:-0}" == "1" && -x bin/natlog ]]; then
+  echo "    using prebuilt bin/natlog (SKIP_BUILD=1)"
+else
+  ./scripts/build.sh
+fi
 
 echo "==> system users"
 id -u clickhouse >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin clickhouse
