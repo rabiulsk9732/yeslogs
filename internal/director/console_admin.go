@@ -207,6 +207,18 @@ func (s *Server) apiCreateDevice(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, clientErr("unknown ISP"))
 		return
 	}
+
+	if body.DeviceID == 0 {
+		devs, _ := s.store.ListDevices(r.Context(), scope)
+		var maxID uint32
+		for _, dev := range devs {
+			if dev.DeviceID > maxID {
+				maxID = dev.DeviceID
+			}
+		}
+		body.DeviceID = maxID + 1
+	}
+
 	d := store.Device{
 		ISPID: scope, Name: strings.TrimSpace(body.Name), ExporterIP: strings.TrimSpace(body.ExporterIP),
 		DeviceID: body.DeviceID, Protocol: valOr(body.Protocol, "auto"), Profile: valOr(body.Profile, "generic"),

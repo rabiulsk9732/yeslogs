@@ -159,10 +159,7 @@ func ispArgs(ispID uint32) []any {
 
 func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int) []natRecord {
 	where, args := scope(ispID, days)
-	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port,
-		if(nat_public_ip = toIPv4('0.0.0.0'), dst_ip, nat_public_ip) AS pubip,
-		if(nat_public_port = 0, dst_port, nat_public_port) AS pubport,
-		dst_ip, protocol, flow_type
+	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, protocol, flow_type
 		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
@@ -180,10 +177,16 @@ func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int)
 		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &proto, &ft); err != nil {
 			return out
 		}
+		pubIP := pip.String()
+		pubPort := int(pp)
+		if pubIP == "0.0.0.0" || (pubIP == sip.String() && pubPort == int(sp)) {
+			pubIP = ""
+			pubPort = 0
+		}
 		out = append(out, natRecord{
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
-			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(proto), Dest: dip.String(),
+			PubIP: pubIP, PubPort: pubPort, Proto: protoName(proto), Dest: dip.String(),
 			Action: strings.ToUpper(ft),
 		})
 	}
@@ -304,10 +307,16 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft); err != nil {
 			return out, err
 		}
+		pubIP := pip.String()
+		pubPort := int(pp)
+		if pubIP == "0.0.0.0" || (pubIP == sip.String() && pubPort == int(sp)) {
+			pubIP = ""
+			pubPort = 0
+		}
 		out = append(out, natRecord{
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
-			PubIP: pip.String(), PubPort: int(pp), Proto: protoName(pr),
+			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
 			DstIP: dip.String(), DstPort: int(dp),
 			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
 		})

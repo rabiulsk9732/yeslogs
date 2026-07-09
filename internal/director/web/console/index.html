@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>YesLogs Director</title>
 <link rel="stylesheet" href="/assets/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="/assets/datetimepicker/jquery.datetimepicker.min.css">
 <script src="/assets/js/jquery.min.js"></script>
+<script src="/assets/datetimepicker/jquery.datetimepicker.full.min.js"></script>
 <style>
 :root{
   --pri:#1366d6;--pri-d:#0f52ab;--pri6:#2a7ae4;--dark:#0c3b73;--cyan:#0891b2;
@@ -346,7 +348,7 @@ function renderTable(){
       <td class="mono"><span style="color:var(--mut);font-size:11px">${esc(r.date)}</span><br><span style="color:var(--ink2)">${esc(r.clock)}</span></td>
       <td><span class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</span></td>
       <td class="mono" style="color:var(--ink2)">${esc(r.privIp)}:${r.privPort}</td>
-      <td class="mono" style="color:var(--ink);font-weight:500">${esc(r.pubIp)}:${r.pubPort}</td>
+      <td class="mono" style="color:var(--ink);font-weight:500">${r.pubIp?esc(r.pubIp)+':'+r.pubPort:'<span style="color:var(--mut)">—</span>'}</td>
       <td>${protoPill(r.proto)}</td>
       <td class="mono" style="color:var(--ink2)">${esc(r.dest)}</td>
       <td>${typePill(r.action)}</td></tr>`;});
@@ -376,15 +378,16 @@ async function pgLogs(b){
     <div style="flex:1 1 140px"><label class="lbl">Destination IP</label><input id="s-dst" class="inp mono" placeholder="any"></div>
     <div style="flex:1 1 100px"><label class="lbl">Protocol</label><select id="s-proto" class="inp"><option>Any</option><option>TCP</option><option>UDP</option><option>ICMP</option></select></div>
     <div style="flex:2 1 320px;display:flex;gap:12px;min-width:280px">
-      <div style="flex:1"><label class="lbl">From (IST)</label><input id="s-from" type="datetime-local" class="inp"></div>
-      <div style="flex:1"><label class="lbl">To (IST)</label><input id="s-to" type="datetime-local" class="inp"></div>
+      <div style="flex:1"><label class="lbl">From (IST)</label><input id="s-from" type="text" class="inp" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div>
+      <div style="flex:1"><label class="lbl">To (IST)</label><input id="s-to" type="text" class="inp" autocomplete="off" placeholder="YYYY-MM-DD HH:MM"></div>
     </div>
     <div style="flex:1 1 180px"><label class="lbl">Audit reason (optional)</label><input id="s-reason" class="inp" placeholder="reason for this search"></div>
-    <button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Search</button>
+    <div style="flex:1 1 auto;display:flex;justify-content:flex-end"><button id="s-run" class="btn"><i class="fas fa-magnifying-glass"></i> Search</button></div>
   </div><div style="padding:0 18px 14px;font-size:12px;color:var(--mut)">Provide at least one of: Public IP, Private IP, Destination IP, or Device.</div><div id="s-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>
   <div id="s-results"><div class="card"><div class="empty"><div class="ei"><i class="fas fa-magnifying-glass"></i></div><div class="et">Run a search to see flow logs</div><div class="ed">Enter a Public IP, Private IP, Destination IP or pick a Device above, optionally narrow by time, then hit Search. Results across hot + S3 cold storage appear here.</div></div></div></div>`);
   $('#s-run').on('click', ()=>runLogs(true));
   $('#s-pub,#s-priv,#s-dst,#s-port').on('keydown',e=>{if(e.key==='Enter')runLogs(true);});
+  $('#s-from, #s-to').datetimepicker({format:'Y-m-d H:i', step:15});
 }
 function logBody(){ return {PublicIP:$('#s-pub').val().trim(),PrivateIP:$('#s-priv').val().trim(),DestIP:$('#s-dst').val().trim(),PublicPort:+($('#s-port').val()||0),Proto:$('#s-proto').val(),DeviceID:+($('#s-dev').val()||0),ISPID:+($('#s-isp').length?$('#s-isp').val():0),From:$('#s-from').val(),To:$('#s-to').val(),Reason:$('#s-reason').val()}; }
 // runLogs(true)=new search (reset to page 1); runLogs(false)=page/size change (keep filter).
@@ -418,7 +421,7 @@ function renderLogResults(rows, body){
     h+=`<tr><td class="mono"><span style="color:var(--mut);font-size:11px">${esc(r.date)}</span> ${esc(r.clock)}</td>
     <td class="mono" style="color:var(--pri);font-weight:600">${esc(r.sub)}</td>
     <td class="mono" style="font-weight:600;color:var(--ink)">${esc(r.privIp)}:${r.privPort}</td>
-    <td class="mono" style="color:var(--ink2)">${esc(r.pubIp)}:${r.pubPort}</td>
+    <td class="mono" style="color:var(--ink2)">${r.pubIp?esc(r.pubIp)+':'+r.pubPort:'<span style="color:var(--mut)">—</span>'}</td>
     <td>${protoPill(r.proto)}</td>
     <td class="mono" style="color:var(--ink2)">${esc(r.dest)}</td><td>${typePill(r.action)}</td></tr>`;});
   h+='</tbody></table></div>';
@@ -564,28 +567,8 @@ async function pgDevices(b){
   const data=await r.json(); const devs=data.devices||[], isps=data.isps||[], dir=data.isDirector, health=data.health||{};
   const pols=await loadPolicies();
   const ispSel = dir ? `<div style="flex:1 1 130px"><label class="lbl">ISP</label><select id="d-isp" class="inp"><option value="">— ISP —</option>${isps.map(i=>`<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select></div>` : '';
-  let h=`<div class="card" style="margin-bottom:20px">${chead('fa-server','Add Exporter Device')}
-  <div style="padding:16px 18px 4px">${note("An <b>exporter device</b> is a router/NAS that sends NetFlow/IPFIX to this collector. Only registered exporters are accepted — the <b>Exporter IP</b> must match the source IP the device sends from. Point the device's flow export at this server's collector port (NetFlow v9 → <span class='mono'>:9995</span>, IPFIX → <span class='mono'>:4739</span>, v5 → <span class='mono'>:2055</span>).",'fa-circle-info')}</div>
-  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
-    ${ispSel}
-    <div style="flex:1 1 110px"><label class="lbl">Dataplane</label><select id="d-dp" class="inp"><option>local</option></select></div>
-    <div style="flex:1 1 150px"><label class="lbl">Device name<span class="req">*</span></label><input id="d-name" class="inp" placeholder="edge-router-01">${hint('A friendly label')}</div>
-    <div style="flex:1 1 140px"><label class="lbl">Exporter IP<span class="req">*</span></label><input id="d-ip" class="inp mono" placeholder="103.187.167.154">${hint('Source IP the router exports from')}</div>
-    <div style="flex:1 1 95px"><label class="lbl">Device ID<span class="req">*</span></label><input id="d-id" type="number" min="1" class="inp mono" placeholder="1">${hint('Stamped on every flow')}</div>
-    <div style="flex:1 1 120px"><label class="lbl">Protocol</label><select id="d-proto" class="inp"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select>${hint('auto = detect')}</div>
-    <div style="flex:1 1 120px"><label class="lbl">Vendor profile</label><select id="d-profile" class="inp"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select></div>
-    <div style="flex:1 1 150px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select>${hint('A policy replaces custom rules')}</div>
-    <div style="align-self:flex-start;padding-top:23px"><button id="d-add" class="btn"><i class="fas fa-plus"></i> Add Device</button></div>
-  </div>
-  <div id="d-custom" style="padding:4px 18px 16px;display:flex;gap:18px;font-size:13px;color:var(--ink2);align-items:center;flex-wrap:wrap">
-    <span style="color:var(--mut)">Custom skip rules (used only when no capture policy is selected):</span>
-    <label class="chk"><input type="checkbox" id="d-dns" checked> skip DNS</label>
-    <label class="chk"><input type="checkbox" id="d-priv" checked> skip priv→priv</label>
-    <label class="chk"><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
-    <span id="d-msg" style="color:var(--bad);font-weight:600"></span>
-  </div></div>`;
-  h+='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn'))+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>Device ID</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Capture</th><th>Status</th><th>Flow (live)</th><th></th></tr></thead><tbody>';
-  if(!devs.length) h+=emptyRow(11,'fa-server','No exporter devices yet','Add your first exporter above, then point its NetFlow/IPFIX export at this collector to start ingesting flows.');
+  let h='<div class="card">'+chead('fa-list-check','Exporter Devices',pill(devs.length+' total','mut')+' '+pill('unregistered → rejected','warn')+'<button class="btn sm" id="open-add" style="margin-left:auto"><i class="fas fa-plus"></i> Add Device</button>')+'<div style="overflow-x:auto"><table><thead><tr><th>ISP</th><th>Name</th><th>Exporter IP</th><th>Device ID</th><th>Proto</th><th>Profile</th><th>Policy</th><th>Capture</th><th>Status</th><th>Flow (live)</th><th></th></tr></thead><tbody>';
+  if(!devs.length) h+=emptyRow(11,'fa-server','No exporter devices yet','Click "Add Device" above to register your first exporter, then point its NetFlow/IPFIX export at this collector to start ingesting flows.');
   devs.forEach(d=>{ h+=`<tr><td class="mono">${d.ISPID}</td><td style="font-weight:600;color:var(--ink)">${esc(d.Name)}</td><td class="mono">${esc(d.ExporterIP)}</td><td class="mono">${d.DeviceID}</td><td>${esc(d.Protocol)}</td><td>${esc(d.Profile)}</td>
     <td>${d.CapturePolicy?pill(d.CapturePolicy,'info'):'<span style="color:var(--mut)">custom</span>'}</td>
     <td style="font-size:12px">${skipSummary(d)}</td>
@@ -594,12 +577,39 @@ async function pgDevices(b){
     <td style="white-space:nowrap;text-align:right"><button class="btn out sm d-edit" data-id="${d.ID}" title="Edit"><i class="fas fa-pen"></i></button> <button class="btn out sm d-tog" data-id="${d.ID}">${d.Enabled?'Disable':'Enable'}</button> <button class="btn danger sm d-del" data-id="${d.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`; });
   h+='</tbody></table></div></div>';
   b.html(h);
-  const dpolSync=()=>{ const off=!!$('#d-pol').val(); $('#d-custom').css('opacity',off?'.45':'1'); $('#d-dns,#d-priv,#d-zero').prop('disabled',off); };
-  $('#d-pol').on('change',dpolSync); dpolSync();
-  $('#d-add').on('click', async ()=>{
-    const body={ISPID:dir?+($('#d-isp').val()||0):0,Name:$('#d-name').val(),ExporterIP:$('#d-ip').val(),DeviceID:+($('#d-id').val()||0),Protocol:$('#d-proto').val(),Profile:$('#d-profile').val(),CapturePolicy:$('#d-pol').val(),SkipDNS:$('#d-dns').is(':checked'),SkipPrivate:$('#d-priv').is(':checked'),SkipZero:$('#d-zero').is(':checked')};
-    const r=await apiJSON('/api/v1/devices','POST',body);
-    if(r.status===200){ pgDevices(b); } else { const e=await r.json().catch(()=>({})); $('#d-msg').text(e.error||'failed'); }
+
+  $('#open-add').on('click', () => {
+    modal(chead('fa-server','Add Exporter Device')+`
+  <div style="padding:16px 18px 4px">${note("An <b>exporter device</b> is a router/NAS that sends NetFlow/IPFIX to this collector. Only registered exporters are accepted — the <b>Exporter IP</b> must match the source IP the device sends from. Point the device's flow export at this server's collector port (NetFlow v9 → <span class='mono'>:9995</span>, IPFIX → <span class='mono'>:4739</span>, v5 → <span class='mono'>:2055</span>).",'fa-circle-info')}</div>
+  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
+    ${ispSel}
+    <div style="flex:1 1 110px"><label class="lbl">Dataplane</label><select id="d-dp" class="inp"><option>local</option></select></div>
+    <div style="flex:1 1 150px"><label class="lbl">Device name<span class="req">*</span></label><input id="d-name" class="inp" placeholder="edge-router-01">${hint('A friendly label')}</div>
+    <div style="flex:1 1 140px"><label class="lbl">Exporter IP<span class="req">*</span></label><input id="d-ip" class="inp mono" placeholder="103.187.167.154">${hint('Source IP the router exports from')}</div>
+    <div style="flex:1 1 95px"><label class="lbl">Device ID</label><input id="d-id" type="text" class="inp mono" readonly placeholder="Auto" style="background:var(--bg3);color:var(--mut)">${hint('Auto-assigned by the backend')}</div>
+    <div style="flex:1 1 120px"><label class="lbl">Protocol</label><select id="d-proto" class="inp"><option>auto</option><option>netflow5</option><option>netflow9</option><option>ipfix</option></select>${hint('auto = detect')}</div>
+    <div style="flex:1 1 120px"><label class="lbl">Vendor profile</label><select id="d-profile" class="inp"><option>generic</option><option>mikrotik</option><option>cisco</option><option>juniper</option><option>huawei</option></select></div>
+    <div style="flex:1 1 150px"><label class="lbl">Capture policy</label><select id="d-pol" class="inp">${policyOpts(pols,'')}</select>${hint('A policy replaces custom rules')}</div>
+  </div>
+  <div id="d-custom" style="padding:4px 18px 16px;display:flex;gap:18px;font-size:13px;color:var(--ink2);align-items:center;flex-wrap:wrap">
+    <span style="color:var(--mut)">Custom skip rules (used only when no capture policy is selected):</span>
+    <label class="chk"><input type="checkbox" id="d-dns" checked> skip DNS</label>
+    <label class="chk"><input type="checkbox" id="d-priv" checked> skip priv→priv</label>
+    <label class="chk"><input type="checkbox" id="d-zero" checked> skip zero-byte</label>
+  </div>
+  <div style="padding:10px 18px 18px;display:flex;gap:10px;align-items:center">
+    <button id="d-add" class="btn"><i class="fas fa-plus"></i> Add Device</button>
+    <button class="btn out" onclick="closeModal()">Cancel</button>
+    <span id="d-msg" style="color:var(--bad);font-weight:600;margin-left:10px"></span>
+  </div>`);
+
+    const dpolSync=()=>{ const off=!!$('#d-pol').val(); $('#d-custom').css('opacity',off?'.45':'1'); $('#d-dns,#d-priv,#d-zero').prop('disabled',off); };
+    $('#d-pol').on('change',dpolSync); dpolSync();
+    $('#d-add').on('click', async ()=>{
+      const body={ISPID:dir?+($('#d-isp').val()||0):0,Name:$('#d-name').val(),ExporterIP:$('#d-ip').val(),DeviceID:+($('#d-id').val()||0),Protocol:$('#d-proto').val(),Profile:$('#d-profile').val(),CapturePolicy:$('#d-pol').val(),SkipDNS:$('#d-dns').is(':checked'),SkipPrivate:$('#d-priv').is(':checked'),SkipZero:$('#d-zero').is(':checked')};
+      const r=await apiJSON('/api/v1/devices','POST',body);
+      if(r.status===200){ closeModal(); toast('Device added'); pgDevices(b); } else { const e=await r.json().catch(()=>({})); $('#d-msg').text(e.error||'failed'); }
+    });
   });
   $('.d-edit').on('click', function(){ const dev=devs.find(x=>String(x.ID)===String($(this).data('id'))); if(dev) editDevice(dev,pols,()=>pgDevices(b)); });
   $('.d-tog').on('click', async function(){ await apiJSON('/api/v1/devices/'+$(this).data('id')+'/toggle','POST'); pgDevices(b); });
@@ -750,7 +760,7 @@ function editDevice(dev,pols,onSave){
   modal(chead('fa-pen','Edit exporter — '+dev.Name+' (ISP #'+dev.ISPID+')')+`<div style="padding:18px">
     ${srow('Device name',`<input id="e-name" class="inp" value="${esc(dev.Name)}">`)}
     ${srow('Exporter IP',`<input id="e-ip" class="inp mono" value="${esc(dev.ExporterIP)}">`)}
-    ${srow('Device ID',`<input id="e-id" type="number" class="inp mono" value="${dev.DeviceID}">`)}
+    ${srow('Device ID',`<input id="e-id" type="number" class="inp mono" value="${dev.DeviceID}" readonly style="background:var(--bg3);color:var(--mut)">`)}
     ${srow('Protocol',`<select id="e-proto" class="inp">${opts(['auto','netflow5','netflow9','ipfix'],dev.Protocol)}</select>`)}
     ${srow('Vendor profile',`<select id="e-profile" class="inp">${opts(['generic','mikrotik','cisco','juniper','huawei'],dev.Profile)}</select>`)}
     ${srow('Capture policy',`<select id="e-pol" class="inp">${policyOpts(pols,dev.CapturePolicy)}</select>`,'A policy replaces the custom skip rules below.')}
