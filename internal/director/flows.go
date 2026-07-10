@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/natflow/natflow-dataplane/internal/director/store"
 )
 
 // FlowReader runs read-only, ISP-scoped queries against the ClickHouse flow_logs
@@ -131,44 +129,32 @@ func (r *FlowReader) PerDevice(ctx context.Context, ispID uint32, days int) ([]D
 // within the lookback window, keyed by "ispID|dotted-ip". Used by the device
 // liveness monitor and the Devices status badges. The map values are correct
 // instants regardless of display timezone (safe to compare with time.Now()).
-func (r *FlowReader) LastSeenByExporter(ctx context.Context, days int, devs []store.Device) (map[string]time.Time, error) {
-	out := map[string]time.Time{}
-	if len(devs) == 0 {
-		return out, nil
-	}
-
-	var queries []string
-	for _, d := range devs {
-		if !d.Enabled {
-			continue
-		}
-		// A fast index lookup per device, unioned into a single round-trip query.
-		// ifNull handles devices with no recent flows (subquery returns no rows).
-		queries = append(queries, fmt.Sprintf(
-			`SELECT %d AS isp, '%s' AS ip, ifNull((SELECT flow_start FROM %s.flow_logs WHERE isp_id=%d AND device_id=%d AND event_date >= today() - %d ORDER BY flow_start DESC LIMIT 1), toDateTime('1970-01-01')) AS ts`,
-			d.ISPID, d.ExporterIP, r.db, d.ISPID, d.ID, days))
-	}
-	if len(queries) == 0 {
-		return out, nil
-	}
-	q := strings.Join(queries, " UNION ALL ")
-
+func (r *FlowReader) LastSeenByExporter(ctx context.Context, days int) (map[string]time.Time, error) {
+	// ONE aggregate keyed by exporter_ip — matches the monitor's exporterKey and
+	// scales to any number of devices (a per-device UNION would be N subqueries
+	// and, worse, would have to match device_id, which flow_logs populates from
+	// the configured DeviceID, not the store row's primary key). The recent
+	// flow_start bound keeps the scan cheap (part min/max prunes to fresh parts):
+	// an exporter with no flow in the window is "silent" — the monitor's in-memory
+	// ratchet remembers its last-seen from earlier ticks.
+	q := fmt.Sprintf(`SELECT isp_id, exporter_ip, max(flow_start) AS last
+		FROM %s.flow_logs
+		WHERE event_date >= today() - %d AND flow_start > now() - INTERVAL 3 HOUR
+		GROUP BY isp_id, exporter_ip`, r.db, days)
 	rows, err := r.conn.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
+	out := map[string]time.Time{}
 	for rows.Next() {
 		var isp uint32
-		var ip string
+		var ip net.IP
 		var ts time.Time
 		if err := rows.Scan(&isp, &ip, &ts); err != nil {
 			return nil, err
 		}
-		if ts.Unix() > 0 {
-			out[fmt.Sprintf("%d|%s", isp, ip)] = ts
-		}
+		out[fmt.Sprintf("%d|%s", isp, ip.String())] = ts
 	}
 	return out, rows.Err()
 }

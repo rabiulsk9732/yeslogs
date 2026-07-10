@@ -47,8 +47,11 @@ func rollupDDL(db string) []string {
     bytes SimpleAggregateFunction(sum, UInt64)
 ) ENGINE = SummingMergeTree PARTITION BY event_date ORDER BY (isp_id, event_date, src_ip)`, db),
 
+		// TTL is long (90d) so the watermark survives any realistic outage: if the
+		// state table emptied, EnsureRollups would re-seed at now() and silently
+		// skip aggregating the whole downtime window.
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.flow_rollup_state
-(ts DateTime, at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY ts TTL at + INTERVAL 2 DAY`, db),
+(ts DateTime, at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY ts TTL at + INTERVAL 90 DAY`, db),
 	}
 }
 
@@ -84,6 +87,9 @@ func (r *FlowReader) EnsureRollups(ctx context.Context) error {
 	for _, mv := range []string{"flow_rollup_mv", "flow_rollup_subs_mv"} {
 		_ = r.conn.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s.%s`, r.db, mv))
 	}
+	// Bump the watermark TTL on tables created before it was lengthened (no-op if
+	// already 90d). Prevents an old 2d TTL from emptying the watermark on outage.
+	_ = r.conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s.flow_rollup_state MODIFY TTL at + INTERVAL 90 DAY`, r.db))
 	// Watermark already seeded? Then we're initialized; RollupTick takes over.
 	var seeded uint64
 	if err := r.conn.QueryRow(ctx, fmt.Sprintf(`SELECT count() FROM %s.flow_rollup_state`, r.db)).Scan(&seeded); err != nil {
@@ -92,7 +98,7 @@ func (r *FlowReader) EnsureRollups(ctx context.Context) error {
 	if seeded > 0 {
 		return nil
 	}
-	cutoff := time.Now()
+	cutoff := time.Now().Add(-10 * time.Second) // settle lag: don't strand inserts committing at ~now
 	// Fresh table → backfill everything up to the cutoff. If the rollup already has
 	// data (migrated from the MV), skip the backfill and just start the watermark
 	// at the cutoff (the batch job continues from here).
@@ -123,13 +129,18 @@ func (r *FlowReader) RollupTick(ctx context.Context) error {
 	if wm.IsZero() || !cutoff.After(wm) {
 		return nil // not seeded yet, or nothing new
 	}
+	// Advance the watermark BEFORE the summing inserts. The rollup engines sum on
+	// merge, so if a tick half-writes then fails, re-running the same window on the
+	// next tick would permanently double-count it (upward drift). Committing the
+	// watermark first makes a mid-tick failure SKIP the window instead — at worst a
+	// one-off ~2-min gap in the approximate dashboard, never silent drift.
+	if err := r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup_state (ts) VALUES (?)`, r.db), cutoff); err != nil {
+		return fmt.Errorf("advance watermark: %w", err)
+	}
 	if err := r.rollupInsertHourly(ctx, "created_at > ? AND created_at <= ?", wm, cutoff); err != nil {
 		return fmt.Errorf("rollup tick hourly: %w", err)
 	}
-	if err := r.rollupInsertSubs(ctx, "created_at > ? AND created_at <= ?", wm, cutoff); err != nil {
-		return fmt.Errorf("rollup tick subs: %w", err)
-	}
-	return r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup_state (ts) VALUES (?)`, r.db), cutoff)
+	return r.rollupInsertSubs(ctx, "created_at > ? AND created_at <= ?", wm, cutoff)
 }
 
 // hasRollup reports whether the rollup has any rows (used to fall back to raw

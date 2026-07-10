@@ -613,8 +613,17 @@ func (s *Server) refreshConsoleAsync(ispID uint32) {
 		data := s.flows.ConsoleData(ctx, ispID, s.flowDays)
 		s.nameDevices(ctx, ispID, data.Records)
 		s.consoleMu.Lock()
+		defer s.consoleMu.Unlock()
+		// ConsoleData zero-fills on query error, so a transient ClickHouse hiccup
+		// yields an Empty snapshot. Don't overwrite a previously-good one with it —
+		// keep serving the last good data (just clear the refreshing flag) rather
+		// than flashing a blank "no data" dashboard until the next refresh.
+		if prev, ok := s.consoleCache[ispID]; ok && data.Empty && !prev.data.Empty {
+			prev.refreshing = false
+			s.consoleCache[ispID] = prev
+			return
+		}
 		s.consoleCache[ispID] = consoleCacheEntry{at: time.Now(), data: data}
-		s.consoleMu.Unlock()
 	}()
 }
 

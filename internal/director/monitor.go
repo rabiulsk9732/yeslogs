@@ -64,7 +64,7 @@ func (s *Server) deviceHealthMap(ctx context.Context, devs []store.Device) map[i
 	}
 	qctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	seen, err := s.flows.LastSeenByExporter(qctx, healthLookbackDays, devs)
+	seen, err := s.flows.LastSeenByExporter(qctx, healthLookbackDays)
 	if err != nil {
 		s.log.Warn("device health: last-seen query failed", "error", err)
 		return out
@@ -133,7 +133,7 @@ func (s *Server) runHealthCheck(ctx context.Context) {
 		s.log.Error("device monitor: list devices failed", "error", err)
 		return
 	}
-	seen, err := s.flows.LastSeenByExporter(qctx, healthLookbackDays, devs)
+	seen, err := s.flows.LastSeenByExporter(qctx, healthLookbackDays)
 	cancel()
 	if err != nil {
 		s.log.Error("device monitor: last-seen query failed", "error", err)
