@@ -4,17 +4,25 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 )
 
-// Pre-aggregated rollups keep the dashboard O(1): instead of scanning the raw
-// flow_logs (hundreds of millions to billions of rows) on every load, a
-// Materialized View incrementally maintains tiny per-(isp,day,hour,device)
-// summaries as data ingests. The dashboard reads a few hundred rows → sub-100ms
-// regardless of whether the raw table holds 100 GB or 100 TB.
+// Pre-aggregated rollups keep the dashboard O(1): instead of scanning raw
+// flow_logs (hundreds of millions to billions of rows) on every load, tiny
+// per-(isp,day,hour,device) summaries are maintained and the dashboard reads a
+// few hundred rows → sub-100ms regardless of raw size.
 //
-//   flow_rollup       — hourly stats per device (widgets, hourly chart, proto,
-//                       per-device, distinct subs/NAT IPs via uniq HLL states)
-//   flow_rollup_subs  — daily bytes per subscriber (top-talkers)
+// These are maintained by a PERIODIC BATCH job (RollupTick, every ~2 min), NOT a
+// per-insert materialized view. A per-block MV creates one rollup part per source
+// insert block, so at high ingest (100s of exporters) part-creation outruns
+// merges → "too many parts" insert rejection + broken parts on unclean restart.
+// The batch job instead writes ~2 parts per run regardless of ingest rate, so it
+// scales to any number of exporters. Freshness is bounded by the tick interval,
+// which the dashboard's serve-stale cache already tolerates.
+//
+//   flow_rollup        — hourly stats per device (widgets, chart, proto, devices)
+//   flow_rollup_subs   — daily bytes per subscriber (top-talkers)
+//   flow_rollup_state  — watermark (max created_at rolled up so far)
 
 func rollupDDL(db string) []string {
 	return []string{
@@ -33,58 +41,95 @@ func rollupDDL(db string) []string {
     nat_ips AggregateFunction(uniq, IPv4)
 ) ENGINE = AggregatingMergeTree PARTITION BY event_date ORDER BY (isp_id, event_date, hour, device_id)`, db),
 
-		fmt.Sprintf(`CREATE MATERIALIZED VIEW IF NOT EXISTS %s.flow_rollup_mv TO %s.flow_rollup AS
-SELECT isp_id, event_date, toHour(flow_start) AS hour, device_id,
-    sum(1) AS flows, sum(bytes) AS bytes, sum(packets) AS packets,
-    countIf(protocol = 6) AS tcp, countIf(protocol = 17) AS udp, countIf(protocol = 1) AS icmp,
-    countIf(protocol NOT IN (6, 17, 1)) AS other,
-    sum(toUInt64(flow_end - flow_start)) AS dur_sum,
-    uniqState(src_ip) AS subs, uniqState(nat_public_ip) AS nat_ips
-FROM %s.flow_logs GROUP BY isp_id, event_date, hour, device_id`, db, db, db),
-
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.flow_rollup_subs
 (
     isp_id UInt32, event_date Date, src_ip IPv4,
     bytes SimpleAggregateFunction(sum, UInt64)
 ) ENGINE = SummingMergeTree PARTITION BY event_date ORDER BY (isp_id, event_date, src_ip)`, db),
 
-		fmt.Sprintf(`CREATE MATERIALIZED VIEW IF NOT EXISTS %s.flow_rollup_subs_mv TO %s.flow_rollup_subs AS
-SELECT isp_id, event_date, src_ip, sum(bytes) AS bytes
-FROM %s.flow_logs GROUP BY isp_id, event_date, src_ip`, db, db, db),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.flow_rollup_state
+(ts DateTime, at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY ts TTL at + INTERVAL 2 DAY`, db),
 	}
 }
 
-// EnsureRollups creates the rollup tables + materialized views (idempotent) and,
-// if the rollup is empty, backfills complete PAST days from flow_logs (today is
-// left to the MV going forward, so backfill can't double-count live inserts).
+// rollupInsertHourly / rollupInsertSubs build the aggregate INSERTs for a
+// created_at window (exclusive lower, inclusive upper). Part-level min/max on
+// created_at prunes to only the freshly-inserted parts, so each run scans just
+// the last interval's data — cost is independent of total table size.
+func (r *FlowReader) rollupInsertHourly(ctx context.Context, where string, args ...any) error {
+	return r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup
+SELECT isp_id, event_date, toHour(flow_start) AS hour, device_id,
+    sum(1), sum(bytes), sum(packets),
+    countIf(protocol = 6), countIf(protocol = 17), countIf(protocol = 1), countIf(protocol NOT IN (6, 17, 1)),
+    sum(toUInt64(flow_end - flow_start)), uniqState(src_ip), uniqState(nat_public_ip)
+FROM %s.flow_logs WHERE %s GROUP BY isp_id, event_date, hour, device_id`, r.db, r.db, where), args...)
+}
+
+func (r *FlowReader) rollupInsertSubs(ctx context.Context, where string, args ...any) error {
+	return r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup_subs
+SELECT isp_id, event_date, src_ip, sum(bytes) FROM %s.flow_logs
+WHERE %s GROUP BY isp_id, event_date, src_ip`, r.db, r.db, where), args...)
+}
+
+// EnsureRollups creates the rollup tables (idempotent), migrates OFF the old
+// per-insert materialized views if present, and seeds the watermark once.
 func (r *FlowReader) EnsureRollups(ctx context.Context) error {
 	for _, s := range rollupDDL(r.db) {
 		if err := r.conn.Exec(ctx, s); err != nil {
 			return fmt.Errorf("rollup ddl: %w", err)
 		}
 	}
-	var have uint64
-	if err := r.conn.QueryRow(ctx, fmt.Sprintf(`SELECT count() FROM %s.flow_rollup`, r.db)).Scan(&have); err != nil {
-		return fmt.Errorf("rollup count: %w", err)
+	// Migrate off the per-block MVs (part-explosion at scale) — the batch job owns
+	// the rollup now. Dropping a MV does not touch its target table's data.
+	for _, mv := range []string{"flow_rollup_mv", "flow_rollup_subs_mv"} {
+		_ = r.conn.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s.%s`, r.db, mv))
 	}
-	if have > 0 {
-		return nil // already populated (or maintained by the MV) — never re-backfill
+	// Watermark already seeded? Then we're initialized; RollupTick takes over.
+	var seeded uint64
+	if err := r.conn.QueryRow(ctx, fmt.Sprintf(`SELECT count() FROM %s.flow_rollup_state`, r.db)).Scan(&seeded); err != nil {
+		return fmt.Errorf("rollup state count: %w", err)
 	}
-	// Backfill past complete days only; the MV owns today onward.
-	if err := r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup
-SELECT isp_id, event_date, toHour(flow_start) AS hour, device_id,
-    sum(1), sum(bytes), sum(packets),
-    countIf(protocol = 6), countIf(protocol = 17), countIf(protocol = 1), countIf(protocol NOT IN (6, 17, 1)),
-    sum(toUInt64(flow_end - flow_start)), uniqState(src_ip), uniqState(nat_public_ip)
-FROM %s.flow_logs WHERE event_date < today() GROUP BY isp_id, event_date, hour, device_id`, r.db, r.db)); err != nil {
-		return fmt.Errorf("rollup backfill: %w", err)
+	if seeded > 0 {
+		return nil
 	}
-	if err := r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup_subs
-SELECT isp_id, event_date, src_ip, sum(bytes) FROM %s.flow_logs
-WHERE event_date < today() GROUP BY isp_id, event_date, src_ip`, r.db, r.db)); err != nil {
-		return fmt.Errorf("subs backfill: %w", err)
+	cutoff := time.Now()
+	// Fresh table → backfill everything up to the cutoff. If the rollup already has
+	// data (migrated from the MV), skip the backfill and just start the watermark
+	// at the cutoff (the batch job continues from here).
+	var haveRollup uint64
+	_ = r.conn.QueryRow(ctx, fmt.Sprintf(`SELECT count() FROM %s.flow_rollup`, r.db)).Scan(&haveRollup)
+	if haveRollup == 0 {
+		if err := r.rollupInsertHourly(ctx, "created_at <= ?", cutoff); err != nil {
+			return fmt.Errorf("rollup backfill: %w", err)
+		}
+		if err := r.rollupInsertSubs(ctx, "created_at <= ?", cutoff); err != nil {
+			return fmt.Errorf("subs backfill: %w", err)
+		}
+	}
+	if err := r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup_state (ts) VALUES (?)`, r.db), cutoff); err != nil {
+		return fmt.Errorf("seed watermark: %w", err)
 	}
 	return nil
+}
+
+// RollupTick rolls up flows ingested since the last watermark into the summary
+// tables (~2 parts written per run, independent of ingest rate). Call periodically.
+func (r *FlowReader) RollupTick(ctx context.Context) error {
+	var wm time.Time
+	if err := r.conn.QueryRow(ctx, fmt.Sprintf(`SELECT max(ts) FROM %s.flow_rollup_state`, r.db)).Scan(&wm); err != nil {
+		return fmt.Errorf("read watermark: %w", err)
+	}
+	cutoff := time.Now().Add(-10 * time.Second) // small lag so in-flight inserts settle
+	if wm.IsZero() || !cutoff.After(wm) {
+		return nil // not seeded yet, or nothing new
+	}
+	if err := r.rollupInsertHourly(ctx, "created_at > ? AND created_at <= ?", wm, cutoff); err != nil {
+		return fmt.Errorf("rollup tick hourly: %w", err)
+	}
+	if err := r.rollupInsertSubs(ctx, "created_at > ? AND created_at <= ?", wm, cutoff); err != nil {
+		return fmt.Errorf("rollup tick subs: %w", err)
+	}
+	return r.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.flow_rollup_state (ts) VALUES (?)`, r.db), cutoff)
 }
 
 // hasRollup reports whether the rollup has any rows (used to fall back to raw

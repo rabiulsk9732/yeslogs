@@ -15,6 +15,11 @@
         <parts_to_delay_insert>2000</parts_to_delay_insert>
         <parts_to_throw_insert>6000</parts_to_throw_insert>
         <max_parts_in_total>200000</max_parts_in_total>
+        <!-- On startup after an unclean shutdown, tolerate + auto-remove more
+             empty/broken parts before refusing to load a table (default 100).
+             With the batch rollup this stays low, but this prevents a single
+             crash from wedging ClickHouse startup. -->
+        <max_suspicious_broken_parts>1000</max_suspicious_broken_parts>
     </merge_tree>
 
     <!-- Surface async insert activity for the dashboard / debugging. -->

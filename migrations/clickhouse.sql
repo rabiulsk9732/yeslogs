@@ -47,10 +47,11 @@ ORDER BY (isp_id, device_id, flow_start, src_ip, src_port, dst_ip, dst_port)
 TTL event_date + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
 
--- Dashboard rollups (also auto-created by natlog on startup). A Materialized
--- View incrementally maintains per-(isp,day,hour,device) summaries so the
--- console reads a few hundred rows instead of scanning raw flow_logs — O(1)
--- dashboard regardless of table size.
+-- Dashboard rollups (also auto-created + maintained by natlog on startup). natlog
+-- runs a PERIODIC BATCH rollup (every ~2 min) into these summary tables — NOT a
+-- per-insert materialized view, so rollup part-creation stays independent of
+-- ingest rate and scales to hundreds of exporters. The console reads a few
+-- hundred rows instead of scanning raw flow_logs → O(1) dashboard at any size.
 CREATE TABLE IF NOT EXISTS natlogs.flow_rollup
 (
     isp_id UInt32, event_date Date, hour UInt8, device_id UInt32,
@@ -66,21 +67,12 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_rollup
     nat_ips AggregateFunction(uniq, IPv4)
 ) ENGINE = AggregatingMergeTree PARTITION BY event_date ORDER BY (isp_id, event_date, hour, device_id);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS natlogs.flow_rollup_mv TO natlogs.flow_rollup AS
-SELECT isp_id, event_date, toHour(flow_start) AS hour, device_id,
-    sum(1) AS flows, sum(bytes) AS bytes, sum(packets) AS packets,
-    countIf(protocol = 6) AS tcp, countIf(protocol = 17) AS udp, countIf(protocol = 1) AS icmp,
-    countIf(protocol NOT IN (6, 17, 1)) AS other,
-    sum(toUInt64(flow_end - flow_start)) AS dur_sum,
-    uniqState(src_ip) AS subs, uniqState(nat_public_ip) AS nat_ips
-FROM natlogs.flow_logs GROUP BY isp_id, event_date, hour, device_id;
-
 CREATE TABLE IF NOT EXISTS natlogs.flow_rollup_subs
 (
     isp_id UInt32, event_date Date, src_ip IPv4,
     bytes SimpleAggregateFunction(sum, UInt64)
 ) ENGINE = SummingMergeTree PARTITION BY event_date ORDER BY (isp_id, event_date, src_ip);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS natlogs.flow_rollup_subs_mv TO natlogs.flow_rollup_subs AS
-SELECT isp_id, event_date, src_ip, sum(bytes) AS bytes
-FROM natlogs.flow_logs GROUP BY isp_id, event_date, src_ip;
+-- Watermark: max flow_logs.created_at rolled up so far (batch job continues here).
+CREATE TABLE IF NOT EXISTS natlogs.flow_rollup_state
+(ts DateTime, at DateTime DEFAULT now()) ENGINE = MergeTree ORDER BY ts TTL at + INTERVAL 2 DAY;

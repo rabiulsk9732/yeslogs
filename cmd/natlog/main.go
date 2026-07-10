@@ -146,16 +146,29 @@ func run() (err error) {
 		fr = nil
 	}
 	if fr != nil {
-		// Create the dashboard rollup tables + materialized views and backfill
-		// past days (idempotent, once). Runs in the background so it never blocks
-		// startup; until it finishes, the dashboard falls back to raw aggregation.
+		// Create the dashboard rollup tables + backfill (idempotent, once) in the
+		// background so it never blocks startup, then run a periodic BATCH rollup.
+		// The batch job (not a per-insert MV) keeps rollup part-creation independent
+		// of ingest rate, so it scales to hundreds of exporters without "too many
+		// parts" rejection. Until the first rollup lands the dashboard falls back to
+		// raw aggregation.
 		go func() {
-			rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			defer rcancel()
-			if e := fr.EnsureRollups(rctx); e != nil {
-				log.Warn("dashboard rollup setup failed (falling back to raw aggregation)", "error", e)
-			} else {
-				log.Info("dashboard rollups ready")
+			ectx, ecancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			err := fr.EnsureRollups(ectx)
+			ecancel()
+			if err != nil {
+				log.Warn("dashboard rollup setup failed (falling back to raw aggregation)", "error", err)
+				return
+			}
+			log.Info("dashboard rollups ready")
+			t := time.NewTicker(2 * time.Minute)
+			defer t.Stop()
+			for range t.C {
+				tctx, tc := context.WithTimeout(context.Background(), 90*time.Second)
+				if e := fr.RollupTick(tctx); e != nil {
+					log.Warn("rollup tick failed", "error", e)
+				}
+				tc()
 			}
 		}()
 	}
