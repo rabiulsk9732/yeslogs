@@ -324,6 +324,20 @@ func run() (err error) {
 		}
 	})
 
+	// Ingest-stall alerting: the monitor compares these counters minute over
+	// minute and emails when flows keep arriving but nothing reaches ClickHouse
+	// (the failure mode that silently ate 4 days of data on box3, Jul 2026).
+	dirSrv.SetIngestHealth(func() director.IngestHealth {
+		msg, at := manager.LastInsertError()
+		return director.IngestHealth{
+			Decoded:      uint64(testutil.ToFloat64(m.FlowsDecoded)),
+			Inserted:     uint64(testutil.ToFloat64(m.FlowsInserted)),
+			InsertErrors: uint64(testutil.ToFloat64(m.InsertErrors)),
+			LastError:    msg,
+			LastErrorAt:  at,
+		}
+	})
+
 	// In-process registry: the collector pulls its device registry directly from
 	// the Director store (no HTTP/token), applying via the managed hot-reload.
 	managedCtx, managedCancel := context.WithCancel(context.Background())
@@ -408,6 +422,7 @@ func run() (err error) {
 	// Checks each enabled device's last flow every minute and emails on
 	// silent/recovered transitions. No-op unless notifications are enabled.
 	go dirSrv.RunDeviceMonitor(managedCtx)
+	go dirSrv.RunIngestMonitor(managedCtx)
 
 	log.Info("natlog running; SIGINT/SIGTERM to stop",
 		"receivers", len(receivers), "metrics", cfg.Metrics.Bind)

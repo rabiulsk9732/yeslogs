@@ -194,3 +194,13 @@ func (r *FlowReader) Recent(ctx context.Context, ispID uint32, days, limit int) 
 	}
 	return out, rows.Err()
 }
+
+// BrokenParts counts data parts ClickHouse has set aside as broken (detached
+// with a broken-* prefix) in this database. Nonzero means corruption — usually
+// an unclean shutdown — silently removed rows from hot storage.
+func (r *FlowReader) BrokenParts(ctx context.Context) (uint64, error) {
+	var n uint64
+	err := r.conn.QueryRow(ctx,
+		`SELECT count() FROM system.detached_parts WHERE database = ? AND name LIKE 'broken%'`, r.db).Scan(&n)
+	return n, err
+}

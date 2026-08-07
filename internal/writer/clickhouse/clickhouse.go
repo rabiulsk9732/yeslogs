@@ -64,9 +64,27 @@ type Manager struct {
 	mu   sync.Mutex // serializes Reload/Stop pool swaps
 	pool atomic.Pointer[pool]
 
+	// lastErr retains the most recent insert failure so the ingest-health
+	// monitor can put the actual ClickHouse error in its alert email.
+	lastErr atomic.Pointer[insertFailure]
+
 	retireWG sync.WaitGroup // background drains of pools retired by Reload
 	aggStop  chan struct{}
 	aggWG    sync.WaitGroup
+}
+
+type insertFailure struct {
+	msg string
+	at  time.Time
+}
+
+// LastInsertError returns the most recent batch-insert failure and when it
+// happened. Zero values mean no insert has failed since start.
+func (m *Manager) LastInsertError() (string, time.Time) {
+	if f := m.lastErr.Load(); f != nil {
+		return f.msg, f.at
+	}
+	return "", time.Time{}
 }
 
 // compressionMethod maps the config string to a clickhouse compression method.
@@ -406,6 +424,7 @@ func (s *shard) flush(batch []normalizer.FlowRecord) {
 			return
 		}
 		s.mgr.metrics.WriterRetries.Inc()
+		s.mgr.lastErr.Store(&insertFailure{msg: err.Error(), at: time.Now()})
 		s.mgr.log.Warn("batch insert failed", "worker", s.id, "attempt", a, "rows", len(batch), "error", err)
 		if a < attempts {
 			time.Sleep(backoff(a, live.RetryBackoff))
