@@ -47,12 +47,19 @@ func (r *FlowReader) window(ctx context.Context, ispID uint32) (string, string) 
 	return mn.Format("2006-01-02"), mx.Format("2006-01-02")
 }
 
-func (r *FlowReader) perDay(ctx context.Context, ispID uint32, days int) []dayCount {
+// perDay returns record counts per day, newest first. limit <= 0 returns the
+// whole data window (naturally bounded by the retention TTL) — the console
+// table paginates/filters client-side, so it wants every day, not a fixed 30.
+func (r *FlowReader) perDay(ctx context.Context, ispID uint32, limit int) []dayCount {
 	where, args := "1", []any(nil)
 	if ispID != 0 {
 		where, args = "isp_id = ?", []any{ispID}
 	}
-	q := fmt.Sprintf(`SELECT toString(event_date), count() FROM %s.flow_logs WHERE %s GROUP BY event_date ORDER BY event_date DESC LIMIT %d`, r.db, where, days)
+	limitClause := ""
+	if limit > 0 {
+		limitClause = fmt.Sprintf(" LIMIT %d", limit)
+	}
+	q := fmt.Sprintf(`SELECT toString(event_date), count() FROM %s.flow_logs WHERE %s GROUP BY event_date ORDER BY event_date DESC%s`, r.db, where, limitClause)
 	rows, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil
@@ -223,7 +230,7 @@ func (s *Server) handleRetention(w http.ResponseWriter, r *http.Request) {
 		"retentionDays": retDays,
 		"storage":       map[string]any{"rows": rows, "bytes": bytes, "human": humanBytes(bytes)},
 		"window":        map[string]string{"from": mn, "to": mx},
-		"perDay":        s.flows.perDay(ctx, id.ISPID, 30),
+		"perDay":        s.flows.perDay(ctx, id.ISPID, 0), // full window; table filters/sorts client-side
 		"archive":       archInfo,
 	}
 	writeJSON(w, http.StatusOK, resp)

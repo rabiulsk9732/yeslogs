@@ -502,16 +502,43 @@ async function pgRetention(b){
     ad.forEach(a=>{ h+=`<tr><td class="mono">${esc(a.Day)}</td><td class="mono">${a.Objects||0}</td><td class="mono">${Number(a.Rows||0).toLocaleString()}</td><td class="mono">${humanBytes(a.Bytes||0)}</td><td class="mono">${esc((a.ArchivedAt||'').replace('T',' ').slice(0,19))}</td></tr>`;});
     h+='</tbody></table></div></div>';
   }
-  // per-day table
-  h+='<div class="card"><div class="ch"><i class="fas fa-calendar-week" style="color:var(--pri)"></i><h2>Records by day (last 30)</h2></div><div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Records</th><th>Coverage</th>'+(arch.canRun?'<th>Archive</th>':'')+'</tr></thead><tbody>';
-  const days=d.perDay||[]; const max=days.reduce((m,x)=>Math.max(m,x.count),0)||1;
-  if(!days.length) h+='<tr><td colspan="4" style="text-align:center;color:var(--mut);padding:24px">No data yet.</td></tr>';
-  days.forEach(x=>{ h+=`<tr><td class="mono">${esc(x.date)}</td><td class="mono">${Number(x.count).toLocaleString()}</td>
-    <td style="width:40%"><div style="height:8px;background:#eef1f4;border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(x.count/max*100)}%;background:var(--pri);border-radius:5px"></div></div></td>`
-    +(arch.canRun?`<td><button class="btn out arch-run" data-d="${esc(x.date)}" style="height:28px"><i class="fas fa-cloud-arrow-up"></i> S3</button></td>`:'')+'</tr>';});
-  h+='</tbody></table></div></div>';
+  // ---- per-day data table (full retention window; client-side filter + sort) ----
+  const days=d.perDay||[];
+  const maxc=days.reduce((m,x)=>Math.max(m,Number(x.count)||0),0)||1;
+  const totalRecs=days.reduce((s,x)=>s+(Number(x.count)||0),0);
+  const colspan=arch.canRun?4:3;
+  const stickyTh='position:sticky;top:0;z-index:2';
+  let rtSort={k:'date',dir:-1}; let rtQuery='';
+  h+=`<div class="card"><div class="ch"><i class="fas fa-calendar-week" style="color:var(--pri)"></i><h2>Records by day</h2>
+    <span class="pill" style="background:#f1f4f7;color:var(--mut)">${days.length} day${days.length===1?'':'s'}</span>
+    <span class="pill" style="background:#f1f4f7;color:var(--mut)">${Number(totalRecs).toLocaleString()} records</span>
+    <input id="rt-q" class="inp mono" placeholder="filter date… e.g. 2026-07" style="margin-left:auto;max-width:210px;height:32px;padding:6px 10px">
+  </div>
+  <div style="max-height:520px;overflow:auto"><table><thead><tr>
+    <th class="rt-h" data-k="date" style="${stickyTh}">Date <span id="rt-i-date"></span></th>
+    <th class="rt-h" data-k="count" style="${stickyTh}">Records <span id="rt-i-count"></span></th>
+    <th style="${stickyTh};cursor:default">Coverage</th>
+    ${arch.canRun?`<th style="${stickyTh};cursor:default">Archive</th>`:''}
+  </tr></thead><tbody id="rt-body"></tbody></table></div></div>`;
   b.html(h);
-  $('.arch-run').on('click', async function(){ const day=$(this).data('d'); const btn=$(this); btn.prop('disabled',true).text('…');
+  const sortIcon=k=>rtSort.k===k?`<i class="fas fa-sort-${rtSort.dir<0?'down':'up'}" style="color:var(--pri)"></i>`:'<i class="fas fa-sort" style="opacity:.35"></i>';
+  function rtRender(){
+    const q=rtQuery.trim().toLowerCase();
+    const rows=days.filter(x=>!q||String(x.date).toLowerCase().includes(q));
+    rows.sort((a,bb)=>(rtSort.k==='count'?Number(a.count)-Number(bb.count):(a.date<bb.date?-1:a.date>bb.date?1:0))*rtSort.dir);
+    let tb='';
+    if(!days.length) tb=`<tr><td colspan="${colspan}" style="text-align:center;color:var(--mut);padding:24px">No data yet.</td></tr>`;
+    else if(!rows.length) tb=`<tr><td colspan="${colspan}" style="text-align:center;color:var(--mut);padding:24px">No days match “${esc(rtQuery)}”.</td></tr>`;
+    else rows.forEach(x=>{ const c=Number(x.count)||0;
+      tb+=`<tr><td class="mono">${esc(x.date)}</td><td class="mono">${c.toLocaleString()}</td>
+      <td style="width:38%"><div style="height:8px;background:#eef1f4;border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(c/maxc*100)}%;background:var(--pri);border-radius:5px"></div></div></td>`
+      +(arch.canRun?`<td><button class="btn out arch-run" data-d="${esc(x.date)}" style="height:28px"><i class="fas fa-cloud-arrow-up"></i> S3</button></td>`:'')+'</tr>';});
+    $('#rt-body').html(tb); $('#rt-i-date').html(sortIcon('date')); $('#rt-i-count').html(sortIcon('count'));
+  }
+  rtRender();
+  $('.rt-h').on('click', function(){ const k=$(this).data('k'); if(rtSort.k===k) rtSort.dir*=-1; else { rtSort.k=k; rtSort.dir=-1; } rtRender(); });
+  $('#rt-q').on('input', function(){ rtQuery=this.value; rtRender(); });
+  $('#rt-body').on('click', '.arch-run', async function(){ const day=$(this).data('d'); const btn=$(this); btn.prop('disabled',true).text('…');
     const r=await apiJSON('/api/v1/archive/'+day,'POST'); const e=await r.json().catch(()=>({}));
     if(r.status===200){ btn.replaceWith('<span class="pill" style="background:#e6f4ea;color:#1e7e34">'+(e.rows||0)+' rows → S3</span>'); } else { btn.prop('disabled',false).text('retry'); toast(e.error||'archive failed','err'); }
   });
