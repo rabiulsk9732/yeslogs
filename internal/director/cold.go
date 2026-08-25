@@ -80,37 +80,8 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		tsExpr = "parseDateTimeBestEffortOrNull(flow_start)"
 	}
 
-	var conds []string
-	var args []any
-	add := func(cond string, a any) { conds = append(conds, cond); args = append(args, a) }
-	if f.PublicIP != "" {
-		add("nat_public_ip = ?", f.PublicIP)
-	}
-	if f.PrivateIP != "" {
-		add("src_ip = ?", f.PrivateIP)
-	}
-	if f.DestIP != "" {
-		add("dst_ip = ?", f.DestIP)
-	}
-	if f.PublicPort > 0 {
-		add("nat_public_port = ?", uint16(f.PublicPort))
-	}
-	if pn := protoNum(f.Proto); pn > 0 {
-		add("protocol = ?", pn)
-	}
-	if f.DeviceID > 0 {
-		add("device_id = ?", f.DeviceID)
-	}
-	if !f.From.IsZero() {
-		add(tsExpr+" >= ?", f.From.UTC())
-	}
-	if !f.To.IsZero() {
-		add(tsExpr+" <= ?", f.To.UTC())
-	}
-	if f.ISPID != 0 {
-		add("isp_id = ?", f.ISPID)
-	}
-	if len(conds) == 0 {
+	conds, args, ok := coldWhere(f, tsExpr)
+	if !ok {
 		return nil, fmt.Errorf("no filter")
 	}
 
@@ -142,12 +113,12 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		ts = ts.In(istLoc)
 		pubIP := pip
 		pubPort := int(pp)
-		if pubIP == "0.0.0.0" || pubIP == "" || (pubIP == sip && pubPort == int(sp)) {
+		if pubIP == "0.0.0.0" || pubIP == "" || pubIP == sip {
 			pubIP = ""
 			pubPort = 0
 		}
 		out = append(out, natRecord{
-			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"),
+			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"), At: ts.UTC(),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip, PrivPort: int(sp),
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
 			DstIP: dip, DstPort: int(dp),
@@ -155,6 +126,47 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		})
 	}
 	return out, rs.Err()
+}
+
+// coldWhere mirrors hotWhere for archived string-IP columns. Tenant isolation
+// is enforced by urlForDays (isp_id=<tenant> in the object path), so do not add
+// a redundant isp_id predicate here: ClickHouse 26.7 fails that predicate on a
+// multi-file brace URL even though each Parquet object contains the column.
+func coldWhere(f SearchFilter, tsExpr string) ([]string, []any, bool) {
+	var conds []string
+	var args []any
+	add := func(cond string, a any) { conds = append(conds, cond); args = append(args, a) }
+	if f.PublicIP != "" {
+		add("nat_public_ip = ?", f.PublicIP)
+	}
+	if f.PrivateIP != "" {
+		add("src_ip = ?", f.PrivateIP)
+	}
+	if f.DestIP != "" {
+		add("dst_ip = ?", f.DestIP)
+	}
+	if f.PublicPort > 0 {
+		add("nat_public_port = ?", uint16(f.PublicPort))
+	}
+	if pn := protoNum(f.Proto); pn > 0 {
+		add("protocol = ?", pn)
+	}
+	if f.DeviceID > 0 {
+		add("device_id = ?", f.DeviceID)
+	}
+	if f.RequireNAT {
+		conds = append(conds, "nat_public_ip != '' AND nat_public_ip != '0.0.0.0' AND nat_public_ip != src_ip")
+	}
+	if !f.From.IsZero() {
+		add(tsExpr+" >= ?", f.From.UTC())
+	}
+	if !f.To.IsZero() {
+		add(tsExpr+" <= ?", f.To.UTC())
+	}
+	if len(conds) == 0 {
+		return nil, nil, false
+	}
+	return conds, args, true
 }
 
 // quote returns s as a ClickHouse string literal — escaping backslashes first,
@@ -166,34 +178,104 @@ func quote(s string) string {
 	return "'" + s + "'"
 }
 
-// searchAll returns ONE page (limit/offset) of results plus the total match count,
-// so the client only ever holds a single page even over millions of rows. When
-// the query window overlaps archived days it also consults the S3 cold archive
-// (bounded, paginated in-memory); otherwise it is a pure server-side hot
-// LIMIT/OFFSET query. The bool reports whether cold storage was consulted.
-func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset int) (rows []natRecord, total uint64, cold bool, err error) {
+// planColdSearch decides whether the archived tier can affect the requested
+// page. No-time browsing intentionally means "latest hot data"; callers must
+// provide both timestamps for S3. A capped hot result already fills every page
+// the UI exposes, so older cold rows cannot affect the accessible result set.
+func planColdSearch(f SearchFilter, days []string, hotTotal uint64) (bool, error) {
+	if !f.From.IsZero() && !f.To.IsZero() && f.From.After(f.To) {
+		return false, clientErr("From must be earlier than To")
+	}
+	if len(days) == 0 {
+		return false, nil
+	}
+	if f.From.IsZero() && f.To.IsZero() {
+		return false, nil
+	}
+	if f.From.IsZero() || f.To.IsZero() {
+		return false, clientErr("Set both From and To to search the S3 archive")
+	}
+	if hotTotal >= countCap {
+		return false, nil
+	}
+	return true, nil
+}
+
+// coldDayQuery reads at most limit rows from one archived day. Keeping the day
+// as the unit of work is what makes a multi-year range practical: walk newest
+// partitions first and stop as soon as the requested result window is full,
+// instead of opening every object in one giant s3() query.
+type coldDayQuery func(context.Context, string, int) ([]natRecord, error)
+
+func walkColdDays(ctx context.Context, days []string, limit int, query coldDayQuery) (rows []natRecord, scanned int, capped bool, err error) {
+	if limit <= 0 || len(days) == 0 {
+		return nil, 0, false, nil
+	}
+	ordered := append([]string(nil), days...)
+	sort.Sort(sort.Reverse(sort.StringSlice(ordered)))
+	out := make([]natRecord, 0, limit)
+	for _, day := range ordered {
+		if err := ctx.Err(); err != nil {
+			return out, scanned, false, err
+		}
+		remaining := limit - len(out)
+		if remaining <= 0 {
+			return out, scanned, true, nil
+		}
+		part, err := query(ctx, day, remaining)
+		scanned++
+		if err != nil {
+			return out, scanned, false, err
+		}
+		out = append(out, part...)
+		if len(out) >= limit {
+			return out[:limit], scanned, true, nil
+		}
+	}
+	return out, scanned, false, nil
+}
+
+// searchAll returns ONE page (limit/offset) plus a bounded total. It always
+// plans against indexed hot storage first and touches S3 only when an explicit,
+// bounded historical window can affect the page. "capped" means total is a
+// lower bound rather than an exact count.
+func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset int) (rows []natRecord, total uint64, cold, capped bool, err error) {
 	cs := s.coldInfo()
 	days := s.archivedDaysInRange(ctx, f)
-	if !cs.enabled() || len(days) == 0 {
+	// The capped count is cheap on the MergeTree primary key (~100 ms even for
+	// hundreds of millions of device rows) and lets broad browsing short-circuit
+	// before any remote object is opened.
+	total = s.flows.SearchCount(ctx, f)
+	useCold := false
+	if cs.enabled() {
+		useCold, err = planColdSearch(f, days, total)
+		if err != nil {
+			return nil, 0, false, false, err
+		}
+	}
+	if !useCold {
 		// Hot-only: true server-side pagination — only `limit` rows leave the DB.
-		total = s.flows.SearchCount(ctx, f)
 		rows, err = s.flows.Search(ctx, f, limit, offset)
-		return rows, total, false, err
+		return rows, total, false, total >= countCap, err
 	}
 	// Cold overlap: merge hot + the relevant archived days (each bounded by the
 	// search cap), then paginate the merged set in memory (server-side, bounded).
 	hot, herr := s.flows.Search(ctx, f, searchLimit, 0)
 	if herr != nil {
-		return nil, 0, false, herr
+		return nil, 0, false, false, herr
 	}
-	cr, cerr := s.flows.SearchCold(ctx, f, searchLimit, cs, days)
+	cr, _, coldCapped, cerr := walkColdDays(ctx, days, searchLimit, func(ctx context.Context, day string, limit int) ([]natRecord, error) {
+		return s.flows.SearchCold(ctx, f, limit, cs, []string{day})
+	})
 	if cerr != nil {
-		s.log.Error("cold search failed; returning hot page only", "error", cerr)
-		cr = nil
+		// IPDR/reporting must fail closed: returning a plausible-looking hot-only
+		// result silently omits archived evidence.
+		return nil, 0, true, false, fmt.Errorf("cold search: %w", cerr)
 	}
 	merged := append(hot, cr...)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Time > merged[j].Time })
 	total = uint64(len(merged))
+	capped = len(hot) == searchLimit || coldCapped
 	if offset > len(merged) {
 		offset = len(merged)
 	}
@@ -201,7 +283,7 @@ func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset in
 	if end > len(merged) {
 		end = len(merged)
 	}
-	return merged[offset:end], total, true, nil
+	return merged[offset:end], total, true, capped, nil
 }
 
 // archivedDaysInRange returns archived days (YYYY-MM-DD) overlapping the query's
@@ -218,7 +300,10 @@ func (s *Server) archivedDaysInRange(ctx context.Context, f SearchFilter) []stri
 			continue
 		}
 		dayEnd := day.Add(24 * time.Hour)
-		if !f.From.IsZero() && dayEnd.Before(f.From) {
+		// Archive partitions are half-open [day, day+24h). If From is exactly
+		// midnight, the previous day does not overlap and must not consume one
+		// of the bounded cold-object slots.
+		if !f.From.IsZero() && !dayEnd.After(f.From) {
 			continue
 		}
 		if !f.To.IsZero() && day.After(f.To) {

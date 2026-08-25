@@ -3,6 +3,7 @@ package director
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -79,6 +80,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
+	if offset >= countCap {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pagination limit reached; narrow the filters or time window"})
+		return
+	}
 	scope, err := id.scopeISP(body.ISPID)
 	if err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
@@ -88,20 +93,30 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		ISPID: scope, PublicIP: strings.TrimSpace(body.PublicIP), PrivateIP: strings.TrimSpace(body.PrivateIP),
 		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, Proto: body.Proto,
 		DeviceID: body.DeviceID, From: parseTime(body.From), To: parseTime(body.To),
+		// The Logs table is an IPDR/NAT-mapping view. Keep it aligned with
+		// exports so reverse and identity flows never render with a blank NAT IP.
+		RequireNAT: true,
 	}
 	if !f.HasSelector() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specify at least a Public IP, Private IP, Destination IP, or Device"})
 		return
 	}
+	searchStarted := time.Now()
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second) // cold (S3) search can be slower
 	defer cancel()
-	rows, total, cold, err := s.searchAll(ctx, f, limit, offset)
+	rows, total, cold, capped, err := s.searchAll(ctx, f, limit, offset)
 	if err != nil {
+		var ue uiError
+		if errors.As(err, &ue) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": ue.msg})
+			return
+		}
 		s.log.Error("flow search", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"})
 		return
 	}
 	s.nameDevices(ctx, scope, rows)
+	crm := s.enrichCRMRows(ctx, scope, rows)
 	if offset == 0 { // audit the query once (on the first page), not every page-flip
 		_, _ = s.store.LogQuery(ctx, store.QueryAudit{
 			UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
@@ -111,7 +126,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"records": rows, "count": len(rows), "total": total, "offset": offset, "limit": limit,
-		"capped": total >= countCap, "cold": cold,
+		"capped": capped, "cold": cold, "crm": crm, "elapsedMs": time.Since(searchStarted).Milliseconds(),
 	})
 }
 
@@ -143,6 +158,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		ISPID: scope, PublicIP: strings.TrimSpace(q.Get("ip")), PrivateIP: strings.TrimSpace(q.Get("priv")),
 		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), Proto: q.Get("proto"),
 		DeviceID: parseUint32(q.Get("device")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
+		RequireNAT: true,
 	}
 	if !f.HasSelector() {
 		http.Error(w, "specify at least one IP or device filter", http.StatusBadRequest)
@@ -154,12 +170,18 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second) // reports may span cold (S3) days
 	defer cancel()
-	rows, _, _, err := s.searchAll(ctx, f, searchLimit, 0)
+	rows, _, _, _, err := s.searchAll(ctx, f, searchLimit, 0)
 	if err != nil {
+		var ue uiError
+		if errors.As(err, &ue) {
+			http.Error(w, ue.msg, http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
 	s.nameDevices(ctx, scope, rows)
+	crm := s.enrichCRMRows(ctx, scope, rows)
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
 		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
 		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
@@ -169,12 +191,17 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		CaseRef: q.Get("reason"), GeneratedBy: id.Email,
 		GeneratedAt: time.Now().In(istLoc).Format("2006-01-02 15:04:05 IST"),
 		QueryIP:     firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP), QueryPort: f.PublicPort, QueryProto: f.Proto,
-		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: len(rows) == searchLimit,
+		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: len(rows) == searchLimit, NATOnly: true,
+		CRM: crm,
 	}
 	// e.g. iplog-report-45.115.107.52-222000_02.03.2026_IST_0530.pdf
 	now := time.Now().In(istLoc)
+	subject := meta.QueryIP
+	if subject == "" && f.DeviceID > 0 {
+		subject = fmt.Sprintf("device-%d", f.DeviceID)
+	}
 	base := fmt.Sprintf("iplog-report-%s-%s_%s_IST_0530",
-		firstNonEmpty(meta.QueryIP, "all"), now.Format("150405"), now.Format("02.01.2006"))
+		firstNonEmpty(subject, "filtered"), now.Format("150405"), now.Format("02.01.2006"))
 
 	var werr error
 	switch format {

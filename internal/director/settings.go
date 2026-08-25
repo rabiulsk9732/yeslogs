@@ -3,8 +3,10 @@ package director
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/mail"
+	"sort"
 	"strings"
 
 	"github.com/natflow/natflow-dataplane/internal/notify"
@@ -14,11 +16,12 @@ import (
 // YAML provides only the bootstrap defaults; the DB is the source of truth and
 // changes are applied to the running dataplane via the applier callback.
 type Settings struct {
-	Dataplane     DataplaneSettings    `json:"dataplane"`
-	SkipRules     SkipRuleSettings     `json:"skiprules"`
-	Retention     RetentionSettings    `json:"retention"`
-	S3            S3Settings           `json:"s3"`
-	Notifications NotificationSettings `json:"notifications"`
+	Dataplane     DataplaneSettings      `json:"dataplane"`
+	SkipRules     SkipRuleSettings       `json:"skiprules"`
+	Retention     RetentionSettings      `json:"retention"`
+	S3            S3Settings             `json:"s3"`
+	Notifications NotificationSettings   `json:"notifications"`
+	CRMConnectors []CRMConnectorSettings `json:"crmConnectors"`
 }
 
 type DataplaneSettings struct {
@@ -75,6 +78,14 @@ const secretMask = "••••••••"
 // InitSettings seeds the in-memory defaults then overlays any DB-persisted
 // values. Call once at startup (before serving).
 func (s *Server) InitSettings(ctx context.Context, defaults Settings) {
+	defaults.CRMConnectors = append([]CRMConnectorSettings(nil), defaults.CRMConnectors...)
+	for i := range defaults.CRMConnectors {
+		v, err := sanitizeCRMConnector(defaults.CRMConnectors[i])
+		if err != nil || (v.Enabled && v.APIKey == "") {
+			v.Enabled = false
+		}
+		defaults.CRMConnectors[i] = v
+	}
 	s.settingsMu.Lock()
 	s.settings = defaults
 	s.settingsMu.Unlock()
@@ -106,6 +117,17 @@ func (s *Server) applyPersisted(raw map[string]string) {
 		_ = json.Unmarshal([]byte(v), &s.settings.Notifications)
 		s.settings.Notifications = sanitizeNotifications(s.settings.Notifications)
 	}
+	if v, ok := raw["crm"]; ok {
+		connectors, err := s.unmarshalCRMConnectors(v)
+		if err != nil {
+			// A rotated session key makes previously encrypted CRM credentials
+			// unreadable. Fail closed for enrichment without affecting log access.
+			s.log.Warn("CRM connectors disabled: persisted settings could not be loaded", "error", err)
+			s.settings.CRMConnectors = nil
+		} else {
+			s.settings.CRMConnectors = connectors
+		}
+	}
 }
 
 // SetApplier registers the callback that pushes settings into the dataplane.
@@ -115,7 +137,9 @@ func (s *Server) SetApplier(f func(Settings)) { s.applier = f }
 func (s *Server) CurrentSettings() Settings {
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
-	return s.settings
+	out := s.settings
+	out.CRMConnectors = append([]CRMConnectorSettings(nil), s.settings.CRMConnectors...)
+	return out
 }
 
 // Apply pushes the current settings into the dataplane. Serialized so concurrent
@@ -142,10 +166,18 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	cur := s.CurrentSettings()
 	cur.S3.SecretKey = ""               // never expose the S3 secret
 	cur.Notifications.SMTPPassword = "" // never expose the SMTP password
+	crmKeySet := make(map[string]bool, len(cur.CRMConnectors))
+	for i := range cur.CRMConnectors {
+		crmKeySet[fmt.Sprintf("%d", cur.CRMConnectors[i].ISPID)] = cur.CRMConnectors[i].APIKey != ""
+		cur.CRMConnectors[i].APIKey = ""
+	}
+	isps, _ := s.store.ListISPs(r.Context())
 	out := map[string]any{
 		"settings":      cur,
 		"secretSet":     s.CurrentSettings().S3.SecretKey != "",
 		"notifyPassSet": s.CurrentSettings().Notifications.SMTPPassword != "",
+		"crmKeySet":     crmKeySet,
+		"isps":          nz(isps),
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -173,6 +205,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		rt  RetentionSettings
 		s3v S3Settings
 		nf  NotificationSettings
+		crm CRMConnectorSettings
 	)
 	var derr error
 	switch section {
@@ -186,6 +219,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		derr = dec.Decode(&s3v)
 	case "notifications":
 		derr = dec.Decode(&nf)
+	case "crm":
+		derr = dec.Decode(&crm)
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown section"})
 		return
@@ -203,6 +238,69 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if section == "crm" {
+		if crm.ISPID == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "select an ISP"})
+			return
+		}
+		if _, err := s.store.GetISP(r.Context(), crm.ISPID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown ISP"})
+			return
+		}
+		clean, err := sanitizeCRMConnector(crm)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		// Serialize connector read/merge/persist so two director saves for
+		// different ISPs cannot race and overwrite one another's slice entry.
+		s.applyMu.Lock()
+		defer s.applyMu.Unlock()
+		s.settingsMu.Lock()
+		connectors := append([]CRMConnectorSettings(nil), s.settings.CRMConnectors...)
+		found := -1
+		for i := range connectors {
+			if connectors[i].ISPID == clean.ISPID {
+				found = i
+				break
+			}
+		}
+		if strings.TrimSpace(clean.APIKey) == "" || clean.APIKey == secretMask {
+			if found >= 0 {
+				clean.APIKey = connectors[found].APIKey
+			}
+		}
+		if clean.Enabled && clean.APIKey == "" {
+			s.settingsMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CRM API key is required when enabled"})
+			return
+		}
+		if found >= 0 {
+			connectors[found] = clean
+		} else {
+			connectors = append(connectors, clean)
+		}
+		sort.Slice(connectors, func(i, j int) bool { return connectors[i].ISPID < connectors[j].ISPID })
+		raw, err := s.marshalCRMConnectors(connectors)
+		s.settingsMu.Unlock()
+		if err != nil {
+			s.log.Error("encrypt CRM setting", "isp_id", clean.ISPID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not protect CRM credential"})
+			return
+		}
+		if err := s.store.PutSetting(r.Context(), section, string(raw)); err != nil {
+			s.log.Error("save CRM setting", "isp_id", clean.ISPID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not save"})
+			return
+		}
+		s.settingsMu.Lock()
+		s.settings.CRMConnectors = connectors
+		s.settingsMu.Unlock()
+		s.resetCRMCache()
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
 	}
 
 	var raw []byte

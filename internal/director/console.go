@@ -43,20 +43,29 @@ type infoBox struct {
 	Color string `json:"color"`
 }
 type natRecord struct {
-	Date     string `json:"date"`
-	Clock    string `json:"clock"`
-	Time     string `json:"time"`
-	Sub      string `json:"sub"`
-	DevID    uint32 `json:"devId"`
-	PrivIP   string `json:"privIp"`
-	PrivPort int    `json:"privPort"`
-	PubIP    string `json:"pubIp"`
-	PubPort  int    `json:"pubPort"`
-	Proto    string `json:"proto"`
-	Dest     string `json:"dest"`
-	DstIP    string `json:"dstIp"`
-	DstPort  int    `json:"dstPort"`
-	Action   string `json:"action"`
+	Date         string    `json:"date"`
+	Clock        string    `json:"clock"`
+	Time         string    `json:"time"`
+	At           time.Time `json:"-"`
+	Sub          string    `json:"sub"`
+	DevID        uint32    `json:"devId"`
+	PrivIP       string    `json:"privIp"`
+	PrivPort     int       `json:"privPort"`
+	PubIP        string    `json:"pubIp"`
+	PubPort      int       `json:"pubPort"`
+	Proto        string    `json:"proto"`
+	Dest         string    `json:"dest"`
+	DstIP        string    `json:"dstIp"`
+	DstPort      int       `json:"dstPort"`
+	Action       string    `json:"action"`
+	CRMReference string    `json:"crmReference,omitempty"`
+	CRMStatus    string    `json:"crmStatus,omitempty"`
+	CRMUsername  string    `json:"crmUsername,omitempty"`
+	CRMName      string    `json:"crmName,omitempty"`
+	CRMAddress   string    `json:"crmAddress,omitempty"`
+	CRMPhone     string    `json:"crmPhone,omitempty"`
+	CRMAccountID string    `json:"crmAccountId,omitempty"`
+	CRMSessionID string    `json:"crmSessionId,omitempty"`
 }
 type protoSlice struct {
 	Name  string  `json:"name"`
@@ -159,8 +168,11 @@ func ispArgs(ispID uint32) []any {
 
 func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int) []natRecord {
 	where, args := scope(ispID, days)
+	// RequireNAT: only show CGNAT-translated flows on the dashboard — skip
+	// flows where nat_public_ip is unset, zero, or identical to src_ip (e.g.
+	// non-translated DNS/transit traffic that would otherwise flood the feed).
 	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, protocol, flow_type
-		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
+		FROM %s.flow_logs WHERE %s AND nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil
@@ -179,12 +191,12 @@ func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int)
 		}
 		pubIP := pip.String()
 		pubPort := int(pp)
-		if pubIP == "0.0.0.0" || (pubIP == sip.String() && pubPort == int(sp)) {
+		if pubIP == "0.0.0.0" || pubIP == sip.String() {
 			pubIP = ""
 			pubPort = 0
 		}
 		out = append(out, natRecord{
-			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
+			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"), At: ts.UTC(),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(proto), Dest: dip.String(),
 			Action: strings.ToUpper(ft),
@@ -213,6 +225,10 @@ type SearchFilter struct {
 	Proto                       string
 	DeviceID                    uint32
 	From, To                    time.Time
+	// RequireNAT keeps only rows whose translated source address is meaningful.
+	// Reports enable this before LIMIT so identity/reverse rows cannot crowd out
+	// actual source-NAT records.
+	RequireNAT bool
 }
 
 // HasSelector reports whether the filter narrows the scan (an IP or device).
@@ -242,6 +258,11 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 	}
 	if f.DeviceID > 0 {
 		add("device_id = ?", f.DeviceID)
+	}
+	if f.RequireNAT {
+		// An unchanged source address is not source NAT, even when an exporter
+		// omits the post-NAT port (zero). Apply this before ORDER/LIMIT.
+		conds = append(conds, "nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip")
 	}
 	if !f.From.IsZero() {
 		add("flow_start >= ?", f.From.UTC())
@@ -309,12 +330,12 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 		}
 		pubIP := pip.String()
 		pubPort := int(pp)
-		if pubIP == "0.0.0.0" || (pubIP == sip.String() && pubPort == int(sp)) {
+		if pubIP == "0.0.0.0" || pubIP == sip.String() {
 			pubIP = ""
 			pubPort = 0
 		}
 		out = append(out, natRecord{
-			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"),
+			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"), At: ts.UTC(),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
 			DstIP: dip.String(), DstPort: int(dp),

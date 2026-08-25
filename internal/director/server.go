@@ -78,6 +78,13 @@ type Server struct {
 	// short-TTL cache for the (expensive) dashboard aggregates, per tenant.
 	consoleMu    sync.Mutex
 	consoleCache map[uint32]consoleCacheEntry
+
+	// CRM/RADIUS enrichment is deliberately outside the ingest path. Search and
+	// report handlers use this bounded cache + shared HTTP pool only when the
+	// selected ISP has explicitly enabled a connector.
+	crmHTTP  *http.Client
+	crmMu    sync.Mutex
+	crmCache map[string]crmCacheEntry
 }
 
 // SetArchive enables the S3 cold-archive feature in the console.
@@ -140,7 +147,23 @@ func New(cfg Config, st store.Store, fr *FlowReader, log *slog.Logger) (*Server,
 	if err != nil {
 		return nil, err
 	}
-	return &Server{store: st, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure, flowDays: days, dummyHash: dummy, startedAt: time.Now(), log: log}, nil
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 8
+	transport.IdleConnTimeout = 90 * time.Second
+	crmHTTP := &http.Client{
+		Transport: transport,
+		// The configured CRM endpoint is the complete contract URL. Refuse
+		// redirects so a remote server cannot bounce the Bearer credential or
+		// subscriber lookup payload to an unexpected destination.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("CRM endpoint redirects are not allowed")
+		},
+	}
+	return &Server{
+		store: st, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure,
+		flowDays: days, dummyHash: dummy, startedAt: time.Now(), log: log,
+		crmHTTP: crmHTTP, crmCache: map[string]crmCacheEntry{},
+	}, nil
 }
 
 // Handler returns the HTTP handler with all routes.

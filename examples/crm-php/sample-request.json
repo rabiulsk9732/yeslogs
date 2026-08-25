@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "yeslogs.crm.lookup.v1",
+  "requestId": "YLREQ-3C15D73E92F2A80F8C7B4D11",
+  "lookups": [
+    {
+      "referenceCode": "YL-20260717-2A3C5E7910BF4D827639A1C0",
+      "localIp": "172.16.18.146",
+      "eventTime": "2026-07-17T08:16:19Z",
+      "deviceId": 4,
+      "nasIdentifier": "wadhai-mikrotik-nas",
+      "nasIpAddress": "198.51.100.10"
+    }
+  ]
+}
