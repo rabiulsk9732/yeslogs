@@ -64,8 +64,8 @@ type Server struct {
 	// editable settings (DB-backed source of truth; applied live via applier)
 	settingsMu sync.Mutex
 	settings   Settings
-	applyMu    sync.Mutex     // serializes Apply() so concurrent saves apply in order
-	applier    func(Settings) // set by the host (natlog) to apply changes to the dataplane
+	applyMu    sync.Mutex          // serializes Apply() so concurrent saves apply in order
+	applier    func(Settings)      // set by the host (natlog) to apply changes to the dataplane
 	statsFn    func() DPStats      // dataplane stats snapshot (Overview/Dataplanes)
 	ingestFn   func() IngestHealth // writer counters for the ingest-stall monitor
 
@@ -168,6 +168,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/report", s.handleReport)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/v1/retention", s.handleRetention)
+	mux.HandleFunc("GET /api/v1/compliance", s.handleCompliance)
 	mux.HandleFunc("POST /api/v1/archive/sweep", s.handleArchiveSweep) // literal beats {date}
 	mux.HandleFunc("POST /api/v1/archive/{date}", s.handleArchive)
 	mux.HandleFunc("PUT /api/v1/devices/{id}", s.apiUpdateDevice)

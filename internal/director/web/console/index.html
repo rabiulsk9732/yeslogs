@@ -200,6 +200,7 @@ const MENU = [
   ['ISPs','fa-building','Tenant ISPs — onboarding & status','director'],
   ['Dataplanes','fa-network-wired','Collectors & dataplane status','director'],
   ['Devices','fa-server','Exporter devices & capture policy','all'],
+  ['Compliance','fa-scale-balanced','IPDR readiness — can each exporter answer a lawful request','all'],
   ['Capture Policies','fa-shield-halved','Reusable skip-rule presets','all'],
   ['Logs','fa-magnifying-glass','Flow log search (NAT mappings)','all'],
   ['Reports','fa-file-export','Generated exports — CSV / Excel / PDF','all'],
@@ -294,7 +295,7 @@ function renderPage(){
   $('#globalSearchWrap').css('display', S.view==='Overview'?'flex':'none'); // filter box only where it works
   const b=$('#pageBody').empty();
   if(!S.data){ b.html('<div class="card" style="padding:40px;text-align:center;color:var(--mut)">Loading…</div>'); return; }
-  ({Overview:pgOverview,ISPs:pgISPs,Dataplanes:pgDataplanes,Devices:pgDevices,'Capture Policies':pgPolicies,Logs:pgLogs,Reports:pgReports,Retention:pgRetention,Audit:pgAudit,Users:pgUsers,Settings:pgSettings}[S.view]||pgOverview)(b);
+  ({Overview:pgOverview,ISPs:pgISPs,Dataplanes:pgDataplanes,Devices:pgDevices,Compliance:pgCompliance,'Capture Policies':pgPolicies,Logs:pgLogs,Reports:pgReports,Retention:pgRetention,Audit:pgAudit,Users:pgUsers,Settings:pgSettings}[S.view]||pgOverview)(b);
 }
 
 // ==================== OVERVIEW ====================
@@ -461,6 +462,110 @@ async function pgReports(b){
 }
 
 // ==================== AUDIT ====================
+// ==================== IPDR COMPLIANCE ====================
+// Grades every exporter on whether the records it produces can answer a lawful
+// request. A device can be green in Devices and still fail here: flows arriving
+// and rows stored say nothing about whether the NAT translation was logged.
+const COMPSTATE = {
+  ok:             ['ok',  'Answerable',       'fa-circle-check'],
+  partial_port:   ['warn','Ports incomplete', 'fa-triangle-exclamation'],
+  no_port:        ['bad', 'No post-NAT port', 'fa-circle-xmark'],
+  no_nat_fields:  ['bad', 'No NAT fields',    'fa-circle-xmark'],
+  no_translation: ['bad', 'No translation',   'fa-circle-xmark'],
+  silent:         ['bad', 'Silent',           'fa-plug-circle-xmark'],
+  disabled:       ['mut', 'Disabled',         'fa-ban'],
+};
+async function pgCompliance(b){
+  b.html(loadingCard('Auditing IPDR compliance…'));
+  const r=await api('/api/v1/compliance');
+  if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load the compliance audit.</div>'); return; }
+  const d=await r.json();
+  if(!d.available){ b.html('<div class="card" style="padding:24px;color:var(--slate)">Flow store unavailable — compliance cannot be audited.</div>'); return; }
+  const devs=d.devices||[], gaps=d.missingDays||[], dead=d.unanswerableDays||[], days=d.days||[];
+  const badDates=gaps.length+dead.length;
+  const graded=devs.filter(x=>x.state!=='disabled');
+  let h='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px">';
+  h+=kpiCard('Can answer a request', String(d.answerable||0)+' / '+graded.length, 'exporters logging translations', 'fa-scale-balanced', d.failing?'#e76f51':'#2a9d8f');
+  h+=kpiCard('Cannot answer', String(d.failing||0), d.failing?'needs exporter-side fixes':'all exporters compliant', 'fa-triangle-exclamation', d.failing?'#e76f51':'#2a9d8f');
+  h+=kpiCard('Retention', d.retentionDays+' days', 'floor audited: '+d.retentionMin+' days', 'fa-clock', d.retentionOk?'#2a9d8f':'#e76f51');
+  h+=kpiCard('Unanswerable dates', String(badDates), badDates?gaps.length+' with no records · '+dead.length+' with no translation':'every retained day can answer', 'fa-calendar-xmark', badDates?'#e76f51':'#2a9d8f');
+  h+='</div>';
+
+  // What this page means — an operator should not have to guess.
+  h+=`<div class="card" style="margin-bottom:18px"><div style="padding:14px 18px;font-size:13px;color:var(--ink2);line-height:1.65">
+    A lawful request asks <b>"at time T, which subscriber held public IP X, port P?"</b>. Answering it needs the exporter to log the NAT
+    <b>translation</b> — the private ip:port paired with the public ip:port — not just that traffic flowed. An exporter can be online, sending
+    millions of flows a day, and still log nothing that can answer that question. This page grades each one on that, and only that.
+    </div></div>`;
+
+  if(!d.retentionOk){
+    h+=`<div class="card" style="margin-bottom:18px;border-left:3px solid var(--bad)"><div style="padding:14px 18px;font-size:13.5px;color:var(--ink2)">
+      <b style="color:var(--bad)"><i class="fas fa-clock"></i> Retention below the audited floor.</b>
+      Hot retention is <b>${d.retentionDays} days</b>, under the <b>${d.retentionMin}-day</b> floor. Raise it in <b>Settings → Retention</b>,
+      or archive to S3 so older days stay reachable. Confirm the exact window your licence requires.</div></div>`;
+  }
+  if(gaps.length){
+    h+=`<div class="card" style="margin-bottom:18px;border-left:3px solid var(--bad)"><div style="padding:14px 18px;font-size:13.5px;color:var(--ink2)">
+      <b style="color:var(--bad)"><i class="fas fa-calendar-xmark"></i> ${gaps.length} day(s) inside the retention window hold zero records.</b>
+      A request landing on one of these dates can only be answered "no records exist". Flow export is fire-and-forget, so these cannot be recovered.
+      <div class="mono" style="margin-top:8px;font-size:12.5px;color:var(--bad);word-break:break-word">${gaps.map(esc).join(' · ')}</div></div></div>`;
+  }
+
+  if(dead.length){
+    h+=`<div class="card" style="margin-bottom:18px;border-left:3px solid var(--bad)"><div style="padding:14px 18px;font-size:13.5px;color:var(--ink2)">
+      <b style="color:var(--bad)"><i class="fas fa-ban"></i> ${dead.length} day(s) stored flows but recorded no translation at all.</b>
+      These look fully populated in <b>Retention</b> — the row counts are healthy — yet a request about them is just as unanswerable as a missing day.
+      <div class="mono" style="margin-top:8px;font-size:12.5px;color:var(--bad);word-break:break-word">${dead.map(esc).join(' · ')}</div></div></div>`;
+  }
+  h+=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px">
+      <i class="fas fa-server" style="color:var(--pri)"></i><h2>Exporter grades</h2>
+      <span class="pill mut">last ${d.windowMins} min</span></div>
+      <button id="comp-refresh" class="btn out" style="height:32px"><i class="fas fa-arrows-rotate"></i></button></div>`;
+  if(!devs.length){
+    h+='<div class="empty" style="padding:30px"><div class="et">No devices registered</div><div class="ed">Add an exporter in <b>Devices</b> first.</div></div>';
+  } else {
+    h+='<div style="overflow-x:auto"><table><thead><tr><th>Device</th><th>Exporter</th><th>Grade</th><th>Flows</th><th>Translations</th><th>With port</th></tr></thead><tbody>';
+    devs.forEach(c=>{
+      const m=COMPSTATE[c.state]||['mut',c.state,'fa-circle-question'];
+      const pct=(c.flows>0)?(' <span style="color:var(--mut)">('+c.translatedPct.toFixed(1)+'%)</span>'):'';
+      h+=`<tr><td><b>${esc(c.name)}</b><div style="font-size:11.5px;color:var(--mut)">device_id ${c.deviceId}</div></td>
+        <td class="mono">${esc(c.exporterIp)}</td>
+        <td><span class="pill ${m[0]}"><i class="fas ${m[2]}"></i> ${esc(m[1])}</span></td>
+        <td class="mono">${Number(c.flows||0).toLocaleString()}</td>
+        <td class="mono">${Number(c.translated||0).toLocaleString()}${pct}</td>
+        <td class="mono">${Number(c.withPort||0).toLocaleString()}</td></tr>`;
+      if(c.detail||c.remedy){
+        h+=`<tr><td colspan="6" style="padding-top:0;border-top:none">
+          <div style="font-size:12.5px;color:var(--ink2);line-height:1.6;padding:2px 0 10px">
+            ${c.detail?`<div>${esc(c.detail)}</div>`:''}
+            ${c.remedy?`<div style="margin-top:6px;padding:10px 12px;background:var(--bg);border-left:3px solid ${c.answerable?'var(--warn)':'var(--bad)'};border-radius:4px">
+              <b>Fix on the exporter:</b> ${esc(c.remedy)}</div>`:''}
+          </div></td></tr>`;
+      }
+    });
+    h+='</tbody></table></div>';
+  }
+  h+='</div>';
+
+  if(days.length){
+    const maxT=days.reduce((m,x)=>Math.max(m,Number(x.translated)||0),0)||1;
+    h+=`<div class="card" style="margin-top:18px"><div class="ch"><i class="fas fa-calendar-days" style="color:var(--pri)"></i><h2>Answerable records by day</h2>
+      <span class="pill mut">${days.length} days retained</span></div>
+      <div style="padding:0 18px 8px;font-size:12.5px;color:var(--mut)">Stored rows say the collector was working. Only the translations column says a request about that day can be answered.</div>
+      <div style="overflow-x:auto;max-height:420px"><table><thead><tr><th>Date</th><th>Stored flows</th><th>Translations</th><th style="width:38%"></th></tr></thead><tbody>`;
+    days.forEach(x=>{
+      const t=Number(x.translated)||0, f=Number(x.flows)||0;
+      const bar=Math.round(t/maxT*100);
+      const col = t===0 ? 'var(--bad)' : (t<maxT*0.05 ? 'var(--warn)' : 'var(--ok)');
+      h+=`<tr><td class="mono">${esc(x.date)}</td><td class="mono">${f.toLocaleString()}</td>
+        <td class="mono" style="color:${col};font-weight:${t===0?'700':'400'}">${t.toLocaleString()}${t===0&&f>0?' — unanswerable':''}</td>
+        <td><div style="background:var(--bg);border-radius:3px;height:8px;overflow:hidden"><div style="width:${bar}%;height:100%;background:${col}"></div></div></td></tr>`;
+    });
+    h+='</tbody></table></div></div>';
+  }
+  b.html(h);
+  $('#comp-refresh').on('click',()=>pgCompliance(b));
+}
 async function pgAudit(b){
   b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading audit…</div>');
   const r=await api('/api/v1/audit'); if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load audit.</div>'); return; }

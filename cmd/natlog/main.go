@@ -423,6 +423,9 @@ func run() (err error) {
 	// silent/recovered transitions. No-op unless notifications are enabled.
 	go dirSrv.RunDeviceMonitor(managedCtx)
 	go dirSrv.RunIngestMonitor(managedCtx)
+	// IPDR compliance: grades every exporter on whether the records it produces
+	// can actually answer a lawful request, and alerts when one cannot.
+	go dirSrv.RunComplianceMonitor(managedCtx)
 
 	log.Info("natlog running; SIGINT/SIGTERM to stop",
 		"receivers", len(receivers), "metrics", cfg.Metrics.Bind)
