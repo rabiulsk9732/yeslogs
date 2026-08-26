@@ -43,29 +43,34 @@ type infoBox struct {
 	Color string `json:"color"`
 }
 type natRecord struct {
-	Date         string    `json:"date"`
-	Clock        string    `json:"clock"`
-	Time         string    `json:"time"`
-	At           time.Time `json:"-"`
-	Sub          string    `json:"sub"`
-	DevID        uint32    `json:"devId"`
-	PrivIP       string    `json:"privIp"`
-	PrivPort     int       `json:"privPort"`
-	PubIP        string    `json:"pubIp"`
-	PubPort      int       `json:"pubPort"`
-	Proto        string    `json:"proto"`
-	Dest         string    `json:"dest"`
-	DstIP        string    `json:"dstIp"`
-	DstPort      int       `json:"dstPort"`
-	Action       string    `json:"action"`
-	CRMReference string    `json:"crmReference,omitempty"`
-	CRMStatus    string    `json:"crmStatus,omitempty"`
-	CRMUsername  string    `json:"crmUsername,omitempty"`
-	CRMName      string    `json:"crmName,omitempty"`
-	CRMAddress   string    `json:"crmAddress,omitempty"`
-	CRMPhone     string    `json:"crmPhone,omitempty"`
-	CRMAccountID string    `json:"crmAccountId,omitempty"`
-	CRMSessionID string    `json:"crmSessionId,omitempty"`
+	Date     string    `json:"date"`
+	Clock    string    `json:"clock"`
+	Time     string    `json:"time"`
+	At       time.Time `json:"-"`
+	Sub      string    `json:"sub"`
+	DevID    uint32    `json:"devId"`
+	PrivIP   string    `json:"privIp"`
+	PrivPort int       `json:"privPort"`
+	PubIP    string    `json:"pubIp"`
+	PubPort  int       `json:"pubPort"`
+	Proto    string    `json:"proto"`
+	Dest     string    `json:"dest"`
+	DstIP    string    `json:"dstIp"`
+	DstPort  int       `json:"dstPort"`
+	Action   string    `json:"action"`
+	// Untranslated marks a row whose post-NAT address equals the source: real
+	// traffic, really logged, but no translation happened. The row is shown —
+	// hiding it left whole exporters looking silent — and flagged, so an
+	// identity mapping is never read as evidence of who held a public address.
+	Untranslated bool   `json:"untranslated,omitempty"`
+	CRMReference string `json:"crmReference,omitempty"`
+	CRMStatus    string `json:"crmStatus,omitempty"`
+	CRMUsername  string `json:"crmUsername,omitempty"`
+	CRMName      string `json:"crmName,omitempty"`
+	CRMAddress   string `json:"crmAddress,omitempty"`
+	CRMPhone     string `json:"crmPhone,omitempty"`
+	CRMAccountID string `json:"crmAccountId,omitempty"`
+	CRMSessionID string `json:"crmSessionId,omitempty"`
 }
 type protoSlice struct {
 	Name  string  `json:"name"`
@@ -168,11 +173,12 @@ func ispArgs(ispID uint32) []any {
 
 func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int) []natRecord {
 	where, args := scope(ispID, days)
-	// RequireNAT: only show CGNAT-translated flows on the dashboard — skip
-	// flows where nat_public_ip is unset, zero, or identical to src_ip (e.g.
-	// non-translated DNS/transit traffic that would otherwise flood the feed).
+	// Skip only rows with no post-NAT address at all. Rows whose post-NAT
+	// address equals the source are real records of real traffic and belong in
+	// the feed; hiding them left the live view near-empty on exporters that log
+	// mostly inbound or transit flows.
 	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, protocol, flow_type
-		FROM %s.flow_logs WHERE %s AND nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
+		FROM %s.flow_logs WHERE %s AND nat_public_ip != toIPv4('0.0.0.0') ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil
@@ -191,15 +197,17 @@ func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int)
 		}
 		pubIP := pip.String()
 		pubPort := int(pp)
-		if pubIP == "0.0.0.0" || pubIP == sip.String() {
-			pubIP = ""
-			pubPort = 0
+		untranslated := pubIP == sip.String()
+		if pubIP == "0.0.0.0" {
+			// No post-NAT address at all: there is nothing to show, and an
+			// address of 0.0.0.0 in a public-IP column would be a lie.
+			pubIP, pubPort = "", 0
 		}
 		out = append(out, natRecord{
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"), At: ts.UTC(),
 			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(proto), Dest: dip.String(),
-			Action: strings.ToUpper(ft),
+			Action: strings.ToUpper(ft), Untranslated: untranslated,
 		})
 	}
 	return out
@@ -225,9 +233,20 @@ type SearchFilter struct {
 	Proto                       string
 	DeviceID                    uint32
 	From, To                    time.Time
-	// RequireNAT keeps only rows whose translated source address is meaningful.
-	// Reports enable this before LIMIT so identity/reverse rows cannot crowd out
-	// actual source-NAT records.
+	// RequireNAT keeps only rows that carry a post-NAT address at all. It does
+	// NOT drop rows whose post-NAT address equals the source.
+	//
+	// It used to drop those too, on the reasoning that an unchanged address is
+	// not a translation. True, but it made the Logs view useless: measured
+	// 2026-08-26, that clause was hiding 97.6% of one exporter's records
+	// (13.4M of 13.8M), and hundreds of millions fleet-wide. An operator asked
+	// to explain why the console showed nothing while the collector was plainly
+	// busy had no way to see it — the rows were there, the view just refused to
+	// render them.
+	//
+	// Show them, and let the row say what it is. Rows where the post-NAT address
+	// equals the source are flagged Untranslated in the response so nobody reads
+	// an identity mapping as evidence of a NAT translation.
 	RequireNAT bool
 }
 
@@ -260,9 +279,10 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 		add("device_id = ?", f.DeviceID)
 	}
 	if f.RequireNAT {
-		// An unchanged source address is not source NAT, even when an exporter
-		// omits the post-NAT port (zero). Apply this before ORDER/LIMIT.
-		conds = append(conds, "nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip")
+		// Only "has a post-NAT address". Historic rows can still hold 0.0.0.0;
+		// the dataplane stopped storing those on 2026-08-26, but the retention
+		// window keeps months of records written before that.
+		conds = append(conds, "nat_public_ip != toIPv4('0.0.0.0')")
 	}
 	if !f.From.IsZero() {
 		add("flow_start >= ?", f.From.UTC())
@@ -330,9 +350,9 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 		}
 		pubIP := pip.String()
 		pubPort := int(pp)
-		if pubIP == "0.0.0.0" || pubIP == sip.String() {
-			pubIP = ""
-			pubPort = 0
+		untranslated := pubIP == sip.String()
+		if pubIP == "0.0.0.0" {
+			pubIP, pubPort = "", 0
 		}
 		out = append(out, natRecord{
 			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"), At: ts.UTC(),
@@ -340,6 +360,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
 			DstIP: dip.String(), DstPort: int(dp),
 			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
+			Untranslated: untranslated,
 		})
 	}
 	return out, rs.Err()

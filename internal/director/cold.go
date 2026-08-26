@@ -113,9 +113,9 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		ts = ts.In(istLoc)
 		pubIP := pip
 		pubPort := int(pp)
-		if pubIP == "0.0.0.0" || pubIP == "" || pubIP == sip {
-			pubIP = ""
-			pubPort = 0
+		untranslated := pubIP != "" && pubIP == sip
+		if pubIP == "0.0.0.0" {
+			pubIP, pubPort = "", 0
 		}
 		out = append(out, natRecord{
 			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"), At: ts.UTC(),
@@ -123,6 +123,7 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
 			DstIP: dip, DstPort: int(dp),
 			Dest: fmt.Sprintf("%s:%d", dip, dp), Action: strings.ToUpper(ft),
+			Untranslated: untranslated,
 		})
 	}
 	return out, rs.Err()
@@ -155,7 +156,9 @@ func coldWhere(f SearchFilter, tsExpr string) ([]string, []any, bool) {
 		add("device_id = ?", f.DeviceID)
 	}
 	if f.RequireNAT {
-		conds = append(conds, "nat_public_ip != '' AND nat_public_ip != '0.0.0.0' AND nat_public_ip != src_ip")
+		// Matches the hot path: has a post-NAT address, nothing more. Identity
+		// mappings are returned and flagged rather than hidden.
+		conds = append(conds, "nat_public_ip != '' AND nat_public_ip != '0.0.0.0'")
 	}
 	if !f.From.IsZero() {
 		add(tsExpr+" >= ?", f.From.UTC())

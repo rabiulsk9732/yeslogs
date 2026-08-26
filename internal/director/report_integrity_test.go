@@ -18,12 +18,19 @@ func TestHotWhereRequireNAT(t *testing.T) {
 	for _, want := range []string{
 		"device_id = ?",
 		"nat_public_ip != toIPv4('0.0.0.0')",
-		"nat_public_ip != src_ip",
 		"isp_id = ?",
 	} {
 		if !strings.Contains(where, want) {
 			t.Errorf("hot WHERE missing %q: %s", want, where)
 		}
+	}
+	// RequireNAT deliberately no longer hides identity mappings. It did until
+	// 2026-08-26, and that clause was suppressing 97.6% of one exporter's
+	// records (13.4M of 13.8M) and hundreds of millions fleet-wide — the console
+	// read empty while the collector was plainly busy. Those rows are returned
+	// now and flagged Untranslated instead.
+	if strings.Contains(where, "nat_public_ip != src_ip") {
+		t.Errorf("hot WHERE still hides identity mappings: %s", where)
 	}
 	if len(args) != 2 || args[0] != uint32(4) || args[1] != uint32(2) {
 		t.Fatalf("unexpected hot args: %#v", args)
@@ -37,11 +44,13 @@ func TestColdWhereRequireNATUsesTenantPathScope(t *testing.T) {
 		t.Fatal("coldWhere rejected a device-scoped report filter")
 	}
 	where := strings.Join(conds, " AND ")
+	if strings.Contains(where, "nat_public_ip != src_ip") {
+		t.Errorf("cold WHERE still hides identity mappings, diverging from hot: %s", where)
+	}
 	for _, want := range []string{
 		"device_id = ?",
 		"nat_public_ip != ''",
 		"nat_public_ip != '0.0.0.0'",
-		"nat_public_ip != src_ip",
 	} {
 		if !strings.Contains(where, want) {
 			t.Errorf("cold WHERE missing %q: %s", want, where)
