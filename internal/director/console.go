@@ -128,15 +128,16 @@ func (r *FlowReader) consoleDataRaw(ctx context.Context, ispID uint32, days int)
 	// the slowest single query, not their sum. uniq (HyperLogLog, ~1.6% error)
 	// keeps the distinct counts ~5x cheaper than uniqExact over 100M+ rows, and
 	// the scalars/records/charts are combined into one aggregate scan each.
-	var rows, subs, devs, totBytes, natIPs, avgDur, today uint64
+	var rows, subs, devs, totBytes, natIPs, translated, today uint64
 	var wg sync.WaitGroup
 	run := func(f func()) { wg.Add(1); go func() { defer wg.Done(); f() }() }
 
 	run(func() {
 		_ = r.conn.QueryRow(ctx, fmt.Sprintf(
-			`SELECT count(), uniq(src_ip), uniq(device_id), sum(bytes), uniq(nat_public_ip), toUInt64(avg(flow_end - flow_start))
+			`SELECT count(), uniq(src_ip), uniq(device_id), sum(bytes), uniq(nat_public_ip),
+			        countIf(nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip)
 			 FROM %s.flow_logs WHERE %s`, r.db, where), args...).
-			Scan(&rows, &subs, &devs, &totBytes, &natIPs, &avgDur)
+			Scan(&rows, &subs, &devs, &totBytes, &natIPs, &translated)
 	})
 	run(func() {
 		_ = r.conn.QueryRow(ctx, fmt.Sprintf(
@@ -160,7 +161,14 @@ func (r *FlowReader) consoleDataRaw(ctx context.Context, ispID uint32, days int)
 	d.InfoBoxes = []infoBox{
 		{Label: "CGNAT Public IPs Seen", Value: group(natIPs), Pct: poolPct, Note: fmt.Sprintf("%s of /24 pool", poolPct), Icon: "fa-server", Color: "#0077b6"},
 		{Label: "Active Devices", Value: group(devs), Pct: pctOf(devs, 50), Note: "exporters reporting", Icon: "fa-plug", Color: "#2a9d8f"},
-		{Label: "Avg Session Duration", Value: dur(avgDur), Pct: "48%", Note: "flow_end − flow_start", Icon: "fa-clock", Color: "#e76f51"},
+		// Session duration used to sit here, computed as flow_end − flow_start.
+		// Records are now stamped with the collector's clock rather than the
+		// exporter's, so that difference is always zero and the tile would show a
+		// permanent 0 — worse than showing nothing. What matters on an IPDR
+		// dashboard anyway is not how long sessions ran but how much of what was
+		// stored can actually answer a request.
+		{Label: "Answerable Records", Value: group(translated), Pct: pctOf(translated, max(rows, 1)),
+			Note: "carry a real NAT translation", Icon: "fa-scale-balanced", Color: "#e76f51"},
 	}
 	return d
 }
@@ -218,6 +226,35 @@ func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int)
 		})
 	}
 	return out
+}
+
+func group(n uint64) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre > 0 {
+		b.WriteString(s[:pre])
+	}
+	for i := pre; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+func pctOf(n, of uint64) string {
+	if of == 0 {
+		return "0%"
+	}
+	p := n * 100 / of
+	if p > 100 {
+		p = 100
+	}
+	return fmt.Sprintf("%d%%", p)
 }
 
 func protoNum(s string) uint8 {
@@ -484,38 +521,6 @@ func (r *FlowReader) topSubsByBytes(ctx context.Context, ispID uint32, days int)
 }
 
 // ---- small format helpers ----
-
-func group(n uint64) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
-	}
-	var b strings.Builder
-	pre := len(s) % 3
-	if pre > 0 {
-		b.WriteString(s[:pre])
-	}
-	for i := pre; i < len(s); i += 3 {
-		if b.Len() > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(s[i : i+3])
-	}
-	return b.String()
-}
-func pctOf(n, of uint64) string {
-	if of == 0 {
-		return "0%"
-	}
-	p := n * 100 / of
-	if p > 100 {
-		p = 100
-	}
-	return fmt.Sprintf("%d%%", p)
-}
-func dur(sec uint64) string {
-	return fmt.Sprintf("%02d:%02d:%02d", sec/3600, (sec%3600)/60, sec%60)
-}
 func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }
 
 // ---- HTTP handlers ----

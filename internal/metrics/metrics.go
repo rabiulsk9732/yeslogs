@@ -21,7 +21,6 @@ type Metrics struct {
 	PacketsUnsupported prometheus.Counter
 	FlowsDecoded       prometheus.Counter
 	FlowsSkipped       prometheus.Counter
-	FlowsTimeClamped   prometheus.Counter
 	SpoolSaved         prometheus.Counter
 	SpoolReplayed      prometheus.Counter
 	SpoolLost          prometheus.Counter
@@ -94,7 +93,6 @@ func New() *Metrics {
 		SpoolFiles:         gauge("spool_files", "Batches currently waiting on disk for ClickHouse to accept them."),
 		SpoolBytes:         gauge("spool_bytes", "Bytes currently held in the disk spool."),
 		SpoolOldestSeconds: gauge("spool_oldest_seconds", "Age of the longest-waiting spooled batch. Growing means replay is not keeping up."),
-		FlowsTimeClamped:   counter("flows_time_clamped_total", "Flow records whose exporter timestamp was implausible and replaced with receive time. A clamped IPDR record is a different answer, not a rounder one: CGNAT ports are reused within minutes, so a lookup at the true allocation time can return the wrong subscriber."),
 		FlowsInserted:      counter("flows_inserted_total", "Flow records inserted into ClickHouse."),
 		FlowsDropped:       counter("flows_dropped_total", "Flow records dropped without insertion (writer queue full or shutdown deadline)."),
 		FlowsRejected:      counter("flows_rejected_total", "Flow records rejected by ClickHouse during row append."),

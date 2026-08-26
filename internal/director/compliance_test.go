@@ -466,35 +466,3 @@ func TestDeadlineOrAppliesFallbackWhenCallerHasNone(t *testing.T) {
 		t.Errorf("fallback deadline is %v away, want ~90s", d)
 	}
 }
-
-// A clock fault must override the grade, not be overwritten by it. A device can
-// look perfect on every other measure while every timestamp it produced is the
-// collector's receive time instead of when the translation happened.
-func TestClockFaultMakesADeviceUnanswerable(t *testing.T) {
-	st := DeviceFlowStats{Flows: 1000, Translated: 1000, WithPort: 1000, LastFlow: time.Now()}
-	c := gradeDevice(store.Device{DeviceID: 3, Enabled: true}, st, DeviceSignal{TimeClamped: 4200})
-	if c.Answerable {
-		t.Error("a device whose records are all misdated must not be reported answerable")
-	}
-	if c.TimeClamped != 4200 {
-		t.Errorf("TimeClamped = %d, want 4200", c.TimeClamped)
-	}
-	if !strings.Contains(c.Detail, "CLOCK FAULT") {
-		t.Errorf("detail must name the clock fault, got %q", c.Detail)
-	}
-	if !strings.Contains(c.Remedy, "NTP") {
-		t.Errorf("remedy must point at time sync, got %q", c.Remedy)
-	}
-}
-
-// Without a clock fault the ordinary grade stands.
-func TestNoClockFaultLeavesGradeAlone(t *testing.T) {
-	st := DeviceFlowStats{Flows: 1000, Translated: 1000, WithPort: 1000, LastFlow: time.Now()}
-	c := gradeDevice(store.Device{DeviceID: 3, Enabled: true}, st, DeviceSignal{})
-	if !c.Answerable {
-		t.Error("a healthy device should stay answerable")
-	}
-	if strings.Contains(c.Detail, "CLOCK FAULT") {
-		t.Error("no clock fault should be reported")
-	}
-}

@@ -122,16 +122,6 @@ func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
 
 	for i := range flows {
 		rec := p.norm.Normalize(flows[i], p.kind, ispID, deviceID)
-		if rec.TimeClamped {
-			// The exporter's clock disagreed with ours beyond the guard, so this
-			// record is stored under receive time. Count it and note the device:
-			// a device clamping continuously has a clock fault, and every record
-			// it produces is misdated evidence until someone fixes it.
-			p.metrics.FlowsTimeClamped.Inc()
-			if matchedDevice {
-				p.signals.noteTimeClamped(deviceID, time.Now())
-			}
-		}
 		p.metrics.FlowsDecoded.Inc()
 		if !matchedDevice {
 			p.metrics.UnknownExporterFlows.Inc()

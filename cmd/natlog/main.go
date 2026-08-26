@@ -367,7 +367,7 @@ func run() (err error) {
 	dirSrv.SetDeviceSignals(func() map[uint32]director.DeviceSignal {
 		out := map[uint32]director.DeviceSignal{}
 		for id, sg := range devSignals.Snapshot() {
-			out[id] = director.DeviceSignal{NoNATDropped: sg.NoNATDropped, LastFlow: sg.LastFlow, TimeClamped: sg.TimeClamped}
+			out[id] = director.DeviceSignal{NoNATDropped: sg.NoNATDropped, LastFlow: sg.LastFlow}
 		}
 		return out
 	})

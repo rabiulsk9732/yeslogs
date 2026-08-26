@@ -39,41 +39,59 @@ func TestNormalize(t *testing.T) {
 	if !r.SrcIP.Equal(f.SrcIP) || !r.DstIP.Equal(f.DstIP) {
 		t.Error("ip mismatch")
 	}
-	if !r.FlowStart.Equal(start) {
-		t.Errorf("plausible FlowStart should be preserved: got %v want %v", r.FlowStart, start)
+	// The exporter said the flow started a minute ago. That is ignored on
+	// purpose: the stored time is the collector's.
+	if r.FlowStart.Equal(start) {
+		t.Error("the exporter's flow time was used; the collector's clock must be")
 	}
-	if !r.FlowEnd.After(r.FlowStart) {
-		t.Error("flowEnd should be after flowStart")
+	if d := time.Since(r.FlowStart); d < 0 || d > 2*time.Second {
+		t.Errorf("FlowStart = %v, want the collector's current time", r.FlowStart)
+	}
+	if !r.FlowEnd.Equal(r.FlowStart) {
+		t.Errorf("FlowEnd = %v, want it equal to FlowStart", r.FlowEnd)
 	}
 }
 
-// A device with a broken/frozen clock (or no time IE) must not corrupt stored
-// timestamps — they clamp to the collector's receive time.
-func TestNormalizeClockSkew(t *testing.T) {
+// Exporter clocks are not trustworthy — one on this fleet runs 38.5 hours behind
+// — and a store holding a mixture of good and bad clocks cannot produce a
+// defensible timeline: two records a minute apart on the wire land days apart in
+// the table, and nothing downstream can tell which is which. Every record is
+// stamped with the collector's clock, whatever the exporter claims.
+func TestExporterClockIsNeverUsed(t *testing.T) {
 	n := New()
 	now := time.Now()
-	cases := []struct {
-		name      string
-		start     time.Time
-		wantClamp bool
+	for _, c := range []struct {
+		name  string
+		start time.Time
 	}{
-		{"zero", time.Time{}, true},
-		{"frozen-12h-ago", now.Add(-12 * time.Hour), true}, // the Wadhai case
-		{"far-future", now.Add(10 * time.Minute), true},    // clock ahead
-		{"recent-ok", now.Add(-90 * time.Second), false},
-		{"within-active-timeout", now.Add(-25 * time.Minute), false},
+		{"no time IE at all", time.Time{}},
+		{"38 hours behind (the Wadhai case)", now.Add(-38*time.Hour - 30*time.Minute)},
+		{"a couple of minutes behind", now.Add(-2 * time.Minute)},
+		{"seconds behind", now.Add(-3 * time.Second)},
+		{"ahead of us", now.Add(10 * time.Minute)},
+		{"absurdly ahead", now.Add(500 * time.Hour)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := n.Normalize(decoder.Flow{FlowStart: c.start, FlowEnd: c.start.Add(time.Hour)}, "netflow9", 1, 1)
+			if d := time.Since(r.FlowStart); d < 0 || d > 2*time.Second {
+				t.Errorf("FlowStart = %v, want the collector's current time", r.FlowStart)
+			}
+			if !r.FlowEnd.Equal(r.FlowStart) {
+				t.Errorf("FlowEnd = %v, want it equal to FlowStart", r.FlowEnd)
+			}
+		})
 	}
-	for _, c := range cases {
-		r := n.Normalize(decoder.Flow{FlowStart: c.start}, "netflow9", 1, 1)
-		clamped := r.FlowStart.Sub(now) < 2*time.Second && r.FlowStart.Sub(now) > -2*time.Second
-		if c.wantClamp && !clamped {
-			t.Errorf("%s: expected clamp to receive-time, got %v", c.name, r.FlowStart)
-		}
-		if !c.wantClamp && !r.FlowStart.Equal(c.start) {
-			t.Errorf("%s: expected preserved %v, got %v", c.name, c.start, r.FlowStart)
-		}
-		if r.FlowEnd.Before(r.FlowStart) {
-			t.Errorf("%s: FlowEnd before FlowStart", c.name)
-		}
+}
+
+// Two flows the exporter dates days apart must land in collector order, because
+// that ordering is what a request about a point in time relies on.
+func TestRecordsAreOrderedByTheCollectorNotTheExporter(t *testing.T) {
+	n := New()
+	old := time.Now().Add(-72 * time.Hour)
+	future := time.Now().Add(72 * time.Hour)
+	first := n.Normalize(decoder.Flow{FlowStart: future}, "netflow9", 1, 1) // exporter says "later"
+	second := n.Normalize(decoder.Flow{FlowStart: old}, "netflow9", 1, 1)   // exporter says "earlier"
+	if second.FlowStart.Before(first.FlowStart) {
+		t.Errorf("arrival order was not preserved: %v then %v", first.FlowStart, second.FlowStart)
 	}
 }

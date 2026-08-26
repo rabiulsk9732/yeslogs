@@ -37,18 +37,6 @@ type FlowRecord struct {
 
 	FlowType   string
 	ExporterIP net.IP
-
-	// TimeClamped records that the exporter's own flow time was rejected as
-	// implausible and replaced with the collector's receive time.
-	//
-	// The substitution itself is the right call — a device with a frozen clock
-	// would otherwise misdate every record it sends. But a clamped record is not
-	// merely imprecise, it is a different answer: CGNAT ports are reused within
-	// minutes, so a lookup at the true allocation time can return the wrong
-	// subscriber or none. That has to be visible. Silently re-stamping evidence
-	// and reporting nothing is how a collector produces confidently wrong answers
-	// to a lawful request.
-	TimeClamped bool
 }
 
 // Normalizer maps decoded flows to FlowRecords. It is stateless; the ISP/device
@@ -58,40 +46,24 @@ type Normalizer struct{}
 // New returns a Normalizer.
 func New() *Normalizer { return &Normalizer{} }
 
-// Clock-skew guard bounds: the stored timestamp must always be a sane IST time
-// regardless of what the exporter reports. A device with a broken/frozen clock
-// (e.g. no NTP after a reboot) would otherwise stamp EVERY flow with a wrong time
-// and silently corrupt time-based IPDR lookups. We trust the exporter's flow time
-// only when it is plausible relative to the collector's receive time; otherwise we
-// fall back to receive time (now, stored as IST). skewPast is generous so genuinely
-// long-lived/late-exported flows (NetFlow active-timeout is typically ≤30m) are kept.
-const (
-	skewPast   = 2 * time.Hour
-	skewFuture = 2 * time.Minute
-)
-
-func plausible(t, now time.Time) bool {
-	return !t.IsZero() && !t.After(now.Add(skewFuture)) && !t.Before(now.Add(-skewPast))
-}
-
 // Normalize maps a decoder.Flow to a FlowRecord, tagging it with flowType and
 // the supplied ISP/device identity.
 func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID uint32) FlowRecord {
-	// Whatever timestamp a device sends, the logged time must be sane IST: use the
-	// exporter's flow time only when plausible; otherwise stamp with receive time.
-	// This also covers exporters (e.g. iptables NAT-event NetFlow) that carry no
-	// mappable time IE — those arrive zero and fall back here too.
+	// Every record is stamped with the COLLECTOR's clock, never the exporter's.
+	//
+	// This is a deliberate policy, not a fallback. Exporter clocks are not
+	// trustworthy — one on this fleet runs 38.5 hours behind — and a store whose
+	// records carry a mixture of good and bad clocks cannot produce a defensible
+	// timeline at all: two records an hour apart on the wire can land days apart
+	// in the table, and nothing downstream can tell which is which. One clock,
+	// NTP-synced here, keeps every record on the fleet comparable with every
+	// other, which is what a lawful request about a point in time needs.
+	//
+	// Records arrive within seconds of the event for NAT-event exports, so the
+	// receive time IS the event time to the precision anyone can act on.
 	now := time.Now()
-	start, end := f.FlowStart, f.FlowEnd
-	clamped := !plausible(start, now)
-	if clamped {
-		start = now
-	}
-	if end.IsZero() || end.Before(start) || end.After(now.Add(skewFuture)) {
-		end = start
-	}
+	start, end := now, now
 	return FlowRecord{
-		TimeClamped:   clamped,
 		ISPID:         ispID,
 		DeviceID:      deviceID,
 		SrcIP:         f.SrcIP,

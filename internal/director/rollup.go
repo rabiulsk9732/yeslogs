@@ -167,12 +167,12 @@ func (r *FlowReader) consoleDataRollup(ctx context.Context, ispID uint32, days i
 	var d consoleData
 	where, args := scope(ispID, days)
 
-	var flows, subs, devs, totBytes, natIPs, avgDur, tcp, udp, icmp, other uint64
+	var flows, subs, devs, totBytes, natIPs, packets, tcp, udp, icmp, other uint64
 	_ = r.conn.QueryRow(ctx, fmt.Sprintf(
 		`SELECT sum(flows), uniqMerge(subs), uniqExact(device_id), sum(bytes), uniqMerge(nat_ips),
-		        toUInt64(sum(dur_sum)/greatest(sum(flows),1)), sum(tcp), sum(udp), sum(icmp), sum(other)
+		        sum(packets), sum(tcp), sum(udp), sum(icmp), sum(other)
 		 FROM %s.flow_rollup WHERE %s`, r.db, where), args...).
-		Scan(&flows, &subs, &devs, &totBytes, &natIPs, &avgDur, &tcp, &udp, &icmp, &other)
+		Scan(&flows, &subs, &devs, &totBytes, &natIPs, &packets, &tcp, &udp, &icmp, &other)
 	var today uint64
 	_ = r.conn.QueryRow(ctx, fmt.Sprintf(
 		`SELECT sum(flows) FROM %s.flow_rollup WHERE event_date = today()%s`, r.db, ispClause(ispID)), ispArgs(ispID)...).Scan(&today)
@@ -188,7 +188,14 @@ func (r *FlowReader) consoleDataRollup(ctx context.Context, ispID uint32, days i
 	d.InfoBoxes = []infoBox{
 		{Label: "CGNAT Public IPs Seen", Value: group(natIPs), Pct: poolPct, Note: fmt.Sprintf("%s of /24 pool", poolPct), Icon: "fa-server", Color: "#0077b6"},
 		{Label: "Active Devices", Value: group(devs), Pct: pctOf(devs, 50), Note: "exporters reporting", Icon: "fa-plug", Color: "#2a9d8f"},
-		{Label: "Avg Session Duration", Value: dur(avgDur), Pct: "48%", Note: "flow_end − flow_start", Icon: "fa-clock", Color: "#e76f51"},
+		// Session duration used to sit here as flow_end − flow_start. Records are
+		// now stamped with the collector's clock, so that difference is always
+		// zero and the tile would read a permanent 0. The raw path shows
+		// answerability instead; the rollup cannot compute that without a column
+		// whose historical rows would be zero and under-report, which on a
+		// compliance dashboard is worse than not showing it. Packets is a figure
+		// the rollup actually holds and can state honestly.
+		{Label: "Packets Logged", Value: group(packets), Pct: "100%", Note: "across the window", Icon: "fa-layer-group", Color: "#e76f51"},
 	}
 	d.ProtoMix = protoMixFrom(tcp, udp, icmp, other)
 	d.Hourly = r.rollupHourly(ctx, ispID)
