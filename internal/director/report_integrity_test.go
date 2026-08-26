@@ -168,3 +168,38 @@ func TestArchivedDaysRangeExcludesPreviousDayAtMidnight(t *testing.T) {
 		t.Fatalf("unexpected archive-day range: %v", days)
 	}
 }
+
+// A day can be marked archived while its rows are still in hot storage: the
+// sweep marks before it drops, a drop can fail, and the manual archive endpoint
+// exports without dropping at all. Hot and cold results are concatenated, so
+// reading such a day from S3 as well returns every record twice — a duplicated
+// record in a lawful-intercept report is its own kind of wrong answer.
+func TestArchivedDaysSkipDaysStillInHot(t *testing.T) {
+	ad := []store.ArchivedDay{{Day: "2026-07-07"}, {Day: "2026-07-08"}, {Day: "2026-07-09"}}
+	inHot := map[string]bool{"2026-07-08": true}
+	f := SearchFilter{
+		From: time.Date(2026, 7, 7, 0, 0, 0, 0, istLoc),
+		To:   time.Date(2026, 7, 9, 23, 59, 0, 0, istLoc),
+	}
+	got := selectArchivedDays(ad, inHot, f)
+	if len(got) != 2 {
+		t.Fatalf("got %v, want the two days that are no longer in hot", got)
+	}
+	for _, d := range got {
+		if d == "2026-07-08" {
+			t.Fatalf("a day still served from hot was also read from S3: %v", got)
+		}
+	}
+}
+
+// With nothing in hot, every overlapping archived day is still read.
+func TestArchivedDaysUnaffectedWhenHotIsEmpty(t *testing.T) {
+	ad := []store.ArchivedDay{{Day: "2026-07-07"}, {Day: "2026-07-08"}}
+	f := SearchFilter{
+		From: time.Date(2026, 7, 7, 0, 0, 0, 0, istLoc),
+		To:   time.Date(2026, 7, 8, 23, 59, 0, 0, istLoc),
+	}
+	if got := selectArchivedDays(ad, map[string]bool{}, f); len(got) != 2 {
+		t.Fatalf("got %v, want both days", got)
+	}
+}

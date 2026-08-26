@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/natflow/natflow-dataplane/internal/director/store"
 )
 
 // ColdS3 is the S3 config used to read archived flow logs back via ClickHouse's
@@ -296,8 +298,36 @@ func (s *Server) archivedDaysInRange(ctx context.Context, f SearchFilter) []stri
 	if err != nil || len(ad) == 0 {
 		return nil
 	}
+	// A day can be marked archived and still be present in hot storage: the sweep
+	// marks before it drops, a drop can fail, and the manual archive endpoint
+	// exports without dropping at all. Hot and cold results are concatenated, so
+	// reading such a day from S3 as well would return every record twice. A
+	// duplicated record in a lawful-intercept report is its own kind of wrong
+	// answer, and hot is the authoritative copy while it exists.
+	//
+	// The lookup is free — it reads only the partition key.
+	inHot := map[string]bool{}
+	if s.flows != nil {
+		if days, derr := s.flows.dayFlowCounts(ctx, f.ISPID); derr == nil {
+			for _, d := range days {
+				if d.Flows > 0 {
+					inHot[d.Date] = true
+				}
+			}
+		}
+	}
+	return selectArchivedDays(ad, inHot, f)
+}
+
+// selectArchivedDays picks the archived days that overlap the query window and
+// are not still served from hot storage. Pure so the overlap and de-duplication
+// rules are testable without a database.
+func selectArchivedDays(ad []store.ArchivedDay, inHot map[string]bool, f SearchFilter) []string {
 	var out []string
 	for _, a := range ad {
+		if inHot[a.Day] {
+			continue
+		}
 		day, e := time.ParseInLocation("2006-01-02", a.Day, istLoc)
 		if e != nil {
 			continue

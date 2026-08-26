@@ -107,6 +107,18 @@ func (r *FlowReader) daysOlderThan(ctx context.Context, afterDays int) []string 
 
 // DropDay drops one day's partition from hot storage (instant — the table is
 // PARTITION BY event_date). Only called after the day is safely in S3.
+// rowsOnDay counts every row in one day's partition, regardless of tenant. Used
+// to prove an export covered the whole partition before it is dropped.
+func (r *FlowReader) rowsOnDay(ctx context.Context, day string) (int64, error) {
+	if _, err := time.Parse("2006-01-02", day); err != nil {
+		return 0, fmt.Errorf("bad partition day %q", day)
+	}
+	var n uint64
+	err := r.conn.QueryRow(ctx, fmt.Sprintf(
+		`SELECT count() FROM %s.flow_logs WHERE event_date = ?`, r.db), day).Scan(&n)
+	return int64(n), err
+}
+
 func (r *FlowReader) DropDay(ctx context.Context, day string) error {
 	if _, err := time.Parse("2006-01-02", day); err != nil { // day is code-controlled; validate anyway
 		return fmt.Errorf("bad partition day %q", day)
@@ -170,6 +182,24 @@ func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64,
 		// rows means a mismatch (or rows belong to a deleted ISP) — never drop then.
 		if dRows == 0 {
 			s.log.Error("auto-archive: candidate day exported 0 rows; NOT dropping from hot", "day", day)
+			continue
+		}
+		// The export loop covers only ISPs registered in the control plane, but
+		// DropDay drops the entire partition. Any row belonging to no registered
+		// ISP — isp_id 0 from observe mode or from a default-tenant config, or an
+		// ISP since deleted — would be destroyed having never been written to S3.
+		// dRows > 0 does not rule that out: the registered tenants' rows alone
+		// make it positive. Compare against what the partition actually holds and
+		// refuse to drop unless every row was exported.
+		hotRows, herr := s.flows.rowsOnDay(ctx, day)
+		if herr != nil {
+			s.log.Error("auto-archive: could not count hot rows; NOT dropping from hot", "day", day, "error", herr)
+			continue
+		}
+		if hotRows != dRows {
+			s.log.Error("auto-archive: partition holds rows that were not exported; NOT dropping from hot",
+				"day", day, "hot_rows", hotRows, "exported_rows", dRows, "unexported", hotRows-dRows,
+				"hint", "rows belong to no registered ISP (isp_id 0 from observe mode, or a deleted ISP); register the tenant or clear those rows deliberately")
 			continue
 		}
 		// Record the archived marker BEFORE dropping from hot. The day is durably in
@@ -316,6 +346,27 @@ func (s *Server) handleArchive(w http.ResponseWriter, r *http.Request) {
 		totalBytes += res.Bytes
 		if res.Key != "" {
 			keys = append(keys, res.Key)
+		}
+	}
+	// Record the archived marker. Cold search discovers days ONLY via
+	// archived_days, so without this the objects sit in S3 unreachable: the day
+	// still answers from hot until the 180-day TTL removes it, and from that
+	// moment the records physically exist and can never be returned. Marking it
+	// is safe while the day is also hot — archivedDaysInRange skips any day still
+	// present in hot storage, so the two copies cannot both be read.
+	//
+	// Only on a clean export. A partial one would claim S3 holds the whole day.
+	if failed == 0 && totalRows > 0 {
+		if merr := s.store.MarkDayArchived(ctx, store.ArchivedDay{
+			Day: day.Format("2006-01-02"), Objects: len(keys), Rows: totalRows, Bytes: totalBytes,
+		}); merr != nil {
+			s.log.Error("archive: export succeeded but marker write failed; the objects are in S3 but cold search cannot find them",
+				"day", day.Format("2006-01-02"), "error", merr)
+			resp := map[string]any{"rows": totalRows, "bytes": totalBytes, "objects": keys, "bucket": bucket,
+				"isps": len(isps), "failed": failed,
+				"error": "export succeeded but the archived-day marker could not be written; these objects will not be searchable — retry before the day leaves hot storage"}
+			writeJSON(w, http.StatusInternalServerError, resp)
+			return
 		}
 	}
 	resp := map[string]any{"rows": totalRows, "bytes": totalBytes, "objects": keys, "bucket": bucket, "isps": len(isps), "failed": failed}
