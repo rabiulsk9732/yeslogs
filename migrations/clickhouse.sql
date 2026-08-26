@@ -23,6 +23,14 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_logs
     nat_public_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
     nat_public_port UInt16 DEFAULT 0,
 
+    -- IE 230 natEvent: 1 = allocation, 2 = release, 0 = not reported. The
+    -- allocation/release pair is what makes a mapping answerable AT a point in
+    -- time rather than merely observed once.
+    nat_event UInt8 DEFAULT 0,
+    -- IE 371 username: the subscriber identity the BNG already knows. When an
+    -- exporter sends it, a lawful request needs no CRM resolution at all.
+    username String DEFAULT '',
+
     protocol UInt8,
     bytes UInt64,
     packets UInt64,

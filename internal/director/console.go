@@ -62,7 +62,14 @@ type natRecord struct {
 	// traffic, really logged, but no translation happened. The row is shown —
 	// hiding it left whole exporters looking silent — and flagged, so an
 	// identity mapping is never read as evidence of who held a public address.
-	Untranslated bool   `json:"untranslated,omitempty"`
+	Untranslated bool `json:"untranslated,omitempty"`
+	// Username is the subscriber identity the exporter itself reported (IE 371).
+	// When present it answers a lawful request outright — no CRM resolution and
+	// no inference from an address that may have been reallocated since.
+	Username string `json:"username,omitempty"`
+	// NatEvent is 1 for an allocation and 2 for a release (IE 230). The pair
+	// bounds when a mapping was actually held.
+	NatEvent     uint8  `json:"natEvent,omitempty"`
 	CRMReference string `json:"crmReference,omitempty"`
 	CRMStatus    string `json:"crmStatus,omitempty"`
 	CRMUsername  string `json:"crmUsername,omitempty"`
@@ -232,7 +239,11 @@ type SearchFilter struct {
 	PublicPort                  int
 	Proto                       string
 	DeviceID                    uint32
-	From, To                    time.Time
+	// Username matches the subscriber identity the exporter reported (IE 371).
+	// It is the strongest selector this store has: it needs no resolution of an
+	// address that may have been reallocated since the time being asked about.
+	Username string
+	From, To time.Time
 	// RequireNAT keeps only rows that carry a post-NAT address at all. It does
 	// NOT drop rows whose post-NAT address equals the source.
 	//
@@ -252,7 +263,7 @@ type SearchFilter struct {
 
 // HasSelector reports whether the filter narrows the scan (an IP or device).
 func (f SearchFilter) HasSelector() bool {
-	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0
+	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0 || f.Username != ""
 }
 
 // hotWhere builds the WHERE clause + bound args for the hot flow_logs table.
@@ -277,6 +288,9 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 	}
 	if f.DeviceID > 0 {
 		add("device_id = ?", f.DeviceID)
+	}
+	if f.Username != "" {
+		add("username = ?", f.Username)
 	}
 	if f.RequireNAT {
 		// Only "has a post-NAT address". Historic rows can still hold 0.0.0.0;
@@ -330,7 +344,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 	if !ok {
 		return nil, fmt.Errorf("no filter")
 	}
-	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, dst_port, protocol, flow_type
+	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, dst_port, protocol, flow_type, username, nat_event
 		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d OFFSET %d`, r.db, where, limit, offset)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
@@ -344,8 +358,9 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 		var sp, pp, dp uint16
 		var sip, pip, dip net.IP
 		var pr uint8
-		var ft string
-		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft); err != nil {
+		var ft, uname string
+		var nev uint8
+		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft, &uname, &nev); err != nil {
 			return out, err
 		}
 		pubIP := pip.String()
@@ -360,7 +375,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
 			DstIP: dip.String(), DstPort: int(dp),
 			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
-			Untranslated: untranslated,
+			Untranslated: untranslated, Username: uname, NatEvent: nev,
 		})
 	}
 	return out, rs.Err()

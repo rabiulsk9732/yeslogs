@@ -104,6 +104,22 @@ type ClickHouseConfig struct {
 	AsyncInsert              bool   `yaml:"async_insert"`          // use ClickHouse server-side async inserts
 	WaitForAsyncInsert       *bool  `yaml:"wait_for_async_insert"` // nil => true (durable); false => fire-and-forget
 	AsyncInsertBusyTimeoutMS int    `yaml:"async_insert_busy_timeout_ms"`
+
+	// Durability. A batch ClickHouse cannot accept is written here instead of
+	// being dropped, and replayed when it recovers. Empty disables spooling and
+	// restores the old behaviour of losing the batch — which cost this fleet
+	// eight days of records on 2026-08-01 and three hours on 2026-08-26.
+	SpoolDir   string `yaml:"spool_dir"`    // "" = disabled; recommended /var/lib/natlog/spool
+	SpoolMaxGB int    `yaml:"spool_max_gb"` // 0 = default 20 GB
+}
+
+// Spool returns the spool directory and its size cap in bytes.
+func (c ClickHouseConfig) Spool() (dir string, maxBytes int64) {
+	gb := c.SpoolMaxGB
+	if gb <= 0 {
+		gb = 20
+	}
+	return c.SpoolDir, int64(gb) << 30
 }
 
 // RulesConfig toggles the skip filters.

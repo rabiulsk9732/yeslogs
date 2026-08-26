@@ -203,3 +203,45 @@ func TestArchivedDaysUnaffectedWhenHotIsEmpty(t *testing.T) {
 		t.Fatalf("got %v, want both days", got)
 	}
 }
+
+// The subscriber username the exporter itself reported is the strongest
+// selector this store has: it needs no resolution of an address that may have
+// been reallocated since the time being asked about. It must narrow the scan,
+// on both the hot and the archived path.
+func TestUsernameIsASearchSelector(t *testing.T) {
+	f := SearchFilter{ISPID: 3, Username: "sub-4471"}
+	if !f.HasSelector() {
+		t.Fatal("a username alone must be enough to run a search")
+	}
+	where, args, ok := hotWhere(f)
+	if !ok {
+		t.Fatal("hotWhere rejected a username-only filter")
+	}
+	if !strings.Contains(where, "username = ?") {
+		t.Errorf("hot WHERE does not filter on username: %s", where)
+	}
+	if len(args) != 2 || args[0] != "sub-4471" {
+		t.Fatalf("unexpected hot args: %#v", args)
+	}
+
+	conds, cargs, cok := coldWhere(f, "flow_start")
+	if !cok {
+		t.Fatal("coldWhere rejected a username-only filter")
+	}
+	cw := strings.Join(conds, " AND ")
+	if !strings.Contains(cw, "username = ?") {
+		t.Errorf("cold WHERE does not filter on username: %s", cw)
+	}
+	if len(cargs) == 0 || cargs[0] != "sub-4471" {
+		t.Fatalf("unexpected cold args: %#v", cargs)
+	}
+}
+
+// An empty username must not become a filter for the empty string, which would
+// silently exclude every record from exporters that do not report one.
+func TestEmptyUsernameIsNotAFilter(t *testing.T) {
+	where, _, _ := hotWhere(SearchFilter{ISPID: 3, PublicIP: "103.204.1.14"})
+	if strings.Contains(where, "username") {
+		t.Errorf("an unset username became a filter: %s", where)
+	}
+}

@@ -29,12 +29,23 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/config"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
+	"github.com/natflow/natflow-dataplane/internal/writer/spool"
 )
 
 const insertStmt = `INSERT INTO %s.flow_logs
 	(isp_id, device_id, src_ip, src_port, dst_ip, dst_port,
-	 nat_public_ip, nat_public_port, protocol, bytes, packets,
+	 nat_public_ip, nat_public_port, nat_event, username, protocol, bytes, packets,
 	 flow_start, flow_end, flow_type, exporter_ip)`
+
+// schemaDDL brings an existing flow_logs up to the columns this build writes.
+// Idempotent and metadata-only in ClickHouse — ADD COLUMN with a DEFAULT does
+// not rewrite existing parts, so it is safe on a table holding billions of rows.
+// Run at startup rather than left to a manual migration: four collectors and a
+// legal retention obligation is not a place for a step someone can forget.
+var schemaDDL = []string{
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_event UInt8 DEFAULT 0`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS username String DEFAULT ''`,
+}
 
 const (
 	sendTimeout = 30 * time.Second
@@ -71,6 +82,12 @@ type Manager struct {
 	retireWG sync.WaitGroup // background drains of pools retired by Reload
 	aggStop  chan struct{}
 	aggWG    sync.WaitGroup
+
+	// spool holds batches ClickHouse would not accept, so an outage costs time
+	// rather than evidence. nil restores the old drop-on-failure behaviour.
+	spool     *spool.Spool
+	replayWG  sync.WaitGroup
+	replayEnd chan struct{}
 }
 
 type insertFailure struct {
@@ -148,12 +165,128 @@ func NewManager(ch config.ClickHouseConfig, live *config.Store, m *metrics.Metri
 		shutdownTimeout: ch.ShutdownDrain(),
 		aggStop:         make(chan struct{}),
 	}
+	// Schema first: the insert statement below names columns that an older table
+	// does not have yet, and every insert would fail until it does.
+	for _, stmt := range schemaDDL {
+		sctx, scancel := context.WithTimeout(context.Background(), 60*time.Second)
+		derr := conn.Exec(sctx, fmt.Sprintf(stmt, ch.Database))
+		scancel()
+		if derr != nil {
+			conn.Close()
+			return nil, fmt.Errorf("flow_logs schema: %w", derr)
+		}
+	}
+	if dir, maxBytes := ch.Spool(); dir != "" {
+		sp, serr := spool.New(dir, maxBytes)
+		if serr != nil {
+			// Refuse to start rather than run without the durability the operator
+			// configured. A collector that silently falls back to dropping batches
+			// is how eight days went missing in the first place.
+			conn.Close()
+			return nil, fmt.Errorf("spool: %w", serr)
+		}
+		mgr.spool = sp
+		if files, bytes, _ := sp.Stats(); files > 0 {
+			mgr.log.Warn("spool holds batches from a previous run; replaying", "files", files, "bytes", bytes, "dir", dir)
+		}
+	} else {
+		mgr.log.Warn("clickhouse.spool_dir is not set: a batch ClickHouse cannot accept will be DROPPED and the records lost permanently")
+	}
 	p := newPool(mgr, ch.WriterWorkers, ch.MaxQueueRows)
 	p.start()
 	mgr.pool.Store(p)
 	mgr.aggWG.Add(1)
 	go mgr.aggregate()
+	if mgr.spool != nil {
+		mgr.replayEnd = make(chan struct{})
+		mgr.replayWG.Add(1)
+		go mgr.replay()
+	}
 	return mgr, nil
+}
+
+// replayEvery paces spool drains. Short enough that a brief outage clears almost
+// immediately, long enough that a sustained one does not spin against a database
+// that is still refusing writes.
+const replayEvery = 5 * time.Second
+
+// replayMaxAttempts is how often one batch may fail before it is quarantined so
+// the rest can proceed. It stays on disk either way — this is evidence, and
+// deleting it to unblock a queue would repeat the mistake the spool corrects.
+const replayMaxAttempts = 10
+
+// replay drains the spool back into ClickHouse whenever it will take rows.
+func (mgr *Manager) replay() {
+	defer mgr.replayWG.Done()
+	t := time.NewTicker(replayEvery)
+	defer t.Stop()
+	fails := map[string]int{}
+	for {
+		select {
+		case <-mgr.replayEnd:
+			return
+		case <-t.C:
+		}
+		for {
+			files, bytes, _ := mgr.spool.Stats()
+			mgr.metrics.SpoolFiles.Set(float64(files))
+			mgr.metrics.SpoolBytes.Set(float64(bytes))
+			mgr.metrics.SpoolOldestSeconds.Set(mgr.spool.Age().Seconds())
+			if files == 0 {
+				break
+			}
+			name, batch, ok, err := mgr.spool.Oldest()
+			if err != nil {
+				// Undecodable: quarantine so it cannot block everything behind it.
+				if name != "" {
+					mgr.log.Error("spool batch unreadable; quarantining", "file", name, "error", err)
+					_ = mgr.spool.Quarantine(name)
+				}
+				break
+			}
+			if !ok {
+				break
+			}
+			if ierr := mgr.insertBatch(batch); ierr != nil {
+				fails[name]++
+				if fails[name] >= replayMaxAttempts {
+					mgr.log.Error("spool batch refused repeatedly; quarantining so replay can continue",
+						"file", name, "rows", len(batch), "attempts", fails[name], "error", ierr)
+					_ = mgr.spool.Quarantine(name)
+					delete(fails, name)
+					continue
+				}
+				// ClickHouse is still unwell: stop and wait for the next tick.
+				break
+			}
+			delete(fails, name)
+			mgr.metrics.SpoolReplayed.Add(float64(len(batch)))
+			mgr.metrics.FlowsInserted.Add(float64(len(batch)))
+			if derr := mgr.spool.Done(name); derr != nil {
+				// Left on disk after a successful insert: replaying it again would
+				// duplicate rows. Delivery is at-least-once by design, but say so.
+				mgr.log.Error("spool file inserted but not removed; it may be replayed again", "file", name, "error", derr)
+			}
+			select {
+			case <-mgr.replayEnd:
+				return
+			default:
+			}
+		}
+	}
+}
+
+// insertBatch writes one batch directly, bypassing the shard queues. Used by
+// replay so recovered records do not compete with live ingest for queue space.
+func (mgr *Manager) insertBatch(batch []normalizer.FlowRecord) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	p := mgr.pool.Load()
+	if p == nil || len(p.shards) == 0 {
+		return fmt.Errorf("no writer pool")
+	}
+	return p.shards[0].send(batch)
 }
 
 // Enqueue submits rec to its shard, returning false if it was dropped.
@@ -196,8 +329,23 @@ func (mgr *Manager) Stop() {
 	mgr.mu.Unlock()
 	close(mgr.aggStop)
 	mgr.aggWG.Wait()
+	// Stop replay before draining: it must not be inserting through a connection
+	// that is about to close, and the drain below may add fresh spool files of
+	// its own if ClickHouse is unavailable at shutdown.
+	if mgr.replayEnd != nil {
+		close(mgr.replayEnd)
+		mgr.replayWG.Wait()
+	}
 	p.drain(mgr.shutdownTimeout)
 	mgr.retireWG.Wait() // let any pools retired by Reload finish flushing
+	if mgr.spool != nil {
+		if files, bytes, _ := mgr.spool.Stats(); files > 0 {
+			// Not a failure — this is the spool doing its job. Say it plainly so
+			// nobody wipes the directory thinking it is scratch space.
+			mgr.log.Warn("shutting down with batches still spooled; they will be replayed on next start",
+				"files", files, "bytes", bytes, "dir", mgr.spool.Dir())
+		}
+	}
 	_ = mgr.conn.Close()
 }
 
@@ -431,8 +579,28 @@ func (s *shard) flush(batch []normalizer.FlowRecord) {
 		}
 	}
 	s.mgr.metrics.InsertErrors.Inc()
+	// Retries are exhausted, but the records are still here and still valid. They
+	// go to disk; losing them is the last resort, not the first.
+	if s.mgr.spool != nil {
+		if serr := s.mgr.spool.Save(batch); serr == nil {
+			s.mgr.metrics.SpoolSaved.Add(float64(len(batch)))
+			s.mgr.log.Warn("clickhouse refused the batch; spooled to disk for replay",
+				"worker", s.id, "rows", len(batch), "error", err)
+			return
+		} else if serr == spool.ErrFull {
+			if s.mgr.spool.MarkFull() {
+				files, bytes, _ := s.mgr.spool.Stats()
+				s.mgr.log.Error("SPOOL FULL — records are now being lost permanently. Restore ClickHouse or raise clickhouse.spool_max_gb",
+					"dir", s.mgr.spool.Dir(), "files", files, "bytes", bytes)
+			}
+		} else {
+			s.mgr.log.Error("spool write failed; records will be lost", "worker", s.id, "rows", len(batch), "error", serr)
+		}
+	}
+	s.mgr.metrics.SpoolLost.Add(float64(len(batch)))
 	s.mgr.metrics.FlowsDropped.Add(float64(len(batch)))
-	s.mgr.log.Error("dropping batch after exhausting retries", "worker", s.id, "rows", len(batch), "error", err)
+	s.mgr.log.Error("dropping batch after exhausting retries — these records cannot be recovered",
+		"worker", s.id, "rows", len(batch), "error", err)
 }
 
 // salvage re-inserts a rejected batch one row at a time, keeping the good rows.
@@ -499,7 +667,7 @@ func (s *shard) send(batch []normalizer.FlowRecord) error {
 		if err := b.Append(
 			r.ISPID, r.DeviceID,
 			ip4(r.SrcIP), r.SrcPort, ip4(r.DstIP), r.DstPort,
-			ip4(r.NatPublicIP), r.NatPublicPort,
+			ip4(r.NatPublicIP), r.NatPublicPort, r.NatEvent, r.Username,
 			r.Protocol, r.Bytes, r.Packets,
 			r.FlowStart, r.FlowEnd, r.FlowType, ip4(r.ExporterIP),
 		); err != nil {

@@ -37,8 +37,17 @@ func (c ColdS3) chFormat() (name, ext string) {
 // Parquet carries its own schema). Matches archive.ExportDay output.
 const coldSchema = "isp_id UInt32, device_id UInt32, src_ip String, src_port UInt16, " +
 	"dst_ip String, dst_port UInt16, nat_public_ip String, nat_public_port UInt16, " +
+	"nat_event UInt8, username String, " +
 	"protocol UInt8, bytes UInt64, packets UInt64, flow_start String, flow_end String, " +
 	"flow_type String, exporter_ip String"
+
+// coldReadSettings let a glob span archives written before nat_event/username
+// existed alongside newer ones. Without this a single old object in the range
+// fails the whole query, which would make every pre-2026-08-26 day unreadable —
+// trading a new column for the loss of months of searchable evidence.
+const coldReadSettings = " SETTINGS input_format_parquet_allow_missing_columns = 1, " +
+	"input_format_csv_allow_variable_number_of_columns = 1, " +
+	"input_format_parquet_skip_columns_with_unsupported_types_in_schema_inference = 1"
 
 // urlForDays builds an s3() path that reads ONLY the given archived days (date
 // pruning) instead of globbing the whole bucket. ISP 0 (director) reads all ISPs.
@@ -95,8 +104,8 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		src = fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
 	}
 	q := fmt.Sprintf(`SELECT %s AS ts, device_id, src_ip, src_port, nat_public_ip, nat_public_port,
-		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT %d`,
-		tsExpr, src, strings.Join(conds, " AND "), limit)
+		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT %d%s`,
+		tsExpr, src, strings.Join(conds, " AND "), limit, coldReadSettings)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -156,6 +165,12 @@ func coldWhere(f SearchFilter, tsExpr string) ([]string, []any, bool) {
 	}
 	if f.DeviceID > 0 {
 		add("device_id = ?", f.DeviceID)
+	}
+	if f.Username != "" {
+		// Archives written before 2026-08-26 have no username column; the
+		// missing-columns setting makes it read as empty there, so a username
+		// search simply finds nothing in those days rather than failing.
+		add("username = ?", f.Username)
 	}
 	if f.RequireNAT {
 		// Matches the hot path: has a post-NAT address, nothing more. Identity

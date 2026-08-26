@@ -23,6 +23,10 @@ type FlowRecord struct {
 
 	NatPublicIP   net.IP
 	NatPublicPort uint16
+	// NatEvent is IE 230: 1 = allocation, 2 = release, 0 = not reported.
+	NatEvent uint8
+	// Username is IE 371, the subscriber identity as the exporter knows it.
+	Username string
 
 	Protocol uint8
 	Bytes    uint64
@@ -96,6 +100,8 @@ func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID 
 		DstPort:       f.DstPort,
 		NatPublicIP:   f.NatPublicIP,
 		NatPublicPort: f.NatPublicPort,
+		NatEvent:      f.NatEvent,
+		Username:      f.Username,
 		Protocol:      f.Protocol,
 		Bytes:         f.Bytes,
 		Packets:       f.Packets,

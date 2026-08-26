@@ -22,6 +22,12 @@ type Metrics struct {
 	FlowsDecoded       prometheus.Counter
 	FlowsSkipped       prometheus.Counter
 	FlowsTimeClamped   prometheus.Counter
+	SpoolSaved         prometheus.Counter
+	SpoolReplayed      prometheus.Counter
+	SpoolLost          prometheus.Counter
+	SpoolFiles         prometheus.Gauge
+	SpoolBytes         prometheus.Gauge
+	SpoolOldestSeconds prometheus.Gauge
 	FlowsInserted      prometheus.Counter
 	FlowsDropped       prometheus.Counter // dropped without insertion (queue full / shutdown)
 	FlowsRejected      prometheus.Counter // rejected by ClickHouse on append
@@ -71,12 +77,23 @@ func New() *Metrics {
 		reg.MustRegister(c)
 		return c
 	}
+	gauge := func(name, help string) prometheus.Gauge {
+		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: help})
+		reg.MustRegister(g)
+		return g
+	}
 	m := &Metrics{
 		PacketsReceived:    counter("packets_received_total", "UDP datagrams received across all listeners."),
 		PacketsDropped:     counter("packets_dropped_total", "UDP datagrams dropped due to decode or validation errors."),
 		PacketsUnsupported: counter("packets_unsupported_total", "UDP datagrams for a recognized but not-yet-decoded protocol (v9/IPFIX in v1)."),
 		FlowsDecoded:       counter("flows_decoded_total", "Flow records successfully decoded."),
 		FlowsSkipped:       counter("flows_skipped_total", "Flow records dropped by skip rules."),
+		SpoolSaved:         counter("spool_records_saved_total", "Records written to the disk spool because ClickHouse would not accept them."),
+		SpoolReplayed:      counter("spool_records_replayed_total", "Records recovered from the disk spool and inserted after ClickHouse returned."),
+		SpoolLost:          counter("spool_records_lost_total", "Records lost outright: the spool was full or unwritable. THIS IS PERMANENT EVIDENCE LOSS."),
+		SpoolFiles:         gauge("spool_files", "Batches currently waiting on disk for ClickHouse to accept them."),
+		SpoolBytes:         gauge("spool_bytes", "Bytes currently held in the disk spool."),
+		SpoolOldestSeconds: gauge("spool_oldest_seconds", "Age of the longest-waiting spooled batch. Growing means replay is not keeping up."),
 		FlowsTimeClamped:   counter("flows_time_clamped_total", "Flow records whose exporter timestamp was implausible and replaced with receive time. A clamped IPDR record is a different answer, not a rounder one: CGNAT ports are reused within minutes, so a lookup at the true allocation time can return the wrong subscriber."),
 		FlowsInserted:      counter("flows_inserted_total", "Flow records inserted into ClickHouse."),
 		FlowsDropped:       counter("flows_dropped_total", "Flow records dropped without insertion (writer queue full or shutdown deadline)."),

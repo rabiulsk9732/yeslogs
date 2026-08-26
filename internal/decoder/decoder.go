@@ -38,6 +38,17 @@ type Flow struct {
 	NatPublicIP   net.IP
 	NatPublicPort uint16
 
+	// NatEvent is IE 230: 1 = allocation (CREATE), 2 = release (DELETE), 0 =
+	// not reported. It is what makes a mapping answerable at a point in time
+	// rather than merely observed once — a lawful request asks who held an
+	// address AT time T, and the allocation/release pair is that interval.
+	NatEvent uint8
+
+	// Username is IE 371, the subscriber identity the BNG already knows. When an
+	// exporter sends it there is no need to resolve the private address through
+	// a CRM at all: the record names the subscriber itself.
+	Username string
+
 	// ExporterIP is the source IP of the UDP datagram that carried this flow.
 	ExporterIP net.IP
 }

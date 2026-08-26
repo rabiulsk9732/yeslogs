@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+
+	"github.com/natflow/natflow-dataplane/internal/decoder"
 )
 
 // --- packet builders --------------------------------------------------------
@@ -235,5 +237,42 @@ func TestMalformed(t *testing.T) {
 	pkt = append(pkt, fs...)
 	if _, err := d.Decode(nil, pkt, net.IPv4(1, 1, 1, 1)); err != nil {
 		t.Errorf("truncated flowset should be tolerated, got %v", err)
+	}
+}
+
+// DandyBNG (and Cisco/Juniper/Nokia) send NAT translations in a dedicated
+// template carrying natEvent and the subscriber's own username. Both were being
+// ignored: the username is the strongest identifier an IPDR record can hold, and
+// natEvent is what bounds when a mapping was actually held.
+func TestNATEventTemplateFieldsAreDecoded(t *testing.T) {
+	var f decoder.Flow
+	applyField(&f, fNAT_EVENT, []byte{1}, 0)
+	if f.NatEvent != 1 {
+		t.Errorf("NatEvent = %d, want 1 (allocation)", f.NatEvent)
+	}
+	applyField(&f, fNAT_EVENT, []byte{2}, 0)
+	if f.NatEvent != 2 {
+		t.Errorf("NatEvent = %d, want 2 (release)", f.NatEvent)
+	}
+}
+
+// IE 371 is a fixed-width field; exporters pad it. The padding is not part of
+// the subscriber's name and must not end up in a stored record or a search key.
+func TestUsernamePaddingIsStripped(t *testing.T) {
+	for _, c := range []struct {
+		in   []byte
+		want string
+	}{
+		{[]byte("sub-4471\x00\x00\x00\x00"), "sub-4471"},
+		{[]byte("sub-4471    "), "sub-4471"},
+		{[]byte("  sub-4471  "), "sub-4471"},
+		{[]byte("\x00\x00\x00"), ""},
+		{[]byte("exactfit"), "exactfit"},
+	} {
+		var f decoder.Flow
+		applyField(&f, fUSERNAME, c.in, 0)
+		if f.Username != c.want {
+			t.Errorf("username %q -> %q, want %q", c.in, f.Username, c.want)
+		}
 	}
 }

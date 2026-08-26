@@ -8,6 +8,7 @@
 package netflow9
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -67,6 +68,8 @@ const (
 	fIPV6_DST_ADDR  = 28
 	fNAT_SRC_IPV4   = 225 // postNATSourceIPv4Address
 	fNAT_SRC_PORT   = 227 // postNAPTSourceTransportPort
+	fNAT_EVENT      = 230 // natEvent: 1 = allocation, 2 = release
+	fUSERNAME       = 371 // username (IPFIX): the subscriber the BNG already knows
 	// Absolute-time IEs (not sysUptime-relative). iptables/conntrack NAT-event
 	// exporters (e.g. ipt-netflow) timestamp records with these instead of
 	// FIRST/LAST_SWITCHED — without mapping them flow_start would be zero.
@@ -276,6 +279,12 @@ func applyField(f *decoder.Flow, typ uint16, v []byte, bootMS int64) {
 		f.NatPublicIP = cloneIP(v)
 	case fNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
+	case fNAT_EVENT:
+		f.NatEvent = uint8(beUint(v))
+	case fUSERNAME:
+		// Fixed-length string fields are NUL- or space-padded; keep only the
+		// name itself so it matches what an operator would search for.
+		f.Username = trimField(v)
 	case fFLOW_START_MS:
 		f.FlowStart = msToTime(int64(beUint(v)))
 	case fFLOW_END_MS:
@@ -366,4 +375,13 @@ func cloneIP(b []byte) net.IP {
 
 func msToTime(ms int64) time.Time {
 	return time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond)).UTC()
+}
+
+// trimField cleans a fixed-length string field: exporters pad to the declared
+// width with NULs or spaces, and the padding is not part of the value.
+func trimField(v []byte) string {
+	if i := bytes.IndexByte(v, 0); i >= 0 {
+		v = v[:i]
+	}
+	return string(bytes.TrimSpace(v))
 }

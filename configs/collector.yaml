@@ -29,6 +29,14 @@ clickhouse:
   flush_interval_ms: 1000
   writer_workers: 4          # sharded writers (records sharded by exporter_ip+device_id)
   max_queue_rows: 100000     # per-writer queue capacity
+
+  # Durability. A batch ClickHouse will not accept is written here and replayed
+  # when it recovers, instead of being dropped. Leaving this empty restores the
+  # old behaviour, which cost this fleet eight days of records on 2026-08-01
+  # (broken parts blocked flow_logs from loading; every batch was discarded for
+  # eight days) and about 28.6M records on 2026-08-26.
+  spool_dir: "/var/lib/natlog/spool"
+  spool_max_gb: 20
   retry_max_attempts: 3
   retry_backoff_ms: 250
   shutdown_drain_ms: 15000

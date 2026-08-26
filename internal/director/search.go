@@ -67,6 +67,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		DeviceID                    uint32
 		ISPID                       uint32
 		Limit, Offset               int
+		Username                    string `json:"username"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
@@ -93,12 +94,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		ISPID: scope, PublicIP: strings.TrimSpace(body.PublicIP), PrivateIP: strings.TrimSpace(body.PrivateIP),
 		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, Proto: body.Proto,
 		DeviceID: body.DeviceID, From: parseTime(body.From), To: parseTime(body.To),
+		Username: strings.TrimSpace(body.Username),
 		// The Logs table is an IPDR/NAT-mapping view. Keep it aligned with
 		// exports so reverse and identity flows never render with a blank NAT IP.
 		RequireNAT: true,
 	}
 	if !f.HasSelector() {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specify at least a Public IP, Private IP, Destination IP, or Device"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specify at least a Public IP, Private IP, Destination IP, Subscriber username, or Device"})
 		return
 	}
 	searchStarted := time.Now()
@@ -158,6 +160,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		ISPID: scope, PublicIP: strings.TrimSpace(q.Get("ip")), PrivateIP: strings.TrimSpace(q.Get("priv")),
 		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), Proto: q.Get("proto"),
 		DeviceID: parseUint32(q.Get("device")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
+		Username:   strings.TrimSpace(q.Get("user")),
 		RequireNAT: true,
 	}
 	if !f.HasSelector() {

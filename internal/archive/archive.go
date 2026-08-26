@@ -90,6 +90,7 @@ func (e *Exporter) exportDay(ctx context.Context, ispID uint32, day time.Time, f
 			IPv4NumToString(src_ip) AS src_ip, src_port,
 			IPv4NumToString(dst_ip) AS dst_ip, dst_port,
 			IPv4NumToString(nat_public_ip) AS nat_public_ip, nat_public_port,
+			nat_event, username,
 			protocol, bytes, packets, flow_start, flow_end, flow_type,
 			IPv4NumToString(exporter_ip) AS exporter_ip
 		FROM %s.%s WHERE event_date = ? AND isp_id = ?`,

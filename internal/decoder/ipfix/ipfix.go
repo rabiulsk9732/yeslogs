@@ -12,6 +12,7 @@
 package ipfix
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -68,6 +69,8 @@ const (
 	eFLOW_END_MS   = 153 // flowEndMilliseconds
 	eNAT_SRC_IPV4  = 225 // postNATSourceIPv4Address
 	eNAT_SRC_PORT  = 227 // postNAPTSourceTransportPort
+	eNAT_EVENT     = 230 // natEvent: 1 = allocation, 2 = release
+	eUSERNAME      = 371 // username: the subscriber the BNG already knows
 )
 
 type field struct {
@@ -352,6 +355,12 @@ func applyField(f *decoder.Flow, ie uint16, v []byte, _ time.Time) {
 		f.NatPublicIP = cloneIP(v)
 	case eNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
+	case eNAT_EVENT:
+		f.NatEvent = uint8(beUint(v))
+	case eUSERNAME:
+		// Fixed-length string fields are NUL- or space-padded; keep only the
+		// name itself so it matches what an operator would search for.
+		f.Username = trimField(v)
 	}
 }
 
@@ -424,4 +433,13 @@ func cloneIP(b []byte) net.IP {
 
 func msToTime(ms int64) time.Time {
 	return time.Unix(ms/1000, (ms%1000)*int64(time.Millisecond)).UTC()
+}
+
+// trimField cleans a fixed-length string field: exporters pad to the declared
+// width with NULs or spaces, and the padding is not part of the value.
+func trimField(v []byte) string {
+	if i := bytes.IndexByte(v, 0); i >= 0 {
+		v = v[:i]
+	}
+	return string(bytes.TrimSpace(v))
 }
