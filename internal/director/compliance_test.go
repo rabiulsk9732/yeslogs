@@ -273,10 +273,10 @@ func TestAnswerableStates(t *testing.T) {
 // that Retention's per-day counts cannot show: the day looks healthy there.
 func TestUnanswerableDays(t *testing.T) {
 	days := []DayIPDR{
-		{Date: "2026-08-25", Flows: 8778667, Translated: 246216}, // healthy
-		{Date: "2026-08-24", Flows: 8064258, Translated: 284688}, // healthy
-		{Date: "2026-08-23", Flows: 6345272, Translated: 0},      // rows, no translations
-		{Date: "2026-08-22", Flows: 0, Translated: 0},            // no rows at all
+		{Date: "2026-08-25", Flows: 8778667, Translated: 246216, TranslatedKnown: true}, // healthy
+		{Date: "2026-08-24", Flows: 8064258, Translated: 284688, TranslatedKnown: true}, // healthy
+		{Date: "2026-08-23", Flows: 6345272, Translated: 0, TranslatedKnown: true},      // rows, no translations
+		{Date: "2026-08-22", Flows: 0, Translated: 0, TranslatedKnown: true},            // no rows at all
 	}
 	got := unanswerableDays(days)
 	if len(got) != 1 || got[0] != "2026-08-23" {
@@ -287,7 +287,7 @@ func TestUnanswerableDays(t *testing.T) {
 // A day with zero rows is a missing day, not an unanswerable one — reporting it
 // twice would double-count the same finding.
 func TestUnanswerableDaysIgnoresEmptyDays(t *testing.T) {
-	if got := unanswerableDays([]DayIPDR{{Date: "2026-08-22", Flows: 0}}); len(got) != 0 {
+	if got := unanswerableDays([]DayIPDR{{Date: "2026-08-22", Flows: 0, TranslatedKnown: true}}); len(got) != 0 {
 		t.Errorf("a day with no rows is a missing day, not unanswerable: got %v", got)
 	}
 }
@@ -295,7 +295,7 @@ func TestUnanswerableDaysIgnoresEmptyDays(t *testing.T) {
 // Deliberately a zero test: a genuinely quiet day must not be flagged, or the
 // alert becomes noise and gets ignored.
 func TestUnanswerableDaysAllowsQuietDays(t *testing.T) {
-	days := []DayIPDR{{Date: "2026-08-23", Flows: 6345272, Translated: 127}}
+	days := []DayIPDR{{Date: "2026-08-23", Flows: 6345272, Translated: 127, TranslatedKnown: true}}
 	if got := unanswerableDays(days); len(got) != 0 {
 		t.Errorf("a low-but-nonzero day must not be flagged: got %v", got)
 	}
@@ -393,5 +393,20 @@ func TestStoredTimestampWinsWhenNewer(t *testing.T) {
 		DeviceSignal{NoNATDropped: 5, LastFlow: older})
 	if !c.LastFlow.Equal(newer) {
 		t.Errorf("LastFlow = %v, want the newer stored flow %v", c.LastFlow, newer)
+	}
+}
+
+// A day whose translation count could not be measured must never be reported as
+// a legal gap. The count times out on the busiest collectors, and an operator
+// shown a list of "unanswerable" dates has no way to tell a real gap from a
+// query that gave up.
+func TestUnmeasuredDaysAreNotUnanswerable(t *testing.T) {
+	days := []DayIPDR{
+		{Date: "2026-08-25", Flows: 200_000_000},                                   // not measured
+		{Date: "2026-08-24", Flows: 6345272, Translated: 0, TranslatedKnown: true}, // measured, genuinely empty
+	}
+	got := unanswerableDays(days)
+	if len(got) != 1 || got[0] != "2026-08-24" {
+		t.Fatalf("got %v, want only the measured day [2026-08-24]", got)
 	}
 }

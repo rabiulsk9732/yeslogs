@@ -155,6 +155,16 @@ const (
 	retentionMinDays = 180
 	// complianceTickEvery is how often the monitor re-grades every device.
 	complianceTickEvery = 15 * time.Minute
+	// dayCountTimeout bounds the per-day row count. It reads only the partition
+	// key, so this is generous by a wide margin — measured at 0.08s over 51 days
+	// on the busiest box in the fleet.
+	dayCountTimeout = 20 * time.Second
+	// translationsByDayTimeout bounds the per-day translation count, which reads
+	// two IP columns across the whole retention window. It cannot complete on
+	// the largest collectors at any practical limit, so this is set to give the
+	// smaller ones room and to give up promptly on the rest. Kept well under the
+	// monitor tick so a slow run can never overlap the next one.
+	translationsByDayTimeout = 90 * time.Second
 	// complianceGrace is how long a newly-registered device may stay ungraded
 	// before silence itself becomes an alert. A real exporter starts inside a
 	// minute; a mis-configured one never does.
@@ -167,30 +177,90 @@ type DayIPDR struct {
 	Date       string `json:"date"`
 	Flows      uint64 `json:"flows"`
 	Translated uint64 `json:"translated"`
+	// TranslatedKnown says whether Translated was actually measured. Counting
+	// translations reads two IP columns across the day; on a collector storing
+	// hundreds of millions of rows a day that does not finish, and reporting an
+	// unmeasured day as "0 translations" would brand a healthy day unanswerable.
+	TranslatedKnown bool `json:"translatedKnown"`
 }
 
-// TranslationsByDay returns per-day flow and translation counts over the whole
-// retained window, newest first. Cheap: it reads the event_date partition key.
+// TranslationsByDay returns per-day flow counts over the whole retained window,
+// newest first, with translation counts filled in where they can be measured.
+//
+// It is deliberately two queries. Counting rows per day is free — event_date is
+// the partition key — and that alone answers the question that matters most:
+// which retained days hold no records at all and so can answer nothing. Counting
+// *translations* per day reads two IP columns across every row, and on a busy
+// collector that does not finish: measured 2026-08-26 on box3, over 170s for the
+// full window and over 120s for even the last 30 days. Running both under one
+// deadline meant the cheap answer was lost along with the expensive one, every
+// cycle, on exactly the boxes that needed it. Now the gap detection always
+// succeeds and the translation counts are best-effort on top.
 func (r *FlowReader) TranslationsByDay(ctx context.Context, ispID uint32) ([]DayIPDR, error) {
 	where, args := "1", []any(nil)
 	if ispID != 0 {
 		where, args = "isp_id = ?", []any{ispID}
 	}
-	q := fmt.Sprintf(`SELECT toString(event_date), count(),
+
+	cctx, ccancel := context.WithTimeout(ctx, dayCountTimeout)
+	defer ccancel()
+	rows, err := r.conn.Query(cctx, fmt.Sprintf(
+		`SELECT toString(event_date), count() FROM %s.flow_logs WHERE %s
+		 GROUP BY event_date ORDER BY event_date DESC`, r.db, where), args...)
+	if err != nil {
+		return nil, err
+	}
+	var out []DayIPDR
+	for rows.Next() {
+		var d DayIPDR
+		if err := rows.Scan(&d.Date, &d.Flows); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Best effort from here. A failure leaves every day TranslatedKnown=false,
+	// which the console and unanswerableDays both read as "not measured".
+	tr, err := r.translationsPerDay(ctx, where, args)
+	if err != nil {
+		return out, nil
+	}
+	for i := range out {
+		if n, ok := tr[out[i].Date]; ok {
+			out[i].Translated, out[i].TranslatedKnown = n, true
+		}
+	}
+	return out, nil
+}
+
+// translationsPerDay counts translated flows per day. Bounded on both sides —
+// the caller's context and ClickHouse's own max_execution_time — so an abandoned
+// client cannot leave it burning IO on a collector that is already busy writing.
+func (r *FlowReader) translationsPerDay(ctx context.Context, where string, args []any) (map[string]uint64, error) {
+	tctx, cancel := context.WithTimeout(ctx, translationsByDayTimeout)
+	defer cancel()
+	q := fmt.Sprintf(`SELECT toString(event_date),
 			countIf(nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip)
-		FROM %s.flow_logs WHERE %s GROUP BY event_date ORDER BY event_date DESC`, r.db, where)
-	rows, err := r.conn.Query(ctx, q, args...)
+		FROM %s.flow_logs WHERE %s GROUP BY event_date
+		SETTINGS max_execution_time = %d`, r.db, where, int(translationsByDayTimeout.Seconds())-5)
+	rows, err := r.conn.Query(tctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []DayIPDR
+	out := map[string]uint64{}
 	for rows.Next() {
-		var d DayIPDR
-		if err := rows.Scan(&d.Date, &d.Flows, &d.Translated); err != nil {
+		var date string
+		var n uint64
+		if err := rows.Scan(&date, &n); err != nil {
 			return nil, err
 		}
-		out = append(out, d)
+		out[date] = n
 	}
 	return out, rows.Err()
 }
@@ -201,7 +271,10 @@ func (r *FlowReader) TranslationsByDay(ctx context.Context, ispID uint32) ([]Day
 func unanswerableDays(days []DayIPDR) []string {
 	var out []string
 	for _, d := range days {
-		if d.Flows > 0 && d.Translated == 0 {
+		// An unmeasured day is not evidence of anything. Calling it unanswerable
+		// because a query timed out would put real dates in front of an operator
+		// as legal gaps that do not exist.
+		if d.TranslatedKnown && d.Flows > 0 && d.Translated == 0 {
 			out = append(out, d.Date)
 		}
 	}
@@ -421,6 +494,11 @@ func (s *Server) ComplianceAudit(ctx context.Context, ispID uint32) ComplianceRe
 		s.log.Warn("compliance: device list failed", "error", err)
 		return rep
 	}
+	// Each query gets its own deadline. Sharing one budget meant the per-day
+	// scan inherited whatever the per-device query left over — a few seconds
+	// against the full retention window — so on the busy boxes it timed out on
+	// essentially every cycle and the retention-gap detection silently never
+	// ran. Observed 2026-08-26: 35-36 failures in 26h on box2 and box3.
 	qctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	stats, err := s.flows.TranslationStats(qctx, ispID, complianceWindowMins*time.Minute)
@@ -450,7 +528,7 @@ func (s *Server) ComplianceAudit(ctx context.Context, ispID uint32) ComplianceRe
 		}
 		return a.Name < b.Name
 	})
-	days, err := s.flows.TranslationsByDay(qctx, ispID)
+	days, err := s.flows.TranslationsByDay(ctx, ispID)
 	if err != nil {
 		s.log.Warn("compliance: per-day translation query failed", "error", err)
 		return rep
