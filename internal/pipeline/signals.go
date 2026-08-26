@@ -23,8 +23,9 @@ type DeviceSignals struct {
 }
 
 type devSig struct {
-	noNAT    uint64
-	lastFlow time.Time
+	noNAT       uint64
+	timeClamped uint64
+	lastFlow    time.Time
 }
 
 // DeviceSignal is one device's dropped-flow evidence.
@@ -34,6 +35,10 @@ type DeviceSignal struct {
 	// LastFlow is when such a flow last arrived — proof of life independent of
 	// anything reaching storage.
 	LastFlow time.Time
+	// TimeClamped counts records stored under receive time because the exporter's
+	// own timestamp was implausible. A device clamping continuously has a clock
+	// fault and every record it produces is misdated.
+	TimeClamped uint64
 }
 
 // NewDeviceSignals returns an empty tracker.
@@ -59,6 +64,23 @@ func (d *DeviceSignals) noteNoNAT(deviceID uint32, at time.Time) {
 	d.mu.Unlock()
 }
 
+// noteTimeClamped records one record stored under receive time because the
+// exporter's clock was implausible.
+func (d *DeviceSignals) noteTimeClamped(deviceID uint32, at time.Time) {
+	if d == nil || deviceID == 0 {
+		return
+	}
+	d.mu.Lock()
+	s := d.m[deviceID]
+	if s == nil {
+		s = &devSig{}
+		d.m[deviceID] = s
+	}
+	s.timeClamped++
+	s.lastFlow = at
+	d.mu.Unlock()
+}
+
 // Snapshot returns a copy of the current per-device evidence.
 func (d *DeviceSignals) Snapshot() map[uint32]DeviceSignal {
 	out := map[uint32]DeviceSignal{}
@@ -67,7 +89,7 @@ func (d *DeviceSignals) Snapshot() map[uint32]DeviceSignal {
 	}
 	d.mu.Lock()
 	for id, s := range d.m {
-		out[id] = DeviceSignal{NoNATDropped: s.noNAT, LastFlow: s.lastFlow}
+		out[id] = DeviceSignal{NoNATDropped: s.noNAT, LastFlow: s.lastFlow, TimeClamped: s.timeClamped}
 	}
 	d.mu.Unlock()
 	return out

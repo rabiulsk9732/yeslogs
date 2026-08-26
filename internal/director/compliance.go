@@ -80,6 +80,7 @@ type DeviceFlowStats struct {
 type DeviceSignal struct {
 	NoNATDropped uint64    // flows discarded for carrying no post-NAT address
 	LastFlow     time.Time // when such a flow last arrived: proof of life
+	TimeClamped  uint64    // records stored under receive time: the device's clock is wrong
 }
 
 // SetDeviceSignals registers the dropped-flow evidence provider.
@@ -107,8 +108,11 @@ type DeviceCompliance struct {
 	// NoNATDropped counts flows the dataplane discarded before storage for
 	// carrying no post-NAT address — the only trace such a device leaves.
 	NoNATDropped uint64 `json:"noNatDropped"`
-	SameAsSrc    uint64 `json:"sameAsSrc"`
-	PrivateSrc   uint64 `json:"privateSrc"`
+	// TimeClamped counts records stored under the collector's receive time
+	// because this exporter's own timestamp was implausible.
+	TimeClamped uint64 `json:"timeClamped"`
+	SameAsSrc   uint64 `json:"sameAsSrc"`
+	PrivateSrc  uint64 `json:"privateSrc"`
 	// TranslatedPct is translated/flows as a percentage — an efficiency hint
 	// (how much of what this device sends is IPDR-relevant), not a verdict.
 	TranslatedPct float64   `json:"translatedPct"`
@@ -345,7 +349,7 @@ func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCom
 		StoreID: d.ID, DeviceID: d.DeviceID, Name: d.Name, ExporterIP: d.ExporterIP,
 		Flows: st.Flows, Translated: st.Translated, WithPort: st.WithPort,
 		NoNATField: st.NoNATField, SameAsSrc: st.SameAsSrc, PrivateSrc: st.PrivateSrc,
-		LastFlow: st.LastFlow, NoNATDropped: sig.NoNATDropped,
+		LastFlow: st.LastFlow, NoNATDropped: sig.NoNATDropped, TimeClamped: sig.TimeClamped,
 	}
 	// Drop evidence counts as proof of life in every branch, not just the one
 	// where storage is empty. During the window after the no-translation rule
@@ -425,6 +429,22 @@ func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCom
 			human(sig.NoNATDropped))
 	}
 	c.Answerable = c.State.answerable()
+	// Applied last, so it overrides the grade rather than being overwritten by it.
+	// A clock fault outranks everything else this page can say about a device: the
+	// records are stored, they look complete, and every timestamp on them is the
+	// collector's receive time rather than when the translation actually happened.
+	// CGNAT ports are reused within minutes, so a lawful request answered from
+	// those rows can name the wrong subscriber — worse than no answer, because it
+	// looks like a good one.
+	if sig.TimeClamped > 0 {
+		c.Answerable = false
+		c.Detail += fmt.Sprintf(" CLOCK FAULT: %s records from this exporter were stored under the collector's receive time because its own timestamps were implausible. Times on those records are not when the translation happened.",
+			human(sig.TimeClamped))
+		if c.Remedy != "" {
+			c.Remedy += " "
+		}
+		c.Remedy += "Fix time sync on the exporter (NTP) — until then its records cannot be trusted to answer a question about a point in time."
+	}
 	return c
 }
 

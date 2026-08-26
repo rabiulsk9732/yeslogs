@@ -33,6 +33,18 @@ type FlowRecord struct {
 
 	FlowType   string
 	ExporterIP net.IP
+
+	// TimeClamped records that the exporter's own flow time was rejected as
+	// implausible and replaced with the collector's receive time.
+	//
+	// The substitution itself is the right call — a device with a frozen clock
+	// would otherwise misdate every record it sends. But a clamped record is not
+	// merely imprecise, it is a different answer: CGNAT ports are reused within
+	// minutes, so a lookup at the true allocation time can return the wrong
+	// subscriber or none. That has to be visible. Silently re-stamping evidence
+	// and reporting nothing is how a collector produces confidently wrong answers
+	// to a lawful request.
+	TimeClamped bool
 }
 
 // Normalizer maps decoded flows to FlowRecords. It is stateless; the ISP/device
@@ -67,13 +79,15 @@ func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID 
 	// mappable time IE — those arrive zero and fall back here too.
 	now := time.Now()
 	start, end := f.FlowStart, f.FlowEnd
-	if !plausible(start, now) {
+	clamped := !plausible(start, now)
+	if clamped {
 		start = now
 	}
 	if end.IsZero() || end.Before(start) || end.After(now.Add(skewFuture)) {
 		end = start
 	}
 	return FlowRecord{
+		TimeClamped:   clamped,
 		ISPID:         ispID,
 		DeviceID:      deviceID,
 		SrcIP:         f.SrcIP,

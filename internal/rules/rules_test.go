@@ -11,11 +11,14 @@ import (
 // survives the hard-coded NAT rule and actually exercises the rule under test.
 func rec(src, dst string, sp, dp uint16, bytes uint64) normalizer.FlowRecord {
 	r := untranslated(src, dst, sp, dp, bytes)
-	// Address but no post-NAT port: a traffic flow that survives the hard-coded
-	// NAT rule and so actually reaches the configurable rules under test. With a
-	// port it would be a translation, and translations are exempt from all of
-	// them — see TestNoConfigurableRuleDropsATranslation.
-	r.NatPublicIP = net.ParseIP("203.0.113.7")
+	// Post-NAT address equal to the source: this is what an untranslated flow
+	// actually looks like on the wire — exporters copy the source into the
+	// post-NAT field when there is nothing to translate (observed on Oji-NAS,
+	// 103.204.0.16 -> nat 103.204.0.16). It survives the hard-coded NAT rule and
+	// so reaches the configurable rules under test. A record whose post-NAT
+	// address DIFFERS is a translation and is exempt from all of them — see
+	// TestNoConfigurableRuleDropsATranslation.
+	r.NatPublicIP = net.ParseIP(src)
 	return r
 }
 
@@ -31,12 +34,12 @@ func untranslated(src, dst string, sp, dp uint16, bytes uint64) normalizer.FlowR
 	}
 }
 
-// husk builds a zero-byte traffic flow: it has a post-NAT address but no
-// post-NAT port, so it is not a translation record and the zero-bytes rule still
-// applies to it.
+// husk builds a zero-byte untranslated flow: post-NAT address equal to the
+// source and no post-NAT port, so nothing was translated and the zero-bytes rule
+// still applies to it.
 func husk(src, dst string, sp, dp uint16) normalizer.FlowRecord {
 	r := untranslated(src, dst, sp, dp, 0)
-	r.NatPublicIP = net.ParseIP("203.0.113.7")
+	r.NatPublicIP = net.ParseIP(src)
 	return r
 }
 
@@ -151,13 +154,12 @@ func TestNATEventSurvivesZeroBytesRule(t *testing.T) {
 	}
 }
 
-// A traffic flow with no bytes and no post-NAT port is still an empty husk and
-// the rule must still drop it — the exemption is for translations, not for
+// A flow that translated nothing and carries no bytes is an empty husk and the
+// rule must still drop it — the exemption is for translations, not for
 // everything that reaches it.
 func TestZeroByteHuskStillDropped(t *testing.T) {
 	rs := New(true, true, true)
-	r := untranslated("10.0.0.1", "8.8.8.8", 1234, 4321, 0)
-	r.NatPublicIP = net.ParseIP("203.0.113.7") // has an address, no port
+	r := husk("10.0.0.1", "8.8.8.8", 1234, 4321)
 	if skip, why := rs.ShouldSkip(&r); !skip || why != "zero_bytes" {
 		t.Errorf("ShouldSkip = (%v, %q), want (true, \"zero_bytes\")", skip, why)
 	}
@@ -223,5 +225,29 @@ func TestConfigurableRulesStillReduceTrafficFlows(t *testing.T) {
 				t.Errorf("ShouldSkip = (%v, %q), want (true, %q)", skip, why, c.why)
 			}
 		})
+	}
+}
+
+// 1:1 NAT and deterministic NAT without PAT emit a post-NAT address with no
+// post-NAT port at all. That record still answers "who held public IP X at time
+// T", so no volume rule may reduce it — keying the exemption on the port alone
+// would discard every translation those devices produce.
+func TestPortlessOneToOneNATIsATranslation(t *testing.T) {
+	rs := New(true, true, true)
+	r := untranslated("100.64.9.4", "8.8.8.8", 53, 53, 0) // DNS, zero-byte
+	r.NatPublicIP = net.ParseIP("103.204.1.20")           // translated, no port
+	if skip, why := rs.ShouldSkip(&r); skip {
+		t.Errorf("a 1:1 NAT translation was dropped as %q", why)
+	}
+}
+
+// The exemption must not swallow untranslated traffic: same address in and out
+// means nothing was translated, whatever else the record carries.
+func TestSameAddressIsNotATranslation(t *testing.T) {
+	rs := New(true, true, true)
+	r := untranslated("103.204.0.16", "8.8.8.8", 40000, 53, 0)
+	r.NatPublicIP = net.ParseIP("103.204.0.16")
+	if skip, why := rs.ShouldSkip(&r); !skip || why != "zero_bytes" {
+		t.Errorf("ShouldSkip = (%v, %q), want (true, \"zero_bytes\")", skip, why)
 	}
 }

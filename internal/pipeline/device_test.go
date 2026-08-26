@@ -48,13 +48,14 @@ func normalFlow() decoder.Flow {
 // dnsTranslation and TestDNSTranslationSurvivesPerDeviceSkipDNS.
 func dnsFlow() decoder.Flow {
 	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(8, 8, 8, 8), SrcPort: 40001, DstPort: 53, Protocol: 17, Bytes: 120, Packets: 2,
-		NatPublicIP: net.IPv4(203, 0, 113, 7)}
+		NatPublicIP: net.IPv4(10, 0, 0, 5)} // post-NAT == source: nothing translated
 }
 
 // dnsTranslation is a NAT event for a subscriber's DNS query: a real mapping of
 // who held a public ip:port at a point in time, which happens to be to port 53.
 func dnsTranslation() decoder.Flow {
 	f := dnsFlow()
+	f.NatPublicIP = net.IPv4(203, 0, 113, 7)
 	f.NatPublicPort = 50001
 	return f
 }

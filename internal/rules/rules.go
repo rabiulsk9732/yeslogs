@@ -91,14 +91,31 @@ func (r *RuleSet) ShouldSkip(rec *normalizer.FlowRecord) (bool, string) {
 	return false, ""
 }
 
-// isTranslation reports whether rec is a NAT translation record rather than a
+// isTranslation reports whether rec records an address translation rather than a
 // traffic flow that merely happens to carry a post-NAT address.
 //
-// The post-NAT port is the discriminator. Under CGNAT one public IP is shared by
-// many subscribers, so the port is what identifies one — a record that has it is
-// answering the question this store exists for, whatever its byte counter says.
+// Two forms count, because two kinds of device produce them:
+//
+//   - a post-NAT port is present. Under CGNAT one public IP is shared by many
+//     subscribers, so the port is what identifies one, and a record carrying it
+//     answers the question this store exists for whatever its byte counter says.
+//
+//   - the post-NAT address simply differs from the source. 1:1 NAT and
+//     deterministic NAT without PAT emit IE 225 with no IE 227 at all, and such a
+//     record still answers "who held public IP X at time T". Keying only on the
+//     port would discard every translation those devices produce — the same class
+//     of mistake as treating a NAT event as an empty husk.
+//
+// A record whose post-NAT address equals its source translated nothing, so it is
+// a traffic flow and the configurable rules may reduce it.
 func isTranslation(rec *normalizer.FlowRecord) bool {
-	return rec.NatPublicPort != 0
+	if isUnsetIP(rec.NatPublicIP) {
+		return false
+	}
+	if rec.NatPublicPort != 0 {
+		return true
+	}
+	return !rec.NatPublicIP.Equal(rec.SrcIP)
 }
 
 // isUnsetIP reports whether an address was never populated: absent, or the

@@ -21,6 +21,7 @@ type Metrics struct {
 	PacketsUnsupported prometheus.Counter
 	FlowsDecoded       prometheus.Counter
 	FlowsSkipped       prometheus.Counter
+	FlowsTimeClamped   prometheus.Counter
 	FlowsInserted      prometheus.Counter
 	FlowsDropped       prometheus.Counter // dropped without insertion (queue full / shutdown)
 	FlowsRejected      prometheus.Counter // rejected by ClickHouse on append
@@ -76,6 +77,7 @@ func New() *Metrics {
 		PacketsUnsupported: counter("packets_unsupported_total", "UDP datagrams for a recognized but not-yet-decoded protocol (v9/IPFIX in v1)."),
 		FlowsDecoded:       counter("flows_decoded_total", "Flow records successfully decoded."),
 		FlowsSkipped:       counter("flows_skipped_total", "Flow records dropped by skip rules."),
+		FlowsTimeClamped:   counter("flows_time_clamped_total", "Flow records whose exporter timestamp was implausible and replaced with receive time. A clamped IPDR record is a different answer, not a rounder one: CGNAT ports are reused within minutes, so a lookup at the true allocation time can return the wrong subscriber."),
 		FlowsInserted:      counter("flows_inserted_total", "Flow records inserted into ClickHouse."),
 		FlowsDropped:       counter("flows_dropped_total", "Flow records dropped without insertion (writer queue full or shutdown deadline)."),
 		FlowsRejected:      counter("flows_rejected_total", "Flow records rejected by ClickHouse during row append."),
