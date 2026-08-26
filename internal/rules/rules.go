@@ -48,7 +48,24 @@ func (r *RuleSet) ShouldSkip(rec *normalizer.FlowRecord) (bool, string) {
 	if isUnsetIP(rec.NatPublicIP) {
 		return true, ReasonNoNAT
 	}
-	if r.SkipZeroBytes && rec.Bytes == 0 {
+	// Everything still here carries a post-NAT address, so from this point on
+	// the configurable rules are deciding the fate of translation records only.
+	// They were written for traffic flows and two of them are actively wrong
+	// applied to a NAT event.
+	//
+	// Zero bytes is the worst of them. A NAT event record — the standard
+	// separate-template form that Cisco, Juniper, Nokia and this fleet's DandyBNG
+	// all emit — carries the translation, the ports, natEvent and often the
+	// username, and NO byte counter, because it records an allocation rather than
+	// traffic. Dropping it as an empty husk discards the single most valuable
+	// record type an IPDR store can receive, while keeping the traffic flows that
+	// cannot answer anything.
+	//
+	// Found live on 2026-08-26: exporter 103.204.1.14 sends template 265 with
+	// IE 225/226/227/228/230 + username. Every one of those records was being
+	// discarded here, and the device was being reported to its owner as "not
+	// logging NAT" when it was doing exactly the right thing.
+	if r.SkipZeroBytes && rec.Bytes == 0 && !isTranslation(rec) {
 		return true, "zero_bytes"
 	}
 	if r.SkipDNS && (rec.SrcPort == dnsPort || rec.DstPort == dnsPort) {
@@ -58,6 +75,16 @@ func (r *RuleSet) ShouldSkip(rec *normalizer.FlowRecord) (bool, string) {
 		return true, "private_to_private"
 	}
 	return false, ""
+}
+
+// isTranslation reports whether rec is a NAT translation record rather than a
+// traffic flow that merely happens to carry a post-NAT address.
+//
+// The post-NAT port is the discriminator. Under CGNAT one public IP is shared by
+// many subscribers, so the port is what identifies one — a record that has it is
+// answering the question this store exists for, whatever its byte counter says.
+func isTranslation(rec *normalizer.FlowRecord) bool {
+	return rec.NatPublicPort != 0
 }
 
 // isUnsetIP reports whether an address was never populated: absent, or the
