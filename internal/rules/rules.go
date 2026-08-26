@@ -48,24 +48,38 @@ func (r *RuleSet) ShouldSkip(rec *normalizer.FlowRecord) (bool, string) {
 	if isUnsetIP(rec.NatPublicIP) {
 		return true, ReasonNoNAT
 	}
-	// Everything still here carries a post-NAT address, so from this point on
-	// the configurable rules are deciding the fate of translation records only.
-	// They were written for traffic flows and two of them are actively wrong
-	// applied to a NAT event.
+	// A record carrying a translation is kept unconditionally. Nothing below may
+	// touch it.
 	//
-	// Zero bytes is the worst of them. A NAT event record — the standard
-	// separate-template form that Cisco, Juniper, Nokia and this fleet's DandyBNG
-	// all emit — carries the translation, the ports, natEvent and often the
-	// username, and NO byte counter, because it records an allocation rather than
-	// traffic. Dropping it as an empty husk discards the single most valuable
-	// record type an IPDR store can receive, while keeping the traffic flows that
-	// cannot answer anything.
+	// The rules that follow exist to reduce TRAFFIC-FLOW volume: chatty DNS,
+	// intra-network hops, zero-byte husks. None of that reasoning transfers to a
+	// subscriber mapping. This store's records are answers to lawful requests,
+	// and a mapping discarded to save disk is an answer that cannot be given
+	// later — flow export is fire-and-forget, so it is gone permanently.
 	//
-	// Found live on 2026-08-26: exporter 103.204.1.14 sends template 265 with
-	// IE 225/226/227/228/230 + username. Every one of those records was being
-	// discarded here, and the device was being reported to its owner as "not
-	// logging NAT" when it was doing exactly the right thing.
-	if r.SkipZeroBytes && rec.Bytes == 0 && !isTranslation(rec) {
+	// Each of the three was actively destroying evidence on this fleet:
+	//
+	//   zero bytes — a NAT event record carries the translation, the ports,
+	//     natEvent and often the subscriber's username, and NO byte counter,
+	//     because it records an allocation rather than traffic. Cisco, Juniper,
+	//     Nokia and DandyBNG all emit them this way. Measured 2026-08-26:
+	//     exporter 103.204.1.14 sends template 265 with IE 225/226/227/228/230
+	//     plus username, and 100% of it was being dropped as an empty husk. The
+	//     device was then graded "not logging NAT" and its owner told to fix a
+	//     device that was already correct.
+	//
+	//   dns — a translation whose destination is port 53 is still a subscriber
+	//     holding a public ip:port at a point in time. Measured on the one box
+	//     where this rule is off, 24.8% of all NAT events involve port 53; on the
+	//     three where it is on, that share of every mapping was being destroyed.
+	//
+	//   private to private — under CGNAT the subscriber side is RFC1918 or
+	//     100.64/10 by definition. A translation between two private addresses is
+	//     unusual but entirely real, and dropping it loses the mapping.
+	if isTranslation(rec) {
+		return false, ""
+	}
+	if r.SkipZeroBytes && rec.Bytes == 0 {
 		return true, "zero_bytes"
 	}
 	if r.SkipDNS && (rec.SrcPort == dnsPort || rec.DstPort == dnsPort) {

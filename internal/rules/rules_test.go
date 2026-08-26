@@ -11,8 +11,11 @@ import (
 // survives the hard-coded NAT rule and actually exercises the rule under test.
 func rec(src, dst string, sp, dp uint16, bytes uint64) normalizer.FlowRecord {
 	r := untranslated(src, dst, sp, dp, bytes)
+	// Address but no post-NAT port: a traffic flow that survives the hard-coded
+	// NAT rule and so actually reaches the configurable rules under test. With a
+	// port it would be a translation, and translations are exempt from all of
+	// them — see TestNoConfigurableRuleDropsATranslation.
 	r.NatPublicIP = net.ParseIP("203.0.113.7")
-	r.NatPublicPort = 40000
 	return r
 }
 
@@ -168,5 +171,57 @@ func TestZeroBytesExemptionStillRequiresATranslation(t *testing.T) {
 	r.NatPublicPort = 40112 // port but no address
 	if skip, why := rs.ShouldSkip(&r); !skip || why != ReasonNoNAT {
 		t.Errorf("ShouldSkip = (%v, %q), want (true, %q)", skip, why, ReasonNoNAT)
+	}
+}
+
+// No configurable rule may destroy a subscriber mapping. These are the exact
+// shapes each rule was dropping on the live fleet on 2026-08-26.
+func TestNoConfigurableRuleDropsATranslation(t *testing.T) {
+	rs := New(true, true, true) // every rule ON, as box2/box3/box4 run them
+	cases := []struct {
+		name string
+		r    normalizer.FlowRecord
+	}{
+		{"nat event, no byte counter",
+			natEvent("100.64.12.9", 51344, "103.204.1.14", 40112, "142.251.42.14", 443)},
+		{"translation to DNS",
+			natEvent("100.64.12.9", 51344, "103.204.1.14", 40112, "8.8.8.8", 53)},
+		{"translation from DNS port",
+			natEvent("100.64.12.9", 53, "103.204.1.14", 40112, "8.8.8.8", 33333)},
+		{"translation between two private addresses",
+			natEvent("100.64.12.9", 51344, "103.204.1.14", 40112, "10.20.30.40", 443)},
+		{"all three at once",
+			natEvent("100.64.12.9", 53, "103.204.1.14", 40112, "192.168.1.1", 53)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if skip, why := rs.ShouldSkip(&c.r); skip {
+				t.Errorf("a subscriber mapping was dropped as %q — it cannot be recovered and a lawful request about it cannot be answered", why)
+			}
+		})
+	}
+}
+
+// The exemption is for translations only. Traffic flows must still be reduced,
+// or every one of these rules becomes dead code and the store fills with records
+// that answer nothing.
+func TestConfigurableRulesStillReduceTrafficFlows(t *testing.T) {
+	rs := New(true, true, true)
+	cases := []struct {
+		name string
+		r    normalizer.FlowRecord
+		why  string
+	}{
+		{"dns traffic flow", rec("10.0.0.1", "8.8.8.8", 33333, 53, 100), "dns"},
+		{"zero-byte husk", husk("10.0.0.1", "8.8.8.8", 1, 2), "zero_bytes"},
+		{"private to private", rec("10.0.0.1", "192.168.1.5", 1, 2, 100), "private_to_private"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			skip, why := rs.ShouldSkip(&c.r)
+			if !skip || why != c.why {
+				t.Errorf("ShouldSkip = (%v, %q), want (true, %q)", skip, why, c.why)
+			}
+		})
 	}
 }

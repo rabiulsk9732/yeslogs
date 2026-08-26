@@ -41,9 +41,22 @@ func normalFlow() decoder.Flow {
 	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(1, 1, 1, 1), SrcPort: 40000, DstPort: 443, Protocol: 6, Bytes: 1500, Packets: 10,
 		NatPublicIP: net.IPv4(203, 0, 113, 7), NatPublicPort: 50000}
 }
+
+// dnsFlow is a DNS TRAFFIC flow: it carries a post-NAT address but no post-NAT
+// port, so the DNS rule still applies to it. A DNS flow WITH a post-NAT port is
+// a subscriber mapping and is exempt from every configurable rule — see
+// dnsTranslation and TestDNSTranslationSurvivesPerDeviceSkipDNS.
 func dnsFlow() decoder.Flow {
 	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(8, 8, 8, 8), SrcPort: 40001, DstPort: 53, Protocol: 17, Bytes: 120, Packets: 2,
-		NatPublicIP: net.IPv4(203, 0, 113, 7), NatPublicPort: 50001}
+		NatPublicIP: net.IPv4(203, 0, 113, 7)}
+}
+
+// dnsTranslation is a NAT event for a subscriber's DNS query: a real mapping of
+// who held a public ip:port at a point in time, which happens to be to port 53.
+func dnsTranslation() decoder.Flow {
+	f := dnsFlow()
+	f.NatPublicPort = 50001
+	return f
 }
 
 // untranslatedFlow is what an exporter that logs traffic rather than NAT emits.
@@ -178,5 +191,28 @@ func TestPerDeviceSkipDNSOverridesGlobal(t *testing.T) {
 	p2.HandlePacket([]byte{0}, net.ParseIP("198.51.100.9"))
 	if len(w2.records()) != 1 {
 		t.Fatalf("global rules keep DNS for unknown exporter, got %d records", len(w2.records()))
+	}
+}
+
+// A subscriber mapping must survive skip_dns even when the operator has turned
+// that rule on for the device. Measured on the fleet 2026-08-26: skip_dns was
+// enabled on three of four boxes, and on the one box where it was off, 24.8% of
+// all NAT events involved port 53 — so roughly a quarter of every mapping those
+// boxes should have held was being destroyed to save disk on DNS chatter.
+func TestDNSTranslationSurvivesPerDeviceSkipDNS(t *testing.T) {
+	global := rules.RuleSet{}
+	devs := devStore(t, global, device.Spec{
+		Name: "d", Enabled: true, ExporterIP: "203.0.113.5", ISPID: 7, DeviceID: 9,
+		Rules: &device.RuleSpec{SkipDNS: bptr(true)},
+	})
+	live := config.NewStore(config.Live{Rules: global, UnknownMode: device.ModeAllow})
+
+	p, w, m := buildPipe(live, devs, 1, 2, dnsTranslation())
+	p.HandlePacket([]byte{0}, net.ParseIP("203.0.113.5"))
+	if len(w.records()) != 1 {
+		t.Fatalf("a subscriber mapping to port 53 was dropped by skip_dns; got %d records, want 1", len(w.records()))
+	}
+	if v := testutil.ToFloat64(m.DeviceRuleSkipped); v != 0 {
+		t.Errorf("device_rule_skipped_total = %v, want 0", v)
 	}
 }
