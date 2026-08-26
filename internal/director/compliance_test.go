@@ -360,3 +360,38 @@ func TestStoredFlowsTakePrecedenceOverDropEvidence(t *testing.T) {
 		t.Errorf("state = %q answerable = %v, want ok/true", c.State, c.Answerable)
 	}
 }
+
+// Drop evidence must be reported whatever the grade. A device with stored rows
+// from before the no-translation rule took effect still falls through to the
+// stored-row branches, and the operator needs to see that it is also being
+// dropped live — and needs a last-flow time that has not frozen.
+func TestDropEvidenceSurfacesInEveryBranch(t *testing.T) {
+	stale := time.Now().Add(-6 * time.Hour)
+	live := time.Now().Add(-30 * time.Second)
+	st := DeviceFlowStats{Flows: 1000, NoNATField: 1000, LastFlow: stale}
+	sig := DeviceSignal{NoNATDropped: 4200, LastFlow: live}
+
+	c := gradeDevice(store.Device{DeviceID: 3, Enabled: true}, st, sig)
+	if c.State != CompNoNATFields {
+		t.Errorf("State = %q, want %q", c.State, CompNoNATFields)
+	}
+	if c.NoNATDropped != 4200 {
+		t.Errorf("NoNATDropped = %d, want 4200 — drop evidence lost outside the empty-storage branch", c.NoNATDropped)
+	}
+	if !c.LastFlow.Equal(live) {
+		t.Errorf("LastFlow = %v, want the live drop at %v; a frozen stored timestamp reads as a dead exporter", c.LastFlow, live)
+	}
+}
+
+// The reverse: stored rows newer than the last drop must win, so a device that
+// started logging translations again is not pinned to old drop evidence.
+func TestStoredTimestampWinsWhenNewer(t *testing.T) {
+	newer := time.Now().Add(-1 * time.Minute)
+	older := time.Now().Add(-2 * time.Hour)
+	c := gradeDevice(store.Device{DeviceID: 3, Enabled: true},
+		DeviceFlowStats{Flows: 100, Translated: 100, WithPort: 100, LastFlow: newer},
+		DeviceSignal{NoNATDropped: 5, LastFlow: older})
+	if !c.LastFlow.Equal(newer) {
+		t.Errorf("LastFlow = %v, want the newer stored flow %v", c.LastFlow, newer)
+	}
+}

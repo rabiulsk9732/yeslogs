@@ -263,7 +263,15 @@ func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCom
 		StoreID: d.ID, DeviceID: d.DeviceID, Name: d.Name, ExporterIP: d.ExporterIP,
 		Flows: st.Flows, Translated: st.Translated, WithPort: st.WithPort,
 		NoNATField: st.NoNATField, SameAsSrc: st.SameAsSrc, PrivateSrc: st.PrivateSrc,
-		LastFlow: st.LastFlow,
+		LastFlow: st.LastFlow, NoNATDropped: sig.NoNATDropped,
+	}
+	// Drop evidence counts as proof of life in every branch, not just the one
+	// where storage is empty. During the window after the no-translation rule
+	// starts biting, a device still has old stored rows whose newest timestamp
+	// is frozen at the moment the rule took effect — reporting that as "last
+	// flow" would make a busy exporter look like it stopped hours ago.
+	if sig.LastFlow.After(c.LastFlow) {
+		c.LastFlow = sig.LastFlow
 	}
 	if st.Flows > 0 {
 		c.TranslatedPct = float64(st.Translated) / float64(st.Flows) * 100
@@ -279,8 +287,6 @@ func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCom
 		// away for carrying no translation. Without this branch the device is
 		// indistinguishable from a dead one and the operator hunts a link fault.
 		c.State = CompNoNATFields
-		c.NoNATDropped = sig.NoNATDropped
-		c.LastFlow = sig.LastFlow
 		c.Detail = fmt.Sprintf("This exporter IS sending — %s flows arrived and were discarded, every one of them carrying no post-NAT address. Nothing was stored, so it appears silent everywhere else.",
 			human(sig.NoNATDropped))
 		c.Remedy = "The exporter is sending plain traffic flows, not NAT translation records. Enable CGNAT/NAT flow logging on the device so it emits " +
@@ -328,6 +334,13 @@ func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCom
 			// (and this collector's disk) on records of no IPDR value.
 			c.Detail += fmt.Sprintf(" Note: only %.1f%% of this device's stored flows are translations — the rest is inbound or transit traffic that cannot answer a lawful request.", c.TranslatedPct)
 		}
+	}
+	// Stored counts describe history; the drop counter describes now. When both
+	// exist, say so — otherwise the numbers on screen quietly stop moving and
+	// nothing explains why.
+	if sig.NoNATDropped > 0 && st.Flows > 0 {
+		c.Detail += fmt.Sprintf(" Since this collector last started, %s further flows from this exporter were discarded before storage for the same reason, so the stored counts above no longer grow.",
+			human(sig.NoNATDropped))
 	}
 	c.Answerable = c.State.answerable()
 	return c
