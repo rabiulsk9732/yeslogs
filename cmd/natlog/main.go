@@ -361,8 +361,19 @@ func run() (err error) {
 		{"ipfix", cfg.Receiver.Ports.IPFIX, ipfix.New(m.TemplatesReceived, m.TemplateUnknown)},
 	}
 	var receivers []*receiver.Receiver
+	// Shared across every protocol pipeline: a device is one device regardless
+	// of which listener its packets arrive on.
+	devSignals := pipeline.NewDeviceSignals()
+	dirSrv.SetDeviceSignals(func() map[uint32]director.DeviceSignal {
+		out := map[uint32]director.DeviceSignal{}
+		for id, sg := range devSignals.Snapshot() {
+			out[id] = director.DeviceSignal{NoNATDropped: sg.NoNATDropped, LastFlow: sg.LastFlow}
+		}
+		return out
+	})
 	for _, b := range bindings {
 		p := pipeline.New(b.dec, norm, live, devices, cfg.Server.ISPID, cfg.Server.DeviceIDDefault, manager, m, log)
+		p.SetDeviceSignals(devSignals)
 		rcv, rerr := receiver.New(b.name, cfg.Receiver.BindIP, b.port, cfg.Receiver.Workers, cfg.Receiver.UDPReadBufferMB, p, m, log)
 		if rerr != nil {
 			for _, r := range receivers {

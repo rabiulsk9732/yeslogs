@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/natflow/natflow-dataplane/internal/config"
 	"github.com/natflow/natflow-dataplane/internal/decoder"
 	"github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
+	"github.com/natflow/natflow-dataplane/internal/rules"
 )
 
 // maxPooledFlows caps the capacity of decode scratch buffers retained in the
@@ -40,6 +42,7 @@ type Pipeline struct {
 	kind      string
 	defISPID  uint32
 	defDevice uint32
+	signals   *DeviceSignals // optional; records evidence for flows the rules drop
 
 	pool sync.Pool
 }
@@ -123,10 +126,16 @@ func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
 		if !matchedDevice {
 			p.metrics.UnknownExporterFlows.Inc()
 		}
-		if skip, _ := ruleSet.ShouldSkip(&rec); skip {
+		if skip, why := ruleSet.ShouldSkip(&rec); skip {
 			p.metrics.FlowsSkipped.Inc()
 			if matchedDevice {
 				p.metrics.DeviceRuleSkipped.Inc()
+				if why == rules.ReasonNoNAT {
+					// Keep the evidence: this device is alive and exporting,
+					// it just isn't logging translations. Nothing else will
+					// know that once the record is gone.
+					p.signals.noteNoNAT(deviceID, time.Now())
+				}
 			}
 			continue
 		}

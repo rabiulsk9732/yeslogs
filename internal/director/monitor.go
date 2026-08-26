@@ -71,8 +71,16 @@ func (s *Server) deviceHealthMap(ctx context.Context, devs []store.Device) map[i
 	}
 	silence := time.Duration(notifSilenceMins(s.CurrentSettings().Notifications)) * time.Minute
 	now := time.Now()
+	sigs := s.deviceSignals()
 	for _, d := range devs {
 		ls := seen[exporterKey(d.ISPID, d.ExporterIP)]
+		// A device whose every flow is dropped for carrying no translation
+		// stores nothing, so the stored-row query cannot see it. It is still
+		// alive and still exporting; reporting it silent would send the
+		// operator after a link fault instead of the export configuration.
+		if sig := sigs[d.DeviceID]; sig.LastFlow.After(ls) {
+			ls = sig.LastFlow
+		}
 		h := DeviceHealth{LastSeen: ls}
 		switch {
 		case ls.IsZero():

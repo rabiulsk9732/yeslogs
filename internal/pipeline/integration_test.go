@@ -79,8 +79,13 @@ func v5Packet(recs ...[]byte) []byte {
 }
 
 // TestEndToEndNetFlow5 exercises the full hot path: a real UDP listener +
-// worker pool -> NetFlow v5 decoder -> normalizer -> skip rules -> writer,
-// asserting metrics and the surviving record.
+// worker pool -> NetFlow v5 decoder -> normalizer -> skip rules -> writer.
+//
+// Nothing survives, and that is the point. NetFlow v5 has no post-NAT fields in
+// its fixed record layout, so every v5 flow fails the hard-coded no-translation
+// rule. A v5 exporter can therefore be received, decoded and counted while
+// storing nothing at all — the single most surprising consequence of that rule,
+// pinned here so it can never be discovered in production instead.
 func TestEndToEndNetFlow5(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	m := metrics.New()
@@ -109,46 +114,86 @@ func TestEndToEndNetFlow5(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Two flows: a normal egress HTTPS flow (kept) and a DNS flow (skipped).
+	// Two flows: a normal egress HTTPS flow and a DNS flow. Both are dropped —
+	// the first for carrying no translation, the second for being DNS.
 	normal := v5Record(net.IPv4(10, 0, 0, 5), net.IPv4(1, 1, 1, 1), 40000, 443, 10, 1500, 6)
 	dns := v5Record(net.IPv4(10, 0, 0, 5), net.IPv4(8, 8, 8, 8), 40001, 53, 2, 140, 17)
 	if _, err := conn.Write(v5Packet(normal, dns)); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Processing is asynchronous; poll until the surviving record arrives.
+	// Processing is asynchronous; wait for both flows to be accounted for.
 	deadline := time.Now().Add(3 * time.Second)
-	for len(w.records()) < 1 && time.Now().Before(deadline) {
+	for testutil.ToFloat64(m.FlowsSkipped) < 2 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	recs := w.records()
-	if len(recs) != 1 {
-		t.Fatalf("want 1 enqueued record (DNS skipped), got %d", len(recs))
+	if recs := w.records(); len(recs) != 0 {
+		t.Fatalf("NetFlow v5 carries no post-NAT fields; want 0 stored records, got %d", len(recs))
 	}
-	got := recs[0]
-	if got.DstPort != 443 || got.Bytes != 1500 {
-		t.Errorf("unexpected record: dstPort=%d bytes=%d", got.DstPort, got.Bytes)
-	}
-	if got.ISPID != 42 || got.DeviceID != 7 {
-		t.Errorf("identity not stamped: isp=%d dev=%d", got.ISPID, got.DeviceID)
-	}
-	if got.FlowType != "netflow5" {
-		t.Errorf("flowType = %q", got.FlowType)
-	}
-	if !got.ExporterIP.Equal(net.IPv4(127, 0, 0, 1)) {
-		t.Errorf("exporterIP = %v, want 127.0.0.1", got.ExporterIP)
-	}
-
 	if v := testutil.ToFloat64(m.PacketsReceived); v != 1 {
 		t.Errorf("packets_received_total = %v, want 1", v)
 	}
 	if v := testutil.ToFloat64(m.FlowsDecoded); v != 2 {
-		t.Errorf("flows_decoded_total = %v, want 2", v)
+		t.Errorf("flows_decoded_total = %v, want 2 (decoding is unaffected)", v)
 	}
-	if v := testutil.ToFloat64(m.FlowsSkipped); v != 1 {
-		t.Errorf("flows_skipped_total = %v, want 1", v)
+	if v := testutil.ToFloat64(m.FlowsSkipped); v != 2 {
+		t.Errorf("flows_skipped_total = %v, want 2", v)
 	}
+}
+
+// A v5 exporter storing nothing must still be visibly alive, or an operator
+// reads "no records" as a dead link and goes looking for a network fault.
+func TestNetFlow5LeavesEvidenceItWasAlive(t *testing.T) {
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	m := metrics.New()
+	w := &captureWriter{}
+	sig := pipeline.NewDeviceSignals()
+
+	// A registered exporter, as production runs it (unknown_exporter_mode:
+	// reject) — evidence is kept for devices the operator actually manages.
+	built, err := device.Build([]device.Spec{{
+		Name: "v5-nas", Enabled: true, ExporterIP: "127.0.0.1", ISPID: 42, DeviceID: 7,
+	}}, rules.RuleSet{SkipDNS: true, SkipPrivateToPrivate: true, SkipZeroBytes: true})
+	if err != nil {
+		t.Fatalf("device.Build: %v", err)
+	}
+	devs := device.NewStore(built)
+	live := config.NewStore(config.Live{
+		UnknownMode: device.ModeReject,
+		Rules:       rules.RuleSet{SkipDNS: true, SkipPrivateToPrivate: true, SkipZeroBytes: true},
+	})
+
+	p := pipeline.New(netflow5.New(), normalizer.New(), live, devs, 42, 7, w, m, log)
+	p.SetDeviceSignals(sig)
+
+	rcv, err := receiver.New("netflow5", "127.0.0.1", 0, 2, 0, p, m, log)
+	if err != nil {
+		t.Fatalf("receiver.New: %v", err)
+	}
+	rcv.Start()
+	defer rcv.Stop()
+
+	conn, err := net.DialUDP("udp", nil, rcv.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write(v5Packet(v5Record(net.IPv4(10, 0, 0, 5), net.IPv4(1, 1, 1, 1), 40000, 443, 10, 1500, 6))); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if s, ok := sig.Snapshot()[7]; ok && s.NoNATDropped > 0 {
+			if s.LastFlow.IsZero() {
+				t.Error("evidence recorded without a timestamp; liveness cannot use it")
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no evidence recorded for device 7; a live exporter would look dead. snapshot=%+v", sig.Snapshot())
 }
 
 // unsupportedDecoder always reports decoder.ErrUnsupported, standing in for a

@@ -94,7 +94,7 @@ func TestGradeDevice(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gradeDevice(tc.d, tc.st)
+			got := gradeDevice(tc.d, tc.st, DeviceSignal{})
 			if got.State != tc.want {
 				t.Errorf("state = %q, want %q (detail: %s)", got.State, tc.want, got.Detail)
 			}
@@ -112,7 +112,7 @@ func TestGradeDevice(t *testing.T) {
 // of its export is not IPDR-relevant — that is a disk and export-budget cost.
 func TestGradeDeviceFlagsLowRatioAsANote(t *testing.T) {
 	c := gradeDevice(dev("oji", "1.2.3.4", 1, true),
-		DeviceFlowStats{Flows: 6839588, Translated: 224242, WithPort: 224242})
+		DeviceFlowStats{Flows: 6839588, Translated: 224242, WithPort: 224242}, DeviceSignal{})
 	if c.State != CompOK || !c.Answerable {
 		t.Fatalf("must stay answerable, got %q", c.State)
 	}
@@ -126,7 +126,7 @@ func TestGradeDeviceFlagsLowRatioAsANote(t *testing.T) {
 
 func TestGradeDeviceNoLowRatioNoteWhenHealthy(t *testing.T) {
 	c := gradeDevice(dev("good", "1.2.3.4", 1, true),
-		DeviceFlowStats{Flows: 1000, Translated: 950, WithPort: 950})
+		DeviceFlowStats{Flows: 1000, Translated: 950, WithPort: 950}, DeviceSignal{})
 	if strings.Contains(c.Detail, "transit") {
 		t.Errorf("healthy device should not carry the low-ratio note, got: %s", c.Detail)
 	}
@@ -224,7 +224,7 @@ func TestWrapAt(t *testing.T) {
 func TestComplianceAlertBody(t *testing.T) {
 	bad := []DeviceCompliance{
 		gradeDevice(dev("dandy-bng", "103.204.1.14", 3, true),
-			DeviceFlowStats{Flows: 1759160, NoNATField: 1759160}),
+			DeviceFlowStats{Flows: 1759160, NoNATField: 1759160}, DeviceSignal{}),
 	}
 	rep := ComplianceReport{
 		RetentionDays: 90, RetentionMin: 180, RetentionOK: false,
@@ -245,7 +245,7 @@ func TestComplianceAlertBody(t *testing.T) {
 }
 
 func TestComplianceAlertBodyOmitsCleanSections(t *testing.T) {
-	bad := []DeviceCompliance{gradeDevice(dev("d", "1.2.3.4", 1, true), DeviceFlowStats{})}
+	bad := []DeviceCompliance{gradeDevice(dev("d", "1.2.3.4", 1, true), DeviceFlowStats{}, DeviceSignal{})}
 	rep := ComplianceReport{RetentionDays: 365, RetentionMin: 180, RetentionOK: true}
 	body := complianceAlertBody("natlog-01", bad, rep)
 	if strings.Contains(body, "below the") {
@@ -302,7 +302,7 @@ func TestUnanswerableDaysAllowsQuietDays(t *testing.T) {
 }
 
 func TestComplianceAlertBodyReportsUnanswerableDays(t *testing.T) {
-	bad := []DeviceCompliance{gradeDevice(dev("d", "1.2.3.4", 1, true), DeviceFlowStats{})}
+	bad := []DeviceCompliance{gradeDevice(dev("d", "1.2.3.4", 1, true), DeviceFlowStats{}, DeviceSignal{})}
 	rep := ComplianceReport{
 		RetentionDays: 365, RetentionMin: 180, RetentionOK: true,
 		UnanswerableDays: []string{"2026-08-23"},
@@ -319,5 +319,44 @@ func TestComplianceAlertBodyReportsUnanswerableDays(t *testing.T) {
 func TestComplianceWindowSpansAFullDay(t *testing.T) {
 	if complianceWindowMins < 24*60 {
 		t.Fatalf("grading window is %d min; a sub-day window false-alarms on the overnight trough", complianceWindowMins)
+	}
+}
+
+// The hard-coded no-translation rule means a device exporting traffic rather
+// than NAT stores nothing at all. Storage alone cannot then tell it apart from
+// a dead exporter — the dataplane's dropped-flow evidence has to, or the
+// operator is sent hunting a link fault that does not exist.
+func TestDroppedEverythingIsNotSilent(t *testing.T) {
+	d := dev("dandy-bng", "103.204.1.14", 3, true)
+	seen := time.Date(2026, 8, 25, 23, 30, 0, 0, time.UTC)
+
+	dead := gradeDevice(d, DeviceFlowStats{}, DeviceSignal{})
+	if dead.State != CompSilent {
+		t.Errorf("no flows and no evidence = silent, got %q", dead.State)
+	}
+
+	alive := gradeDevice(d, DeviceFlowStats{}, DeviceSignal{NoNATDropped: 2268856, LastFlow: seen})
+	if alive.State != CompNoNATFields {
+		t.Fatalf("state = %q, want %q — a live exporter must not read as silent", alive.State, CompNoNATFields)
+	}
+	if alive.NoNATDropped != 2268856 {
+		t.Errorf("NoNATDropped = %d, want 2268856", alive.NoNATDropped)
+	}
+	if !strings.Contains(alive.Detail, "IS sending") {
+		t.Errorf("detail must say the exporter is alive, got: %s", alive.Detail)
+	}
+	if !strings.Contains(alive.Remedy, "IE 225") || !strings.Contains(alive.Remedy, "v5") {
+		t.Errorf("remedy must name the fields and the v5 dead end, got: %s", alive.Remedy)
+	}
+}
+
+// Stored rows win when they exist: evidence of drops must not override a device
+// that is actually logging translations.
+func TestStoredFlowsTakePrecedenceOverDropEvidence(t *testing.T) {
+	c := gradeDevice(dev("oji", "1.2.3.4", 1, true),
+		DeviceFlowStats{Flows: 1000, Translated: 900, WithPort: 900},
+		DeviceSignal{NoNATDropped: 50})
+	if c.State != CompOK || !c.Answerable {
+		t.Errorf("state = %q answerable = %v, want ok/true", c.State, c.Answerable)
 	}
 }

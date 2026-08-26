@@ -33,11 +33,25 @@ func (d staticDecoder) Decode(dst []decoder.Flow, _ []byte, exporter net.IP) ([]
 	return dst, nil
 }
 
+// Fixtures carry a post-NAT address: the dataplane drops untranslated flows
+// unconditionally, so a fixture without one tests the NAT rule instead of
+// whatever the case is actually about. untranslatedFlow() is the deliberate
+// exception.
 func normalFlow() decoder.Flow {
-	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(1, 1, 1, 1), SrcPort: 40000, DstPort: 443, Protocol: 6, Bytes: 1500, Packets: 10}
+	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(1, 1, 1, 1), SrcPort: 40000, DstPort: 443, Protocol: 6, Bytes: 1500, Packets: 10,
+		NatPublicIP: net.IPv4(203, 0, 113, 7), NatPublicPort: 50000}
 }
 func dnsFlow() decoder.Flow {
-	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(8, 8, 8, 8), SrcPort: 40001, DstPort: 53, Protocol: 17, Bytes: 120, Packets: 2}
+	return decoder.Flow{SrcIP: net.IPv4(10, 0, 0, 5), DstIP: net.IPv4(8, 8, 8, 8), SrcPort: 40001, DstPort: 53, Protocol: 17, Bytes: 120, Packets: 2,
+		NatPublicIP: net.IPv4(203, 0, 113, 7), NatPublicPort: 50001}
+}
+
+// untranslatedFlow is what an exporter that logs traffic rather than NAT emits.
+func untranslatedFlow() decoder.Flow {
+	f := normalFlow()
+	f.NatPublicIP = nil
+	f.NatPublicPort = 0
+	return f
 }
 
 func buildPipe(live *config.Store, devs *device.Store, defISP, defDev uint32, flows ...decoder.Flow) (*pipeline.Pipeline, *captureWriter, *metrics.Metrics) {

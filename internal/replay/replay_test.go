@@ -136,16 +136,26 @@ func TestReplaySanitizedFixtureIntoCollector(t *testing.T) {
 		t.Fatalf("replayed %d payloads, want 3", st.Sent)
 	}
 
-	// 5. Verify flows decoded and consumed by the insert path.
+	// 5. Verify every flow survived pcap -> sanitize -> replay -> UDP -> decode.
+	// This fixture is NetFlow v5, a format with no post-NAT fields at all, so the
+	// hard-coded no-translation rule discards all 15 on the way to the writer.
+	// That is the correct outcome and it is what the counters must show: decoded
+	// 15, skipped 15, stored 0. Asserting on the decode counter rather than the
+	// writer keeps this test about the replay path — a fixture that failed to
+	// decode and one that decoded then was dropped both leave the writer empty,
+	// and only the first is a bug here.
 	deadline := time.Now().Add(3 * time.Second)
-	for cw.count() < 15 && time.Now().Before(deadline) {
+	for testutil.ToFloat64(m.FlowsDecoded) < 15 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if cw.count() == 0 {
-		t.Fatal("no records consumed from replayed fixture")
+	if v := testutil.ToFloat64(m.FlowsDecoded); v != 15 {
+		t.Fatalf("flows_decoded_total = %v after replay, want 15", v)
 	}
-	if v := testutil.ToFloat64(m.FlowsDecoded); v == 0 {
-		t.Error("flows_decoded_total is 0 after replay")
+	if v := testutil.ToFloat64(m.FlowsSkipped); v != 15 {
+		t.Errorf("flows_skipped_total = %v, want 15 (v5 carries no translation)", v)
+	}
+	if n := cw.count(); n != 0 {
+		t.Errorf("writer took %d untranslated records; none may be stored", n)
 	}
 }
 

@@ -72,6 +72,25 @@ type DeviceFlowStats struct {
 	LastFlow   time.Time // newest flow_start in the window
 }
 
+// DeviceSignal is what an exporter is still telling us when the dataplane drops
+// everything it sends. The hard-coded no-translation rule means a device that
+// exports traffic rather than NAT stores zero rows, so every stored-row measure
+// — liveness, silence alerts, this grade — would read it as dead without this.
+type DeviceSignal struct {
+	NoNATDropped uint64    // flows discarded for carrying no post-NAT address
+	LastFlow     time.Time // when such a flow last arrived: proof of life
+}
+
+// SetDeviceSignals registers the dropped-flow evidence provider.
+func (s *Server) SetDeviceSignals(f func() map[uint32]DeviceSignal) { s.signalsFn = f }
+
+func (s *Server) deviceSignals() map[uint32]DeviceSignal {
+	if s.signalsFn == nil {
+		return map[uint32]DeviceSignal{}
+	}
+	return s.signalsFn()
+}
+
 // DeviceCompliance is one device's grade plus the evidence behind it.
 type DeviceCompliance struct {
 	StoreID    int64           `json:"storeId"`
@@ -84,8 +103,11 @@ type DeviceCompliance struct {
 	Translated uint64          `json:"translated"`
 	WithPort   uint64          `json:"withPort"`
 	NoNATField uint64          `json:"noNatField"`
-	SameAsSrc  uint64          `json:"sameAsSrc"`
-	PrivateSrc uint64          `json:"privateSrc"`
+	// NoNATDropped counts flows the dataplane discarded before storage for
+	// carrying no post-NAT address — the only trace such a device leaves.
+	NoNATDropped uint64 `json:"noNatDropped"`
+	SameAsSrc    uint64 `json:"sameAsSrc"`
+	PrivateSrc   uint64 `json:"privateSrc"`
 	// TranslatedPct is translated/flows as a percentage — an efficiency hint
 	// (how much of what this device sends is IPDR-relevant), not a verdict.
 	TranslatedPct float64   `json:"translatedPct"`
@@ -236,7 +258,7 @@ func (r *FlowReader) TranslationStats(ctx context.Context, ispID uint32, window 
 
 // gradeDevice grades one device from its counters. Pure so the decision table
 // is testable without a database.
-func gradeDevice(d store.Device, st DeviceFlowStats) DeviceCompliance {
+func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCompliance {
 	c := DeviceCompliance{
 		StoreID: d.ID, DeviceID: d.DeviceID, Name: d.Name, ExporterIP: d.ExporterIP,
 		Flows: st.Flows, Translated: st.Translated, WithPort: st.WithPort,
@@ -252,9 +274,22 @@ func gradeDevice(d store.Device, st DeviceFlowStats) DeviceCompliance {
 		c.Detail = "Device is disabled; not graded."
 		c.Remedy = ""
 
+	case st.Flows == 0 && sig.NoNATDropped > 0:
+		// Storage is empty, but the dataplane saw traffic and threw all of it
+		// away for carrying no translation. Without this branch the device is
+		// indistinguishable from a dead one and the operator hunts a link fault.
+		c.State = CompNoNATFields
+		c.NoNATDropped = sig.NoNATDropped
+		c.LastFlow = sig.LastFlow
+		c.Detail = fmt.Sprintf("This exporter IS sending — %s flows arrived and were discarded, every one of them carrying no post-NAT address. Nothing was stored, so it appears silent everywhere else.",
+			human(sig.NoNATDropped))
+		c.Remedy = "The exporter is sending plain traffic flows, not NAT translation records. Enable CGNAT/NAT flow logging on the device so it emits " +
+			"postNATSourceIPv4Address (IE 225) and postNAPTSourceTransportPort (IE 227), ideally with natEvent (IE 230) for allocation/release. " +
+			"NetFlow v5 can never satisfy this — it has no post-NAT fields at all; export v9 or IPFIX."
+
 	case st.Flows == 0:
 		c.State = CompSilent
-		c.Detail = "No flows stored from this exporter in the audit window."
+		c.Detail = "No flows stored from this exporter, and none arrived to be dropped either."
 		c.Remedy = fmt.Sprintf("Confirm the exporter is sending to this collector and that %s is its configured source address. "+
 			"On the exporter, the export source address must be its own IP — a 0.0.0.0 source makes this collector reject the packets as an unknown exporter.", d.ExporterIP)
 
@@ -380,8 +415,9 @@ func (s *Server) ComplianceAudit(ctx context.Context, ispID uint32) ComplianceRe
 		s.log.Warn("compliance: translation stats failed", "error", err)
 		return rep
 	}
+	sigs := s.deviceSignals()
 	for _, d := range devs {
-		c := gradeDevice(d, stats[d.DeviceID])
+		c := gradeDevice(d, stats[d.DeviceID], sigs[d.DeviceID])
 		if c.State == CompDisabled {
 			rep.Devices = append(rep.Devices, c)
 			continue

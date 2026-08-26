@@ -64,10 +64,11 @@ type Server struct {
 	// editable settings (DB-backed source of truth; applied live via applier)
 	settingsMu sync.Mutex
 	settings   Settings
-	applyMu    sync.Mutex          // serializes Apply() so concurrent saves apply in order
-	applier    func(Settings)      // set by the host (natlog) to apply changes to the dataplane
-	statsFn    func() DPStats      // dataplane stats snapshot (Overview/Dataplanes)
-	ingestFn   func() IngestHealth // writer counters for the ingest-stall monitor
+	applyMu    sync.Mutex                     // serializes Apply() so concurrent saves apply in order
+	applier    func(Settings)                 // set by the host (natlog) to apply changes to the dataplane
+	statsFn    func() DPStats                 // dataplane stats snapshot (Overview/Dataplanes)
+	ingestFn   func() IngestHealth            // writer counters for the ingest-stall monitor
+	signalsFn  func() map[uint32]DeviceSignal // evidence for flows the rules dropped
 
 	// device-liveness alerting (optional; notifier set via SetNotifier).
 	notifyMu sync.Mutex
