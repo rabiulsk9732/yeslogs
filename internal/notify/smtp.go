@@ -22,6 +22,9 @@ type SMTP struct {
 	Pass string
 	TLS  string // "starttls" (587) | "tls" (implicit, 465) | "none" (25)
 	From string
+	// Org signs the HTML view when a body carries no "— …" sign-off of its own.
+	// Empty falls back to defaultOrg.
+	Org string
 }
 
 // Send delivers one plain-text message to the recipients. It honours the ctx
@@ -111,7 +114,7 @@ func (m SMTP) Send(ctx context.Context, to []string, subject, body string) error
 	if err != nil {
 		return fmt.Errorf("smtp DATA: %w", err)
 	}
-	if _, err := wc.Write(buildMessage(from, to, subject, body)); err != nil {
+	if _, err := wc.Write(buildMessage(from, to, subject, body, m.Org)); err != nil {
 		_ = wc.Close()
 		return fmt.Errorf("smtp write: %w", err)
 	}
@@ -121,7 +124,12 @@ func (m SMTP) Send(ctx context.Context, to []string, subject, body string) error
 	return c.Quit()
 }
 
-func buildMessage(from string, to []string, subject, body string) []byte {
+// mimeBoundary is fixed rather than random: every part of this message is
+// generated here, so there is nothing that could contain it, and a deterministic
+// boundary keeps buildMessage byte-for-byte testable.
+const mimeBoundary = "natlog-alert-boundary-1f4a9c2e"
+
+func buildMessage(from string, to []string, subject, body, org string) []byte {
 	// Strip CR/LF from header values to prevent header injection (e.g. a device
 	// name carrying "\r\nBcc:" reaching the Subject). Body CRLF is legitimate.
 	hdr := strings.NewReplacer("\r", " ", "\n", " ")
@@ -135,9 +143,30 @@ func buildMessage(from string, to []string, subject, body string) []byte {
 	b.WriteString("Subject: " + hdr.Replace(subject) + "\r\n")
 	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
+	// multipart/alternative, plain text FIRST. Order is significant: the last
+	// part a client can display is the one it shows, so HTML-capable readers get
+	// the formatted view while text-only readers and pagers still get the whole
+	// report rather than markup.
+	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + mimeBoundary + "\"\r\n")
+	b.WriteString("\r\n")
+
+	b.WriteString("--" + mimeBoundary + "\r\n")
 	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(strings.ReplaceAll(body, "\n", "\r\n"))
+	b.WriteString("\r\n")
+
+	b.WriteString("--" + mimeBoundary + "\r\n")
+	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	b.WriteString("\r\n")
+	// The subject is sanitised for the HTML title too. A CRLF smuggled through a
+	// device name cannot inject a header from inside a MIME part, but it would
+	// still break the rendered title across two lines and put an attacker's text
+	// where a heading belongs.
+	b.WriteString(strings.ReplaceAll(renderHTML(org, hdr.Replace(subject), body), "\n", "\r\n"))
+	b.WriteString("\r\n")
+
+	b.WriteString("--" + mimeBoundary + "--\r\n")
 	return []byte(b.String())
 }
 

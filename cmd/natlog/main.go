@@ -222,7 +222,7 @@ func run() (err error) {
 		if strings.TrimSpace(from) == "" {
 			from = n.SMTPUser
 		}
-		sm := notify.SMTP{Host: n.SMTPHost, Port: n.SMTPPort, User: n.SMTPUser, Pass: n.SMTPPassword, TLS: n.SMTPTLS, From: from}
+		sm := notify.SMTP{Host: n.SMTPHost, Port: n.SMTPPort, User: n.SMTPUser, Pass: n.SMTPPassword, TLS: n.SMTPTLS, From: from, Org: "YesLogs Operations"}
 		return sm.Send(ctx, rcpts, subject, body)
 	})
 

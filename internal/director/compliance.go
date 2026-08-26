@@ -665,7 +665,7 @@ func complianceAlertBody(name string, bad []DeviceCompliance, rep ComplianceRepo
 			rep.RetentionDays, rep.RetentionMin)
 	}
 	b.WriteString("Flow export is fire-and-forget: anything not logged now cannot be recovered later.\n\n")
-	b.WriteString("— YesLogs Director\n")
+	b.WriteString("— YesLogs Operations\n")
 	return b.String()
 }
 

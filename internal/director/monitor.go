@@ -221,11 +221,11 @@ func (s *Server) sendDeviceAlert(ctx context.Context, notifier Notifier, d store
 	var subject, body string
 	if recovered {
 		subject = fmt.Sprintf("[YesLogs] RECOVERED: %s (%s) is sending flows again", d.Name, d.ExporterIP)
-		body = fmt.Sprintf("Device %q (exporter %s) has resumed sending NetFlow/IPFIX.\n\nLast flow: %s\n\n— YesLogs Director", d.Name, d.ExporterIP, last)
+		body = fmt.Sprintf("Device %q (exporter %s) has resumed sending NetFlow/IPFIX.\n\nLast flow: %s\n\n— YesLogs Operations", d.Name, d.ExporterIP, last)
 	} else {
 		mins := int(time.Since(st.lastFlow).Minutes())
 		subject = fmt.Sprintf("[YesLogs] DEVICE DOWN: %s (%s) — no flows for %dm", d.Name, d.ExporterIP, mins)
-		body = fmt.Sprintf("Device %q (exporter %s) has stopped sending NetFlow/IPFIX.\n\nLast flow seen: %s (%d minutes ago)\n\nCheck the exporter's traffic-flow/export config and the link to the collector.\n\n— YesLogs Director", d.Name, d.ExporterIP, last, mins)
+		body = fmt.Sprintf("Device %q (exporter %s) has stopped sending NetFlow/IPFIX.\n\nLast flow seen: %s (%d minutes ago)\n\nCheck the exporter's traffic-flow/export config and the link to the collector.\n\n— YesLogs Operations", d.Name, d.ExporterIP, last, mins)
 	}
 	if err := notifier(ctx, subject, body); err != nil {
 		s.log.Error("device alert email failed", "device", d.Name, "recovered", recovered, "error", err)
@@ -264,7 +264,7 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	body := fmt.Sprintf("This is a test alert from YesLogs Director, requested by %s.\n\nIf you received this, SMTP alerting is configured correctly.\n\n— YesLogs Director", id.Email)
+	body := fmt.Sprintf("This is a test alert from YesLogs Operations, requested by %s.\n\nIf you received this, SMTP alerting is configured correctly.\n\n— YesLogs Operations", id.Email)
 	if err := notifier(ctx, "[YesLogs] Test alert", body); err != nil {
 		s.log.Error("test notification failed", "error", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "send failed: " + err.Error()})

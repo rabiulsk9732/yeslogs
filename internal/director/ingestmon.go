@@ -86,7 +86,7 @@ func (s *Server) ingestTick(ctx context.Context, st *ingestMonState) {
 	name := s.stats().Name
 	if recovered {
 		subject := fmt.Sprintf("[YesLogs] RECOVERED: ClickHouse inserts resumed on %s", name)
-		body := fmt.Sprintf("Flow inserts to ClickHouse have resumed on dataplane %q.\n\nVerify there is no gap: check Retention → per-day counts around this time.\n\n— YesLogs Director", name)
+		body := fmt.Sprintf("Flow inserts to ClickHouse have resumed on dataplane %q.\n\nVerify there is no gap: check Retention → per-day counts around this time.\n\n— YesLogs Operations", name)
 		if err := notifier(sctx, subject, body); err != nil {
 			s.log.Error("ingest recovery email failed", "error", err)
 			return
@@ -174,7 +174,7 @@ shutdown/power loss (broken parts). Runbook:
 `)
 		}
 	}
-	b.WriteString("Check: systemctl status natlog clickhouse-server; journalctl -u natlog -n 50\n\n— YesLogs Director")
+	b.WriteString("Check: systemctl status natlog clickhouse-server; journalctl -u natlog -n 50\n\n— YesLogs Operations")
 	return b.String()
 }
 
@@ -229,7 +229,7 @@ If the affected table is a rollup (flow_rollup*), rebuild it from flow_logs.
 If flow_logs itself is affected, quantify the gap (Retention → per-day counts)
 and check the S3 cold archive for those days.
 
-— YesLogs Director`, name, n, prev)
+— YesLogs Operations`, name, n, prev)
 	sctx, sc := context.WithTimeout(ctx, 30*time.Second)
 	defer sc()
 	if err := notifier(sctx, subject, body); err != nil {
