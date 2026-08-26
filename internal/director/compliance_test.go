@@ -410,3 +410,28 @@ func TestUnmeasuredDaysAreNotUnanswerable(t *testing.T) {
 		t.Fatalf("got %v, want only the measured day [2026-08-24]", got)
 	}
 }
+
+// A collector that cannot count translations must still get its gap detection.
+// This is the regression that mattered: one shared failure path meant a slow
+// translation query took the cheap, always-available day counts down with it.
+func TestUnmeasuredTranslationsStillYieldDayCounts(t *testing.T) {
+	days := []DayIPDR{
+		{Date: "2026-08-26", Flows: 38404315},
+		{Date: "2026-08-24", Flows: 362254427},
+	}
+	if got := missingDays(days, mustDay(t, "2026-08-26")); len(got) != 1 || got[0] != "2026-08-25" {
+		t.Fatalf("gap detection must work without translation counts: got %v, want [2026-08-25]", got)
+	}
+	if got := unanswerableDays(days); len(got) != 0 {
+		t.Errorf("unmeasured days must not be reported unanswerable, got %v", got)
+	}
+}
+
+func mustDay(t *testing.T, s string) time.Time {
+	t.Helper()
+	d, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}

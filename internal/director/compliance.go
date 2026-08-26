@@ -21,6 +21,7 @@ package director
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -228,7 +229,7 @@ func (r *FlowReader) TranslationsByDay(ctx context.Context, ispID uint32) ([]Day
 	// which the console and unanswerableDays both read as "not measured".
 	tr, err := r.translationsPerDay(ctx, where, args)
 	if err != nil {
-		return out, nil
+		return out, errTranslationsUnmeasured{err}
 	}
 	for i := range out {
 		if n, ok := tr[out[i].Date]; ok {
@@ -237,6 +238,18 @@ func (r *FlowReader) TranslationsByDay(ctx context.Context, ispID uint32) ([]Day
 	}
 	return out, nil
 }
+
+// errTranslationsUnmeasured reports that the per-day counts came back without
+// translation figures. The day counts in the same result are still good, so the
+// caller uses them and only logs this — but it must never be swallowed silently:
+// "not measured" showing up across a whole console page needs a reason in the
+// log, or the next person assumes the exporters stopped translating.
+type errTranslationsUnmeasured struct{ err error }
+
+func (e errTranslationsUnmeasured) Error() string {
+	return "per-day translation counts unmeasured: " + e.err.Error()
+}
+func (e errTranslationsUnmeasured) Unwrap() error { return e.err }
 
 // translationsPerDay counts translated flows per day. Bounded on both sides —
 // the caller's context and ClickHouse's own max_execution_time — so an abandoned
@@ -529,8 +542,13 @@ func (s *Server) ComplianceAudit(ctx context.Context, ispID uint32) ComplianceRe
 		return a.Name < b.Name
 	})
 	days, err := s.flows.TranslationsByDay(ctx, ispID)
-	if err != nil {
-		s.log.Warn("compliance: per-day translation query failed", "error", err)
+	var unmeasured errTranslationsUnmeasured
+	switch {
+	case errors.As(err, &unmeasured):
+		// Day counts are usable; only the translation figures are missing.
+		s.log.Warn("compliance: per-day translation counts unavailable on this collector; gap detection still ran", "error", unmeasured.err)
+	case err != nil:
+		s.log.Warn("compliance: per-day query failed", "error", err)
 		return rep
 	}
 	rep.Days = days
