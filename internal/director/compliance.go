@@ -156,6 +156,11 @@ const (
 	retentionMinDays = 180
 	// complianceTickEvery is how often the monitor re-grades every device.
 	complianceTickEvery = 15 * time.Minute
+	// monitorQueryBudget is what a caller with no deadline of its own gets — in
+	// practice the background compliance monitor. Generous because nothing is
+	// waiting on it, and well under the tick so a slow run cannot overlap the
+	// next one.
+	monitorQueryBudget = 90 * time.Second
 	// dayCountTimeout bounds the per-day row count. It reads only the partition
 	// key, so this is generous by a wide margin — measured at 0.08s over 51 days
 	// on the busiest box in the fleet.
@@ -319,6 +324,18 @@ func (r *FlowReader) TranslationStats(ctx context.Context, ispID uint32, window 
 		out[s.DeviceID] = s
 	}
 	return out, rows.Err()
+}
+
+// deadlineOr returns a context that keeps the caller's deadline if it has one,
+// and otherwise applies fallback. The point is that the caller knows how long it
+// can wait and the callee does not: a page request and a background sweep want
+// very different answers, and a constant inside the callee can only be wrong for
+// one of them.
+func deadlineOr(ctx context.Context, fallback time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, fallback)
 }
 
 // gradeDevice grades one device from its counters. Pure so the decision table
@@ -486,12 +503,13 @@ func (s *Server) ComplianceAudit(ctx context.Context, ispID uint32) ComplianceRe
 		s.log.Warn("compliance: device list failed", "error", err)
 		return rep
 	}
-	// Each query gets its own deadline. Sharing one budget meant the per-day
-	// scan inherited whatever the per-device query left over — a few seconds
-	// against the full retention window — so on the busy boxes it timed out on
-	// essentially every cycle and the retention-gap detection silently never
-	// ran. Observed 2026-08-26: 35-36 failures in 26h on box2 and box3.
-	qctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// Honour the caller's deadline rather than imposing one. A console request
+	// must answer while someone is looking at it; the background monitor has no
+	// such constraint and grades every device on the fleet. Capping both at the
+	// page's budget made the monitor fail whenever anything else was touching
+	// the disk — observed 2026-08-26, when the per-day backfill landed and the
+	// audit started timing out on the two busiest boxes within one tick.
+	qctx, cancel := deadlineOr(ctx, monitorQueryBudget)
 	defer cancel()
 	stats, err := s.flows.TranslationStats(qctx, ispID, complianceWindowMins*time.Minute)
 	if err != nil {

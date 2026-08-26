@@ -1,6 +1,7 @@
 package director
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -434,4 +435,34 @@ func mustDay(t *testing.T, s string) time.Time {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// A caller that knows how long it can wait must keep that deadline. The console
+// request and the background sweep want very different budgets, and a constant
+// inside the callee can only be right for one of them.
+func TestDeadlineOrKeepsTheCallersDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
+
+	got, gcancel := deadlineOr(ctx, 90*time.Second)
+	defer gcancel()
+	dl, ok := got.Deadline()
+	if !ok || !dl.Equal(want) {
+		t.Errorf("deadline = %v (ok=%v), want the caller's %v", dl, ok, want)
+	}
+}
+
+// With no deadline of its own — the background monitor — the fallback applies,
+// and it must be the generous one rather than a page-sized budget.
+func TestDeadlineOrAppliesFallbackWhenCallerHasNone(t *testing.T) {
+	got, cancel := deadlineOr(context.Background(), 90*time.Second)
+	defer cancel()
+	dl, ok := got.Deadline()
+	if !ok {
+		t.Fatal("fallback deadline not applied")
+	}
+	if d := time.Until(dl); d < 80*time.Second || d > 90*time.Second {
+		t.Errorf("fallback deadline is %v away, want ~90s", d)
+	}
 }

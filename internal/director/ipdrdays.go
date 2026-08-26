@@ -30,9 +30,16 @@ import (
 const ipdrDaysTable = "flow_ipdr_days"
 
 // ipdrDayBudget bounds one backfill pass. Enough to walk a full 180-day window
-// in well under an hour of ticks, few enough that the pass never competes with
+// in a couple of hours of ticks, few enough that the pass never competes with
 // ingest for long on a collector that is also writing 200M rows a day.
-const ipdrDayBudget = 4
+const ipdrDayBudget = 3
+
+// ipdrDayPause separates the day scans inside a pass. This job has no deadline
+// and nothing waits on it, so it must yield to anything that does. Run back to
+// back it competed with the compliance audit for disk and pushed that query past
+// its budget on the two busiest boxes within one tick of shipping — a background
+// task starving a monitor is worse than a backfill that finishes an hour later.
+const ipdrDayPause = 20 * time.Second
 
 // ipdrDayTimeout bounds a single day's scan. Generous against the 6.4s worst
 // case measured, short enough that a pathological day is abandoned rather than
@@ -180,7 +187,14 @@ func (s *Server) ipdrDayPass(ctx context.Context) {
 	}
 	start := time.Now()
 	done := 0
-	for _, date := range work {
+	for i, date := range work {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(ipdrDayPause):
+			}
+		}
 		if err := s.flows.computeIPDRDay(ctx, date); err != nil {
 			s.log.Warn("ipdr days: day not measured", "date", date, "error", err)
 			continue
