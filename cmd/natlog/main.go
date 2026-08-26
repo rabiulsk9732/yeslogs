@@ -437,6 +437,11 @@ func run() (err error) {
 	// IPDR compliance: grades every exporter on whether the records it produces
 	// can actually answer a lawful request, and alerts when one cannot.
 	go dirSrv.RunComplianceMonitor(managedCtx)
+	// Measures per-day IPDR answerability a few days at a time. The compliance
+	// audit reads what this leaves behind; without it every day reads "not
+	// measured", because counting translations across a whole retention window
+	// in one query does not complete on a busy collector.
+	go dirSrv.RunIPDRDayBackfill(managedCtx)
 
 	log.Info("natlog running; SIGINT/SIGTERM to stop",
 		"receivers", len(receivers), "metrics", cfg.Metrics.Bind)

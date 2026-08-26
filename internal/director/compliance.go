@@ -160,12 +160,6 @@ const (
 	// key, so this is generous by a wide margin — measured at 0.08s over 51 days
 	// on the busiest box in the fleet.
 	dayCountTimeout = 20 * time.Second
-	// translationsByDayTimeout bounds the per-day translation count, which reads
-	// two IP columns across the whole retention window. It cannot complete on
-	// the largest collectors at any practical limit, so this is set to give the
-	// smaller ones room and to give up promptly on the rest. Kept well under the
-	// monitor tick so a slow run can never overlap the next one.
-	translationsByDayTimeout = 90 * time.Second
 	// complianceGrace is how long a newly-registered device may stay ungraded
 	// before silence itself becomes an alert. A real exporter starts inside a
 	// minute; a mis-configured one never does.
@@ -185,55 +179,67 @@ type DayIPDR struct {
 	TranslatedKnown bool `json:"translatedKnown"`
 }
 
-// TranslationsByDay returns per-day flow counts over the whole retained window,
-// newest first, with translation counts filled in where they can be measured.
-//
-// It is deliberately two queries. Counting rows per day is free — event_date is
-// the partition key — and that alone answers the question that matters most:
-// which retained days hold no records at all and so can answer nothing. Counting
-// *translations* per day reads two IP columns across every row, and on a busy
-// collector that does not finish: measured 2026-08-26 on box3, over 170s for the
-// full window and over 120s for even the last 30 days. Running both under one
-// deadline meant the cheap answer was lost along with the expensive one, every
-// cycle, on exactly the boxes that needed it. Now the gap detection always
-// succeeds and the translation counts are best-effort on top.
-func (r *FlowReader) TranslationsByDay(ctx context.Context, ispID uint32) ([]DayIPDR, error) {
+// dayFlowCounts returns the number of stored rows per retained day, newest
+// first. Free: event_date is the partition key, so ClickHouse answers from part
+// metadata — measured at 0.08s over 51 days on the busiest box in the fleet.
+// This is the query that answers "which retained dates hold no records at all",
+// and it must never be coupled to anything expensive.
+func (r *FlowReader) dayFlowCounts(ctx context.Context, ispID uint32) ([]DayIPDR, error) {
 	where, args := "1", []any(nil)
 	if ispID != 0 {
 		where, args = "isp_id = ?", []any{ispID}
 	}
-
-	cctx, ccancel := context.WithTimeout(ctx, dayCountTimeout)
-	defer ccancel()
+	cctx, cancel := context.WithTimeout(ctx, dayCountTimeout)
+	defer cancel()
 	rows, err := r.conn.Query(cctx, fmt.Sprintf(
 		`SELECT toString(event_date), count() FROM %s.flow_logs WHERE %s
 		 GROUP BY event_date ORDER BY event_date DESC`, r.db, where), args...)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var out []DayIPDR
 	for rows.Next() {
 		var d DayIPDR
 		if err := rows.Scan(&d.Date, &d.Flows); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		out = append(out, d)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	return out, rows.Err()
+}
+
+// TranslationsByDay returns per-day flow counts over the whole retained window,
+// newest first, with translation counts attached where they have been measured.
+//
+// The two halves have wildly different costs and so are sourced differently.
+// Counting rows per day is free and always runs here. Counting *translations*
+// per day reads two IP columns across every row: about 1.5-6.4s for one day on
+// the busiest collector, but over 170s for a 51-day window, which ClickHouse
+// refuses up front as too slow. A 15-minute audit cannot pay that, so it does
+// not try — RunIPDRDayBackfill measures one day at a time and stores the result,
+// and this reads it back in microseconds.
+//
+// A day the backfill has not reached yet comes back TranslatedKnown=false. That
+// is not the same as zero, and nothing downstream may treat it as zero: the
+// console renders it "not measured" and unanswerableDays skips it, because a
+// measurement that has not happened is not evidence of a legal gap.
+func (r *FlowReader) TranslationsByDay(ctx context.Context, ispID uint32) ([]DayIPDR, error) {
+	out, err := r.dayFlowCounts(ctx, ispID)
+	if err != nil {
 		return nil, err
 	}
-
-	// Best effort from here. A failure leaves every day TranslatedKnown=false,
-	// which the console and unanswerableDays both read as "not measured".
-	tr, err := r.translationsPerDay(ctx, where, args)
+	stored, err := r.storedIPDRDays(ctx, ispID)
 	if err != nil {
 		return out, errTranslationsUnmeasured{err}
 	}
 	for i := range out {
-		if n, ok := tr[out[i].Date]; ok {
-			out[i].Translated, out[i].TranslatedKnown = n, true
+		// Only trust a stored figure that was computed against the same number of
+		// rows the day holds now. A day that grew since it was measured (today, or
+		// an old day that received late-arriving records) would otherwise report a
+		// stale translation count as fact until the backfill catches up.
+		if s, ok := stored[out[i].Date]; ok && s.Flows == out[i].Flows {
+			out[i].Translated, out[i].TranslatedKnown = s.Translated, true
 		}
 	}
 	return out, nil
@@ -250,33 +256,6 @@ func (e errTranslationsUnmeasured) Error() string {
 	return "per-day translation counts unmeasured: " + e.err.Error()
 }
 func (e errTranslationsUnmeasured) Unwrap() error { return e.err }
-
-// translationsPerDay counts translated flows per day. Bounded on both sides —
-// the caller's context and ClickHouse's own max_execution_time — so an abandoned
-// client cannot leave it burning IO on a collector that is already busy writing.
-func (r *FlowReader) translationsPerDay(ctx context.Context, where string, args []any) (map[string]uint64, error) {
-	tctx, cancel := context.WithTimeout(ctx, translationsByDayTimeout)
-	defer cancel()
-	q := fmt.Sprintf(`SELECT toString(event_date),
-			countIf(nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip)
-		FROM %s.flow_logs WHERE %s GROUP BY event_date
-		SETTINGS max_execution_time = %d`, r.db, where, int(translationsByDayTimeout.Seconds())-5)
-	rows, err := r.conn.Query(tctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]uint64{}
-	for rows.Next() {
-		var date string
-		var n uint64
-		if err := rows.Scan(&date, &n); err != nil {
-			return nil, err
-		}
-		out[date] = n
-	}
-	return out, rows.Err()
-}
 
 // unanswerableDays lists days that stored flows but recorded no translation at
 // all. Deliberately a zero test, not a threshold: a quiet day is not a fault,
