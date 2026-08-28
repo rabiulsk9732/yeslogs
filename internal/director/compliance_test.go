@@ -466,3 +466,58 @@ func TestDeadlineOrAppliesFallbackWhenCallerHasNone(t *testing.T) {
 		t.Errorf("fallback deadline is %v away, want ~90s", d)
 	}
 }
+
+// A silent exporter means packets are not arriving. The text must say that
+// first, and must not open by suggesting a cause.
+//
+// The old wording led with "a 0.0.0.0 source makes this collector reject the
+// packets", which reads as a diagnosis. On 2026-08-28 it sent an operator to
+// re-check a MikroTik whose config was already correct while the real cause — a
+// drop rule on the path — went unlooked-at for six days.
+func TestSilentDeviceLeadsWithWhatWasObserved(t *testing.T) {
+	c := gradeDevice(store.Device{DeviceID: 6, Name: "novaserve-nf9-04", ExporterIP: "103.178.1.2", Enabled: true},
+		DeviceFlowStats{}, DeviceSignal{})
+	if c.State != CompSilent {
+		t.Fatalf("State = %q, want %q", c.State, CompSilent)
+	}
+	if !strings.Contains(c.Detail, "103.178.1.2") {
+		t.Errorf("detail must name the exporter: %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "NOTHING") {
+		t.Errorf("detail must state that nothing arrived: %q", c.Detail)
+	}
+	// The observable check has to come before the speculation about 0.0.0.0.
+	tcpdumpAt := strings.Index(c.Remedy, "tcpdump")
+	zeroAt := strings.Index(c.Remedy, "0.0.0.0")
+	if tcpdumpAt < 0 {
+		t.Fatalf("remedy must give the one command that settles it: %q", c.Remedy)
+	}
+	// -i any under-reported on this fleet while the same capture on eth0 showed
+	// the packets. The command handed to the operator must name a real interface;
+	// mentioning -i any as a caution is the point, recommending it is the bug.
+	if strings.Contains(c.Remedy, "tcpdump -i any") {
+		t.Errorf("remedy hands the operator -i any, which gave a false negative here: %q", c.Remedy)
+	}
+	if !strings.Contains(c.Remedy, "tcpdump -i <wan-interface>") {
+		t.Errorf("remedy must tell the operator to name the interface: %q", c.Remedy)
+	}
+	if zeroAt >= 0 && zeroAt < tcpdumpAt {
+		t.Errorf("remedy still leads with the 0.0.0.0 guess before telling the reader how to look: %q", c.Remedy)
+	}
+	if !strings.Contains(c.Remedy, "firewall") {
+		t.Errorf("remedy must raise the path/firewall, which is what actually caused this: %q", c.Remedy)
+	}
+}
+
+// A device that IS sending but stores nothing is a different fault with a
+// different cause, and must not get the silent-device text.
+func TestSendingButDroppedIsNotGradedSilent(t *testing.T) {
+	c := gradeDevice(store.Device{DeviceID: 3, ExporterIP: "103.204.1.14", Enabled: true},
+		DeviceFlowStats{}, DeviceSignal{NoNATDropped: 4200, LastFlow: time.Now()})
+	if c.State == CompSilent {
+		t.Error("an exporter whose flows arrive and are dropped must not be reported silent")
+	}
+	if strings.Contains(c.Remedy, "tcpdump") {
+		t.Error("the packets are plainly arriving; do not send the operator to look for them")
+	}
+}

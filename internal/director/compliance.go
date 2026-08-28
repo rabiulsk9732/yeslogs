@@ -376,10 +376,26 @@ func gradeDevice(d store.Device, st DeviceFlowStats, sig DeviceSignal) DeviceCom
 			"NetFlow v5 can never satisfy this — it has no post-NAT fields at all; export v9 or IPFIX."
 
 	case st.Flows == 0:
+		// Lead with what the collector actually observed, not with a guess at why.
+		//
+		// This text used to open by suggesting the exporter's source address might
+		// be 0.0.0.0. That reads as a diagnosis rather than one possibility, and on
+		// 2026-08-28 it sent an operator to re-check a MikroTik whose configuration
+		// was already correct — the real cause was a drop rule on the path, which
+		// no amount of looking at the device would have found. Six days of records
+		// were lost while attention was in the wrong place.
+		//
+		// The one fact worth stating is the strong one: nothing arrived at all.
+		// Anything that reaches this collector from a registered exporter is either
+		// stored or counted as dropped, so zero of both means the packets are not
+		// getting here — which points at the path first and the device second.
 		c.State = CompSilent
-		c.Detail = "No flows stored from this exporter, and none arrived to be dropped either."
-		c.Remedy = fmt.Sprintf("Confirm the exporter is sending to this collector and that %s is its configured source address. "+
-			"On the exporter, the export source address must be its own IP — a 0.0.0.0 source makes this collector reject the packets as an unknown exporter.", d.ExporterIP)
+		c.Detail = fmt.Sprintf("The collector has received NOTHING from %s in the audit window — no flows stored, and none arrived to be dropped either. This is about packets not reaching the collector, not about what the exporter is putting in them.", d.ExporterIP)
+		c.Remedy = fmt.Sprintf("Check in this order. 1) Is anything arriving at all? On the collector run: tcpdump -i <wan-interface> -n host %s   "+
+			"— that answers it in seconds and separates 'not arriving' from 'arriving but rejected'. "+
+			"Name the real interface rather than using -i any: on 2026-08-28 an -i any capture on this fleet reported nothing while the same capture on eth0 showed the packets arriving. "+
+			"2) If nothing arrives: look at the path — a firewall or ACL rule on the exporter, on this collector, or anywhere between, and that the exporter's configured target address and port point at this collector. Confirm export is still enabled on the device. "+
+			"3) If packets DO arrive but this stays silent: the export source address is not %s (a 0.0.0.0 source is the usual cause), so this collector rejects them as an unknown exporter — set the source to the device's own IP or register the address it really uses.", d.ExporterIP, d.ExporterIP)
 
 	case st.Translated == 0 && st.NoNATField >= st.SameAsSrc:
 		c.State = CompNoNATFields
