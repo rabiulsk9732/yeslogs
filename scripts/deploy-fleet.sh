@@ -6,9 +6,11 @@
 #   sudo bash scripts/deploy-fleet.sh            # deploy committed HEAD
 #   BIN=/path/to/natlog sudo bash scripts/...    # deploy a prebuilt binary
 #
-# Remote boxes: the ssh prefix from fleet.conf is used; install runs via
-# sudo on the remote side (you'll be prompted for the sudo password unless
-# passwordless). Local box (no ssh prefix): plain install + restart.
+# Remote boxes: the ssh prefix from fleet.conf is used. ROOT ONLY — every box has
+# a working root key, so no sudo and no password prompt. That is the owner's
+# standing instruction (2026-08-28) and it is also what makes deploys reliable:
+# box2's admin1 key stopped working mid-deploy while its root key kept working.
+# Local box (no ssh prefix): plain install + restart.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,8 +36,10 @@ deploy_remote() {
     local target="${pre[-1]}"
     local -a opts=("${pre[@]:1:${#pre[@]}-2}")   # drop leading "ssh" + trailing target
     scp "${opts[@]/#-p/-P}" "$BIN" "$target:/tmp/natlog.new"
-    ssh -t "${opts[@]}" "$target" \
-        "sudo install -m0755 /tmp/natlog.new /usr/local/bin/natlog && sudo systemctl restart natlog && rm -f /tmp/natlog.new"
+    # No sudo: fleet.conf targets are root. A sudo here would silently prompt and
+    # hang a non-interactive deploy.
+    ssh "${opts[@]}" "$target" \
+        "install -m0755 /tmp/natlog.new /usr/local/bin/natlog && systemctl restart natlog && rm -f /tmp/natlog.new" </dev/null
 }
 
 verify() {
