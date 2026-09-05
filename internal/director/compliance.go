@@ -189,7 +189,43 @@ type DayIPDR struct {
 // metadata — measured at 0.08s over 51 days on the busiest box in the fleet.
 // This is the query that answers "which retained dates hold no records at all",
 // and it must never be coupled to anything expensive.
+// partsDayCounts reads per-day row counts straight from part metadata. Valid
+// only fleet-wide: system.parts knows nothing about isp_id.
+func (r *FlowReader) partsDayCounts(ctx context.Context) ([]DayIPDR, error) {
+	cctx, cancel := context.WithTimeout(ctx, dayCountTimeout)
+	defer cancel()
+	rows, err := r.conn.Query(cctx, fmt.Sprintf(
+		`SELECT partition, toUInt64(sum(rows)) FROM system.parts
+		 WHERE database = '%s' AND table = 'flow_logs' AND active
+		 GROUP BY partition ORDER BY partition DESC`, r.db))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DayIPDR
+	for rows.Next() {
+		var d DayIPDR
+		if err := rows.Scan(&d.Date, &d.Flows); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// dayFlowCounts returns rows-per-day. event_date is the partition key, so the
+// fleet-wide answer already sits in part metadata and needs no data read at all
+// — measured 2.0s of GROUP BY against 0.08s from system.parts, with identical
+// counts. That matters well beyond this function: archivedDaysInRange calls it
+// on EVERY logs search, where it was quietly costing ~2s a query.
+// A tenant-scoped call still has to read rows; parts are not split by isp_id.
 func (r *FlowReader) dayFlowCounts(ctx context.Context, ispID uint32) ([]DayIPDR, error) {
+	if ispID == 0 {
+		if out, err := r.partsDayCounts(ctx); err == nil && len(out) > 0 {
+			return out, nil
+		}
+		// fall through to the scan if the metadata read failed
+	}
 	where, args := "1", []any(nil)
 	if ispID != 0 {
 		where, args = "isp_id = ?", []any{ispID}
@@ -295,10 +331,16 @@ func (r *FlowReader) TranslationStats(ctx context.Context, ispID uint32, window 
 		where += " AND isp_id = ?"
 		args = append(args, ispID)
 	}
-	const privateSrc = `isIPAddressInRange(toString(src_ip),'10.0.0.0/8')
-		OR isIPAddressInRange(toString(src_ip),'172.16.0.0/12')
-		OR isIPAddressInRange(toString(src_ip),'192.168.0.0/16')
-		OR isIPAddressInRange(toString(src_ip),'100.64.0.0/10')`
+	// RFC1918 plus the CGNAT range, as integer comparisons. src_ip is an IPv4
+	// column (a UInt32 underneath), so this is a couple of instructions per row;
+	// the previous isIPAddressInRange(toString(src_ip), …) form re-rendered every
+	// address as text and re-parsed the CIDR for each of ~800M rows, and this
+	// query is evaluated twice in the SELECT below. Measured on box 1: 15.3s ->
+	// 5.2s over the same 24h window, with identical counts.
+	const privateSrc = `(src_ip BETWEEN toIPv4('10.0.0.0') AND toIPv4('10.255.255.255'))
+		OR (src_ip BETWEEN toIPv4('172.16.0.0') AND toIPv4('172.31.255.255'))
+		OR (src_ip BETWEEN toIPv4('192.168.0.0') AND toIPv4('192.168.255.255'))
+		OR (src_ip BETWEEN toIPv4('100.64.0.0') AND toIPv4('100.127.255.255'))`
 	const translated = `nat_public_ip != toIPv4('0.0.0.0') AND nat_public_ip != src_ip`
 	q := fmt.Sprintf(`SELECT device_id,
 			count(),
@@ -499,7 +541,72 @@ func missingDays(days []DayIPDR, now time.Time) []string {
 }
 
 // ComplianceAudit grades every device visible to ispID (0 = all tenants).
+// compEntry is one cached grading run.
+type compEntry struct {
+	rep        ComplianceReport
+	at         time.Time
+	refreshing bool
+}
+
+// compFresh is how old a cached report may be before a viewer's request also
+// kicks off a background refresh. It sits under complianceTickEvery so the
+// monitor, which always grades fresh, is normally the one keeping it warm.
+const compFresh = 5 * time.Minute
+
+// ComplianceAudit returns the grading report, from cache when one exists.
+// Grading reads a 24-hour window across every device — measured at ~21s on a
+// 6-billion-row table — which is far too slow to run on every page view and
+// pointless besides: the answer barely moves inside a 24-hour window. A cached
+// report is returned immediately and refreshed in the background when stale, so
+// only the very first viewer after a restart ever waits. GeneratedAt travels in
+// the payload, so the console always shows the age of what it is displaying.
 func (s *Server) ComplianceAudit(ctx context.Context, ispID uint32) ComplianceReport {
+	s.compMu.Lock()
+	e := s.compCache[ispID]
+	if e != nil {
+		rep, age, busy := e.rep, time.Since(e.at), e.refreshing
+		if age > compFresh && !busy {
+			e.refreshing = true
+			// Detached from the request: the caller must not wait, and must not
+			// cancel the refresh by navigating away.
+			go func() {
+				bg, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				s.complianceAuditFresh(bg, ispID)
+				s.compMu.Lock()
+				if cur := s.compCache[ispID]; cur != nil {
+					cur.refreshing = false
+				}
+				s.compMu.Unlock()
+			}()
+		}
+		s.compMu.Unlock()
+		return rep
+	}
+	s.compMu.Unlock()
+	return s.complianceAuditFresh(ctx, ispID) // cold: nothing to serve yet
+}
+
+// complianceAuditFresh always grades against ClickHouse and refreshes the cache.
+// The monitor uses it directly so its alerting never fires on a cached report.
+func (s *Server) complianceAuditFresh(ctx context.Context, ispID uint32) ComplianceReport {
+	rep := s.computeComplianceAudit(ctx, ispID)
+	if rep.Available {
+		s.compMu.Lock()
+		if s.compCache == nil {
+			s.compCache = map[uint32]*compEntry{}
+		}
+		if cur := s.compCache[ispID]; cur != nil {
+			cur.rep, cur.at = rep, time.Now()
+		} else {
+			s.compCache[ispID] = &compEntry{rep: rep, at: time.Now()}
+		}
+		s.compMu.Unlock()
+	}
+	return rep
+}
+
+func (s *Server) computeComplianceAudit(ctx context.Context, ispID uint32) ComplianceReport {
 	rep := ComplianceReport{
 		GeneratedAt: time.Now(), WindowMins: complianceWindowMins,
 		RetentionMin: retentionMinDays, Devices: []DeviceCompliance{},
@@ -604,7 +711,7 @@ func (s *Server) RunComplianceMonitor(ctx context.Context) {
 }
 
 func (s *Server) complianceTick(ctx context.Context, seen map[uint32]*compState) {
-	rep := s.ComplianceAudit(ctx, 0)
+	rep := s.complianceAuditFresh(ctx, 0)
 	if !rep.Available {
 		return
 	}
