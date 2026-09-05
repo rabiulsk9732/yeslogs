@@ -41,6 +41,17 @@ const coldSchema = "isp_id UInt32, device_id UInt32, src_ip String, src_port UIn
 	"protocol UInt8, bytes UInt64, packets UInt64, flow_start String, flow_end String, " +
 	"flow_type String, exporter_ip String"
 
+// dedupKeyCold is the same idea for the S3 path, narrowed twice over. An s3()
+// source only knows the columns in its SELECT, and Parquet infers that schema
+// from the file itself — so a key naming bytes/packets/flow_end (not selected)
+// or nat_event/username (absent from every archive written before 2026-08-26)
+// fails the whole query with "Unknown expression identifier". Reusing the hot
+// key here is exactly how cold search broke, and cold search is what answers a
+// months-old lawful request. These nine columns exist in every archive
+// generation; the copies this collapses are identical in all of them anyway.
+const dedupKeyCold = "flow_start, src_ip, src_port, dst_ip, dst_port, " +
+	"nat_public_ip, nat_public_port, protocol, flow_type"
+
 // coldReadSettings let a glob span archives written before nat_event/username
 // existed alongside newer ones. Without this a single old object in the range
 // fails the whole query, which would make every pre-2026-08-26 day unreadable —
@@ -103,9 +114,13 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	} else {
 		src = fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
 	}
+	// Deliberately no nat_event/username here. Parquet infers its schema from the
+	// file, so naming a column that a given archive predates fails the whole query
+	// — archives written before 2026-08-26 have neither, and a lawful request over
+	// an old window must still return rows.
 	q := fmt.Sprintf(`SELECT %s AS ts, device_id, src_ip, src_port, nat_public_ip, nat_public_port,
 		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT 1 BY %s LIMIT %d%s`,
-		tsExpr, src, strings.Join(conds, " AND "), dedupKey, limit, coldReadSettings)
+		tsExpr, src, strings.Join(conds, " AND "), dedupKeyCold, limit, coldReadSettings)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -320,7 +335,9 @@ func (s *Server) archivedDaysInRange(ctx context.Context, f SearchFilter) []stri
 	// duplicated record in a lawful-intercept report is its own kind of wrong
 	// answer, and hot is the authoritative copy while it exists.
 	//
-	// The lookup is free — it reads only the partition key.
+	// The lookup costs nothing because dayFlowCounts answers a fleet-wide call
+	// from part metadata. It used to be a GROUP BY over every row, which is how a
+	// ~2s tax ended up on every single logs search.
 	inHot := map[string]bool{}
 	if s.flows != nil {
 		if days, derr := s.flows.dayFlowCounts(ctx, f.ISPID); derr == nil {
