@@ -79,33 +79,46 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 			qpct = 100
 		}
 		cards = append(cards,
-			ovCard{"Flows Ingested", group(st.Ingested), "decoded · since start", "fa-bolt", "#0077b6", 0},
-			ovCard{"Flows Stored Today", group(storedToday), "written to hot storage", "fa-database", "#2a9d8f", 0},
-			ovCard{"Flows Skipped", group(st.Skipped), "dropped by skip rules", "fa-filter-circle-xmark", "#7b8794", 0},
-			ovCard{"Active Dataplanes", fmt.Sprintf("%d", st.Collectors), "collectors connected", "fa-network-wired", "#00a3c4", 0},
-			ovCard{"Active Exporters", fmt.Sprintf("%d", activeExporters), "enabled devices", "fa-server", "#0077b6", 0},
-			ovCard{"Hot Storage Used", humanBytes(hotBytes), "ClickHouse on disk", "fa-hard-drive", "#e76f51", 0},
-			ovCard{"Archive Uploaded", humanBytes(st.ArchiveBytes), "to S3 cold storage", "fa-box-archive", "#2a9d8f", 0},
+			ovCard{"Flows Ingested", group(st.Ingested), "decoded · since start", "fa-bolt", tileSky, 0},
+			ovCard{"Flows Stored Today", group(storedToday), "written to hot storage", "fa-database", tileGood, 0},
+			ovCard{"Flows Skipped", group(st.Skipped), "dropped by skip rules", "fa-filter-circle-xmark", tileMuted, 0},
+			ovCard{"Active Dataplanes", fmt.Sprintf("%d", st.Collectors), "collectors connected", "fa-network-wired", tileCyan, 0},
+			ovCard{"Active Exporters", fmt.Sprintf("%d", activeExporters), "enabled devices", "fa-server", tileSky, 0},
+			ovCard{"Hot Storage Used", humanBytes(hotBytes), "ClickHouse on disk", "fa-hard-drive", tileWarn, 0},
+			ovCard{"Archive Uploaded", humanBytes(st.ArchiveBytes), "to S3 cold storage", "fa-box-archive", tileGood, 0},
 			ovCard{"Queue Pressure", fmt.Sprintf("%d%%", qpct), fmt.Sprintf("%s / %s rows", group(uint64(st.QueueSize)), group(uint64(st.QueueMax))), "fa-gauge-high", queueColor(qpct), qpct},
 		)
 	} else {
 		cards = append(cards,
-			ovCard{"Flows Stored Today", group(storedToday), "your ISP", "fa-database", "#2a9d8f", 0},
-			ovCard{"Active Exporters", fmt.Sprintf("%d", activeExporters), "your enabled devices", "fa-server", "#0077b6", 0},
-			ovCard{"Logged Volume", humanBytes(hotBytes), "uncompressed traffic logged", "fa-wave-square", "#e76f51", 0},
+			ovCard{"Flows Stored Today", group(storedToday), "your ISP", "fa-database", tileGood, 0},
+			ovCard{"Active Exporters", fmt.Sprintf("%d", activeExporters), "your enabled devices", "fa-server", tileSky, 0},
+			ovCard{"Logged Volume", humanBytes(hotBytes), "uncompressed traffic logged", "fa-wave-square", tileWarn, 0},
 		)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cards": cards})
 }
 
+// Overview tile accents, taken from the Claude Design artboards. The console
+// renders each as a gradient from this colour to a darkened mix of it, so these
+// are the LIGHT stop of each tile. The browser only ever receives the hex, so
+// these and the console's tokens must be changed together.
+const (
+	tileSky   = "#2490d8"
+	tileGood  = "#12946a"
+	tileWarn  = "#cf7f18"
+	tileBad   = "#c14343"
+	tileCyan  = "#1c9ad0"
+	tileMuted = "#5a6d84"
+)
+
 func queueColor(p int) string {
 	switch {
 	case p >= 85:
-		return "#e63946"
+		return tileBad
 	case p >= 60:
-		return "#ffb703"
+		return tileWarn
 	default:
-		return "#2a9d8f"
+		return tileGood
 	}
 }
 

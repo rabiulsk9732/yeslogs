@@ -1,0 +1,10 @@
+add,apartment,badge,balance,bar_chart,block,bolt,calendar_month,calendar_today,cancel,
+check,check_box,check_box_outline_blank,check_circle,checklist,chevron_left,chevron_right,
+close,cloud_done,cloud_upload,code,dashboard,database,date_range,delete,developer_board,
+dns,download,edit,edit_note,error,event,event_busy,expand_less,expand_more,filter_alt,
+filter_alt_off,grid_on,group,help,history,hub,info,inventory_2,key,label,lan,layers,lock,
+login,logout,memory,menu,monitor_heart,notifications,open_in_full,pause,percent,person,
+person_add,picture_as_pdf,play_arrow,power_off,priority_high,progress_activity,receipt_long,
+refresh,router,save,schedule,search,send,settings,settings_input_antenna,shield,show_chart,
+speed,sticky_note_2,storage,summarize,swap_calls,swap_horiz,table_rows,table_view,task_alt,
+tag,toggle_on,trending_up,tune,unfold_more,verified,verified_user,visibility,vpn_key,warning

@@ -70,6 +70,11 @@ type Server struct {
 	ingestFn   func() IngestHealth            // writer counters for the ingest-stall monitor
 	signalsFn  func() map[uint32]DeviceSignal // evidence for flows the rules dropped
 
+	// compliance grading is expensive (a 24h window across every device); the
+	// report is cached here so page views never pay for it. See ComplianceAudit.
+	compMu    sync.Mutex
+	compCache map[uint32]*compEntry
+
 	// device-liveness alerting (optional; notifier set via SetNotifier).
 	notifyMu sync.Mutex
 	notifier Notifier
@@ -78,7 +83,7 @@ type Server struct {
 
 	// short-TTL cache for the (expensive) dashboard aggregates, per tenant.
 	consoleMu    sync.Mutex
-	consoleCache map[uint32]consoleCacheEntry
+	consoleCache map[consoleKey]consoleCacheEntry
 
 	// CRM/RADIUS enrichment is deliberately outside the ingest path. Search and
 	// report handlers use this bounded cache + shared HTTP pool only when the
@@ -224,7 +229,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /devices/{id}/delete", s.auth(s.handleDeleteDevice))
 	mux.Handle("POST /devices/{id}/toggle", s.auth(s.handleToggleDevice))
 	mux.Handle("GET /flows", s.auth(s.handleFlows))
-	return mux
+	return gzipMiddleware(mux)
 }
 
 // --- middleware ---

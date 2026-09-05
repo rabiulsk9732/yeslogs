@@ -23,7 +23,7 @@ func (s *Server) assetsHandler() http.Handler {
 	if err != nil {
 		return http.NotFoundHandler()
 	}
-	return http.FileServerFS(sub)
+	return cachedAssets(sub, http.FileServerFS(sub))
 }
 
 // ---- console JSON DTOs (shapes the SPA consumes) ----
@@ -628,18 +628,19 @@ func (s *Server) handleConsoleData(w http.ResponseWriter, r *http.Request) {
 	// Serve-stale-while-revalidate: if we have ANY cached snapshot, return it
 	// instantly; if it's past the TTL, kick off a background refresh. Only the
 	// very first load per tenant blocks on the (expensive) compute.
-	if d, fresh, exists := s.cachedConsole(id.ISPID); exists {
+	k := consoleKey{isp: id.ISPID, days: consoleDays(r.URL.Query().Get("days"), s.flowDays)}
+	if d, fresh, exists := s.cachedConsole(k); exists {
 		writeJSON(w, http.StatusOK, d)
 		if !fresh {
-			s.refreshConsoleAsync(id.ISPID)
+			s.refreshConsoleAsync(k)
 		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	data := s.flows.ConsoleData(ctx, id.ISPID, s.flowDays)
-	s.nameDevices(ctx, id.ISPID, data.Records)
-	s.storeConsole(id.ISPID, data)
+	data := s.flows.ConsoleData(ctx, k.isp, k.days)
+	s.nameDevices(ctx, k.isp, data.Records)
+	s.storeConsole(k, data)
 	writeJSON(w, http.StatusOK, data)
 }
 
@@ -651,60 +652,84 @@ type consoleCacheEntry struct {
 	refreshing bool
 }
 
+// consoleKey scopes the dashboard cache. The window is part of the key because
+// the console's time-range switcher asks for different ones, and a 24h snapshot
+// must never be handed back to a request for 30d.
+type consoleKey struct {
+	isp  uint32
+	days int
+}
+
+// consoleDays clamps the window a caller may request to the ranges the switcher
+// offers, so an arbitrary ?days= cannot turn one request into a full-table scan.
+func consoleDays(raw string, def int) int {
+	switch raw {
+	case "0":
+		return 0
+	case "1":
+		return 1
+	case "7":
+		return 7
+	case "30":
+		return 30
+	}
+	return def
+}
+
 // cachedConsole returns the snapshot, whether it's within TTL (fresh), and
 // whether any snapshot exists.
-func (s *Server) cachedConsole(ispID uint32) (data consoleData, fresh, exists bool) {
+func (s *Server) cachedConsole(k consoleKey) (data consoleData, fresh, exists bool) {
 	s.consoleMu.Lock()
 	defer s.consoleMu.Unlock()
-	e, ok := s.consoleCache[ispID]
+	e, ok := s.consoleCache[k]
 	if !ok {
 		return consoleData{}, false, false
 	}
 	return e.data, time.Since(e.at) < consoleCacheTTL, true
 }
 
-func (s *Server) storeConsole(ispID uint32, d consoleData) {
+func (s *Server) storeConsole(k consoleKey, d consoleData) {
 	s.consoleMu.Lock()
 	defer s.consoleMu.Unlock()
 	if s.consoleCache == nil {
-		s.consoleCache = map[uint32]consoleCacheEntry{}
+		s.consoleCache = map[consoleKey]consoleCacheEntry{}
 	}
-	s.consoleCache[ispID] = consoleCacheEntry{at: time.Now(), data: d}
+	s.consoleCache[k] = consoleCacheEntry{at: time.Now(), data: d}
 }
 
 // refreshConsoleAsync recomputes a tenant's dashboard in the background, at most
 // one refresh in flight per tenant (so a burst of stale hits can't stampede).
-func (s *Server) refreshConsoleAsync(ispID uint32) {
+func (s *Server) refreshConsoleAsync(k consoleKey) {
 	if s.flows == nil {
 		return
 	}
 	s.consoleMu.Lock()
-	e := s.consoleCache[ispID]
+	e := s.consoleCache[k]
 	if e.refreshing {
 		s.consoleMu.Unlock()
 		return
 	}
 	e.refreshing = true
-	s.consoleCache[ispID] = e
+	s.consoleCache[k] = e
 	s.consoleMu.Unlock()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		data := s.flows.ConsoleData(ctx, ispID, s.flowDays)
-		s.nameDevices(ctx, ispID, data.Records)
+		data := s.flows.ConsoleData(ctx, k.isp, k.days)
+		s.nameDevices(ctx, k.isp, data.Records)
 		s.consoleMu.Lock()
 		defer s.consoleMu.Unlock()
 		// ConsoleData zero-fills on query error, so a transient ClickHouse hiccup
 		// yields an Empty snapshot. Don't overwrite a previously-good one with it —
 		// keep serving the last good data (just clear the refreshing flag) rather
 		// than flashing a blank "no data" dashboard until the next refresh.
-		if prev, ok := s.consoleCache[ispID]; ok && data.Empty && !prev.data.Empty {
+		if prev, ok := s.consoleCache[k]; ok && data.Empty && !prev.data.Empty {
 			prev.refreshing = false
-			s.consoleCache[ispID] = prev
+			s.consoleCache[k] = prev
 			return
 		}
-		s.consoleCache[ispID] = consoleCacheEntry{at: time.Now(), data: data}
+		s.consoleCache[k] = consoleCacheEntry{at: time.Now(), data: data}
 	}()
 }
 
