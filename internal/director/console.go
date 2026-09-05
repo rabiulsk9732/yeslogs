@@ -360,6 +360,25 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 // rows can't turn the total into an expensive full scan; beyond it we report N+.
 const countCap = 100000
 
+// dedupKey collapses evidence that was stored more than once. A router with two
+// WAN uplinks and one traffic-flow target per uplink exports every flow twice:
+// same translation, same timestamps, differing only in the UDP source address the
+// copy arrived from (exporter_ip, and — before the two uplinks were merged onto
+// one device_id — a second device_id). Both copies are kept on disk on purpose.
+// Dropping one at ingest would be a skip rule on evidence, and this fleet has
+// already lost records that way (see the 2026-08-26 skip-rule incident), so the
+// collapse happens here instead: at the layer that answers lawful requests, where
+// showing the same translation twice is its own kind of wrong.
+//
+// The list is deliberately WIDE — every evidence column EXCEPT exporter_ip and
+// device_id, the only two that legitimately differ between copies of one flow.
+// Anything differing in any other field survives as its own row, so an error in
+// this list leaves a duplicate visible rather than hiding a distinct record.
+// Never narrow it to "the 5-tuple": a NAT create and its matching delete can share
+// one, and collapsing those would erase the end of a subscriber's translation.
+const dedupKey = "flow_start, flow_end, src_ip, src_port, dst_ip, dst_port, " +
+	"nat_public_ip, nat_public_port, protocol, bytes, packets, flow_type, nat_event, username"
+
 // SearchCount returns the number of hot rows matching f, capped at countCap
 // (a returned value == countCap means "countCap or more").
 func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) uint64 {
@@ -367,7 +386,7 @@ func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) uint64 {
 	if !ok {
 		return 0
 	}
-	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT %d)`, r.db, where, countCap)
+	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT 1 BY %s LIMIT %d)`, r.db, where, dedupKey, countCap)
 	var n uint64
 	_ = r.conn.QueryRow(ctx, q, args...).Scan(&n)
 	return n
@@ -382,7 +401,7 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 		return nil, fmt.Errorf("no filter")
 	}
 	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, dst_port, protocol, flow_type, username, nat_event
-		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT %d OFFSET %d`, r.db, where, limit, offset)
+		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT 1 BY %s LIMIT %d OFFSET %d`, r.db, where, dedupKey, limit, offset)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err

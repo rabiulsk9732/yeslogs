@@ -245,3 +245,36 @@ func TestEmptyUsernameIsNotAFilter(t *testing.T) {
 		t.Errorf("an unset username became a filter: %s", where)
 	}
 }
+
+func TestDedupKeyCollapsesCopiesWithoutHidingDistinctRecords(t *testing.T) {
+	// A router with two WAN uplinks and one traffic-flow target per uplink exports
+	// every flow twice. XCESSNET's NAS did exactly that on 2026-09-05: 139,820 rows
+	// stored in the overlap window held only 74,681 distinct records. Both copies
+	// are kept on disk deliberately — dropping one at ingest would be a skip rule
+	// on evidence — so the collapse happens in the query instead.
+	//
+	// These three columns differ between copies of the SAME flow. Any one of them
+	// in the key makes every duplicate look distinct and the collapse silently
+	// stops working. created_at is the subtle one: the copies land in different
+	// insert batches, and measured pairs differed by a second (20:48:00 vs :01).
+	for _, banned := range []string{"exporter_ip", "device_id", "created_at"} {
+		if strings.Contains(dedupKey, banned) {
+			t.Errorf("dedupKey must not contain %q — copies of one flow differ there, "+
+				"so including it defeats the collapse entirely: %s", banned, dedupKey)
+		}
+	}
+	// Everything that carries evidence must stay. A narrower key merges records
+	// that are genuinely different: a NAT create and its matching delete can share
+	// a 5-tuple, and collapsing those erases the end of a subscriber's translation.
+	// Failing wide leaves a visible duplicate; failing narrow hides a record.
+	for _, want := range []string{
+		"flow_start", "flow_end", "src_ip", "src_port", "dst_ip", "dst_port",
+		"nat_public_ip", "nat_public_port", "protocol", "bytes", "packets",
+		"flow_type", "nat_event", "username",
+	} {
+		if !strings.Contains(dedupKey, want) {
+			t.Errorf("dedupKey dropped %q — a narrower key hides distinct records "+
+				"rather than duplicates: %s", want, dedupKey)
+		}
+	}
+}

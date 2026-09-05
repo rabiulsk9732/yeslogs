@@ -104,8 +104,8 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		src = fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
 	}
 	q := fmt.Sprintf(`SELECT %s AS ts, device_id, src_ip, src_port, nat_public_ip, nat_public_port,
-		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT %d%s`,
-		tsExpr, src, strings.Join(conds, " AND "), limit, coldReadSettings)
+		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT 1 BY %s LIMIT %d%s`,
+		tsExpr, src, strings.Join(conds, " AND "), dedupKey, limit, coldReadSettings)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
