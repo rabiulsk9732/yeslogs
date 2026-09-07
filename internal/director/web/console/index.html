@@ -294,7 +294,7 @@
       height: 31px;
       padding: 0 11px;
       font-size: 12.5px;
-      border-radius: 7px
+      border-radius: var(--r-sm)
     }
 
     .inp {
@@ -407,7 +407,7 @@
       align-items: center;
       gap: 5px;
       padding: 3px 9px;
-      border-radius: 6px;
+      border-radius: var(--r-sm);
       font-size: 11.5px;
       font-weight: 600;
       line-height: 1.6
@@ -473,7 +473,7 @@
       font-size: 23px;
       line-height: 1;
       cursor: pointer;
-      border-radius: 7px;
+      border-radius: var(--r-sm);
       z-index: 2
     }
 
@@ -701,7 +701,7 @@
       height: 32px;
       padding: 0 11px;
       border: 1px solid var(--bd);
-      border-radius: 7px;
+      border-radius: var(--r-sm);
       background: #fff;
       color: var(--pri);
       cursor: pointer;
@@ -1201,9 +1201,24 @@
     .umenu .danger:hover { background: #fdf1f1 }
     .umenu .danger .ms { color: var(--bad) }
 
-    .page-band { flex: 0 0 auto; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 18px 22px 14px; background: var(--card); border-bottom: 1px solid #dfe5ec; flex-wrap: wrap }
-    .page-band h1 { margin: 0; font-size: 22px }
-    .page-band p { margin: 3px 0 0; font-size: 13px; color: var(--mut) }
+    .page-band { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 22px; background: var(--card); border-bottom: 1px solid #dfe5ec; flex-wrap: wrap }
+    .page-heading { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1 1 300px }
+    .page-icon { display: grid; place-items: center; width: 56px; height: 56px; flex: 0 0 auto; background: var(--info-bg); color: var(--pri); border: 1px solid var(--info-bd) }
+    .page-icon .ms { font-size: 34px }
+    .page-heading > div { min-width: 0 }
+    .page-band h1 { margin: 0; font-size: 28px; line-height: 1.2; overflow-wrap: anywhere }
+    .page-band p { margin: 4px 0 0; font-size: 13px; line-height: 1.4; color: var(--mut) }
+    .breadcrumb { margin-left: auto; font-size: 12.5px; color: var(--mut) }
+    .breadcrumb ol { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0 }
+    .breadcrumb li { display: inline-flex; align-items: center; gap: 8px }
+    .breadcrumb li + li::before { content: '/'; color: var(--faint) }
+    .breadcrumb button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 4px 0; font: inherit; color: var(--pri-link); cursor: pointer }
+    .breadcrumb button:hover { text-decoration: underline }
+    .breadcrumb button:focus-visible { outline: 2px solid var(--pri); outline-offset: 3px }
+    .breadcrumb .ms { font-size: 17px }
+    .breadcrumb [aria-current] { font-weight: 600; color: var(--ink2) }
+    .page-tools { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px }
+    .page-tools[hidden] { display: none }
     .range-sw { display: flex; border: 1px solid var(--bd3); background: #f5f7fa; font-family: var(--ff-mono); font-size: 11px }
     .range-sw span { padding: 7px 12px; color: var(--mut); cursor: pointer }
     .range-sw span.on { background: var(--pri); color: #fff; font-weight: 700 }
@@ -1785,19 +1800,28 @@
       </header>
 
       <div class="page-band">
-        <div>
-          <h1 id="pageTitle">Overview</h1>
-          <p id="pageSub"></p>
+        <div class="page-heading">
+          <span class="page-icon" aria-hidden="true"><span class="ms" id="pageIcon">dashboard</span></span>
+          <div>
+            <h1 id="pageTitle">Dashboard</h1>
+            <p id="pageSub"></p>
+          </div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          <ol>
+            <li><button type="button" id="breadcrumbHome" aria-label="Go to dashboard"><span class="ms" aria-hidden="true">dashboard</span><span id="breadcrumbScope">Director</span></button></li>
+            <li aria-current="page" id="breadcrumbCurrent">Dashboard</li>
+          </ol>
+        </nav>
+      </div>
+
+      <main class="content-scroll">
+        <div class="page-tools" id="pageTools" hidden>
           <div class="range-sw" id="rangeSw">
             <span data-d="0">1H</span><span data-d="1" class="on">24H</span><span data-d="7">7D</span><span data-d="30">30D</span>
           </div>
           <button class="btn out sm" id="bandExport"><span class="ms">download</span>Export</button>
         </div>
-      </div>
-
-      <main class="content-scroll">
         <div id="pageBody"></div>
         <div class="page-foot">
           <span>YesLogs Director &middot; Sayra Technologies &middot; DoT / IPDR retention mode active</span>
@@ -2006,6 +2030,7 @@
     })();
 
     $('#bandExport').on('click', () => dashboardNavigate('Reports'));
+    $('#breadcrumbHome').on('click', () => dashboardNavigate('Overview'));
     $('#dashboardAlerts').on('click', async () => {
       if (S.view !== 'Overview') await dashboardNavigate('Overview');
       document.getElementById('dash-attention-body')?.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2037,13 +2062,16 @@
     function setHead() {
       const m = MENU.find(x => x[0] === S.view);
       $('#pageTitle').text(S.view === 'Overview' ? 'Dashboard' : S.view); $('#pageSub').text(m ? m[2] : '');
+      $('#pageIcon').text(m ? m[1] : 'dashboard');
+      $('#breadcrumbScope').text(S.me?.isDirector ? 'Director' : 'ISP');
+      $('#breadcrumbCurrent').text(S.view === 'Overview' ? 'Dashboard' : S.view);
     }
     function renderPage() {
       YesLogsDashboard.dispose();
       setHead();
       $('#globalSearchWrap').hide();
-      $('#rangeSw, #bandExport').toggle(S.view !== 'Overview');
-      $('#footBuild').text(S.view === 'Overview' ? 'v1.9.0-dashboard' : 'logs.sayratechnologies.in');
+      $('#pageTools').prop('hidden', S.view === 'Overview');
+      $('#footBuild').text(S.view === 'Overview' ? 'v1.9.1-dashboard' : 'logs.sayratechnologies.in');
       const b = $('#pageBody').empty();
       return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }

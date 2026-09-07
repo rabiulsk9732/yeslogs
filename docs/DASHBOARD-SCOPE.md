@@ -12,6 +12,13 @@ widths above 1100px the dashboard has exactly two rows of five equal-width
 cards. At 1100px and below, use two columns and stacked content panels; tables
 scroll within their panels. No horizontal overflow of the document.
 
+Below the top navigation, the shared page header has a large page icon on the
+left, a large title with a short description directly below it, and breadcrumb
+navigation at the right. The breadcrumb identifies Director or ISP scope and
+the current page; its home action returns to the dashboard. On narrow screens
+the breadcrumb wraps below the heading. Buttons and status labels use the
+theme's square corners, including small actions and pagination controls.
+
 The header identifies the role/scope, reporting timezone (Asia/Kolkata / IST),
 last successful response, Refresh and Pause/Resume. Shortcuts open Logs,
 Reports and Add Device; Director also has Add ISP. The sidebar identifies ISP
