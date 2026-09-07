@@ -12,6 +12,8 @@ import (
 var (
 	ErrNotFound  = errors.New("not found")
 	ErrDuplicate = errors.New("duplicate")
+	ErrConflict  = errors.New("record changed; reload and try again")
+	ErrInUse     = errors.New("ISP still has devices or capture policies")
 )
 
 // Role identifies a user's privilege level.
@@ -26,10 +28,15 @@ const (
 
 // ISP is a tenant (a customer ISP that produces flow logs).
 type ISP struct {
-	ID        uint32 // also the flow isp_id stamped on records
-	Name      string
-	Enabled   bool
-	CreatedAt time.Time
+	ID          uint32 // also the flow isp_id stamped on records
+	Name        string
+	Enabled     bool
+	CreatedAt   time.Time
+	Username    string
+	Email       string
+	Phone       string
+	AdminUserID int64
+	Version     uint64
 }
 
 // User is a login. Director users have ISPID == 0; ISP users are scoped to one.
@@ -37,7 +44,7 @@ type User struct {
 	ID           int64
 	ISPID        uint32
 	Email        string
-	PasswordHash string
+	PasswordHash string `json:"-"`
 	Role         Role
 	CreatedAt    time.Time
 }
@@ -104,6 +111,10 @@ type Store interface {
 	ListISPs(ctx context.Context) ([]ISP, error)
 	GetISP(ctx context.Context, id uint32) (ISP, error)
 	SetISPEnabled(ctx context.Context, id uint32, enabled bool) error
+	// SaveISPAccount atomically saves a tenant and its primary login. ID zero creates.
+	SaveISPAccount(ctx context.Context, isp ISP, passwordHash string) (ISP, error)
+	DeleteISPAccount(ctx context.Context, id uint32, version uint64) error
+	GetUserByLogin(ctx context.Context, login string) (User, error)
 
 	CreateUser(ctx context.Context, u User) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)

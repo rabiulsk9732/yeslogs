@@ -60,7 +60,7 @@ func (m *MemStore) GetISP(_ context.Context, id uint32) (ISP, error) {
 	if !ok {
 		return ISP{}, ErrNotFound
 	}
-	return v, nil
+	return m.ispAccountLocked(v), nil
 }
 
 func (m *MemStore) ListISPs(context.Context) ([]ISP, error) {
@@ -68,7 +68,7 @@ func (m *MemStore) ListISPs(context.Context) ([]ISP, error) {
 	defer m.mu.Unlock()
 	out := make([]ISP, 0, len(m.isps))
 	for _, v := range m.isps {
-		out = append(out, v)
+		out = append(out, m.ispAccountLocked(v))
 	}
 	return out, nil
 }
@@ -81,6 +81,9 @@ func (m *MemStore) SetISPEnabled(_ context.Context, id uint32, enabled bool) err
 		return ErrNotFound
 	}
 	v.Enabled = enabled
+	if v.Version > 0 {
+		v.Version++
+	}
 	m.isps[id] = v
 	return nil
 }

@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict legacy YesLogs HTTP backend to local gateway access
+After=network-pre.target
+Before=yeslogs-management.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/natlog/management-guard.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

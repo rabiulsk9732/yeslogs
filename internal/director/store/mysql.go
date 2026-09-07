@@ -56,6 +56,13 @@ var schema = []string{
 		role VARCHAR(16) NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`CREATE TABLE IF NOT EXISTS isp_profiles (
+        isp_id INT UNSIGNED NOT NULL PRIMARY KEY,
+        username VARCHAR(64) NOT NULL UNIQUE,
+        phone VARCHAR(32) NOT NULL,
+        admin_user_id BIGINT NOT NULL UNIQUE,
+        version BIGINT UNSIGNED NOT NULL DEFAULT 1
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	`CREATE TABLE IF NOT EXISTS devices (
 		id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
 		isp_id INT UNSIGNED NOT NULL,
@@ -141,8 +148,8 @@ func (s *MySQLStore) CreateISP(ctx context.Context, name string) (ISP, error) {
 
 func (s *MySQLStore) GetISP(ctx context.Context, id uint32) (ISP, error) {
 	var v ISP
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, enabled, created_at FROM isps WHERE id=?`, id).
-		Scan(&v.ID, &v.Name, &v.Enabled, &v.CreatedAt)
+	err := s.db.QueryRowContext(ctx, ispSelect+` WHERE i.id=?`, id).
+		Scan(&v.ID, &v.Name, &v.Enabled, &v.CreatedAt, &v.Username, &v.Email, &v.Phone, &v.AdminUserID, &v.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ISP{}, ErrNotFound
 	}
@@ -150,7 +157,7 @@ func (s *MySQLStore) GetISP(ctx context.Context, id uint32) (ISP, error) {
 }
 
 func (s *MySQLStore) ListISPs(ctx context.Context) ([]ISP, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, enabled, created_at FROM isps ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, ispSelect+` ORDER BY i.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +165,7 @@ func (s *MySQLStore) ListISPs(ctx context.Context) ([]ISP, error) {
 	var out []ISP
 	for rows.Next() {
 		var v ISP
-		if err := rows.Scan(&v.ID, &v.Name, &v.Enabled, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &v.Enabled, &v.CreatedAt, &v.Username, &v.Email, &v.Phone, &v.AdminUserID, &v.Version); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -167,8 +174,18 @@ func (s *MySQLStore) ListISPs(ctx context.Context) ([]ISP, error) {
 }
 
 func (s *MySQLStore) SetISPEnabled(ctx context.Context, id uint32, enabled bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE isps SET enabled=? WHERE id=?`, enabled, id)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE isps SET enabled=? WHERE id=?`, enabled, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE isp_profiles SET version=version+1 WHERE isp_id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *MySQLStore) CreateUser(ctx context.Context, u User) (User, error) {

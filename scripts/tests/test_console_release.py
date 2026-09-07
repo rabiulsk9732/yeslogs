@@ -106,6 +106,32 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "separately deployed backend"):
             release.check_backend(self.repo, self.baseline, revision)
 
+    def test_management_deployment_does_not_approve_collector_changes(self):
+        source = self.repo / "internal/director/isps.go"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("package director\n")
+        management = self.commit()
+        release.check_backend(self.repo, self.baseline, management, management)
+        source.write_text("package director\n// new, not installed\n")
+        candidate = self.commit()
+        with self.assertRaisesRegex(ValueError, "separately deployed backend"):
+            release.check_backend(self.repo, self.baseline, candidate, management)
+        (self.repo / "go.mod").write_text("module changed\n")
+        candidate = self.commit()
+        with self.assertRaisesRegex(ValueError, "separately deployed backend"):
+            release.check_backend(self.repo, self.baseline, candidate, candidate)
+
+    def test_management_probe_requires_the_installed_revision(self):
+        config = {"management_revision": self.baseline,
+                  "management_probe_url": "http://127.0.0.1:8081/api/v1/management-version"}
+        with patch.object(release.urllib.request, "urlopen") as request:
+            request.return_value.__enter__.return_value = io.StringIO('{"revision":"wrong"}')
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                release.probe_management(config)
+        config["management_probe_url"] = "https://example.invalid/version"
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            release.probe_management(config)
+
     def test_corrupted_release_cannot_replace_current(self):
         output = self.build(self.baseline)
         (output / "index.html").write_text("corrupt")

@@ -95,3 +95,12 @@ No loss count can be inferred just from a successful restart. UI delivery now
 avoids this restart gap. Backend upgrades need a separate ingestion continuity
 design (for example, a durable ingress layer); this pipeline does not promise
 zero packet loss for backend restarts or network failures.
+
+## Separately deployed ISP management
+
+The ISP module now uses the standalone Director gateway documented in
+[ISP-MANAGEMENT.md](ISP-MANAGEMENT.md). The fetcher can verify an independently
+installed `management_revision` for `cmd/director` and `internal/director`, with
+an exact-revision loopback process probe. The collector `backend_revision`
+remains unchanged. This is an additional verified component baseline, not an
+automatic backend upgrade or permission to skip collector compatibility checks.

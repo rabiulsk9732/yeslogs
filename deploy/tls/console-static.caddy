@@ -16,8 +16,8 @@
 		file_server
 	}
 
-	# APIs, legacy pages and legacy asset URLs retain the existing backend.
+	# ISP/account management runs independently; other APIs forward to natlog.
 	handle {
-		reverse_proxy 127.0.0.1:8080
+		reverse_proxy 127.0.0.1:8081
 	}
 }

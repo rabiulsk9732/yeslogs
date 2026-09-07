@@ -557,7 +557,15 @@ func (s *Server) currentIdentity(r *http.Request) (Identity, bool) {
 	if err != nil {
 		return Identity{}, false
 	}
-	return s.parseSession(c.Value)
+	id, ok := s.parseSession(c.Value)
+	if !ok || !s.revalidateSessions {
+		return id, ok
+	}
+	u, err := s.store.GetUser(r.Context(), id.UserID)
+	if err != nil || u.Email != id.Email || u.ISPID != id.ISPID || u.Role != id.Role || !s.ispLoginAllowed(r.Context(), u) {
+		return Identity{}, false
+	}
+	return id, true
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -583,7 +591,7 @@ func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.TrimSpace(strings.ToLower(body.Email))
-	u, err := s.store.GetUserByEmail(r.Context(), email)
+	u, err := s.store.GetUserByLogin(r.Context(), email)
 	hash := s.dummyHash
 	if err == nil {
 		hash = u.PasswordHash

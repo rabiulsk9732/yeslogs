@@ -39,7 +39,8 @@ type config struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"clickhouse"`
-	FlowDays int `yaml:"flow_days"`
+	FlowDays int    `yaml:"flow_days"`
+	Upstream string `yaml:"upstream"`
 }
 
 func main() {
@@ -138,15 +139,23 @@ func run() error {
 	}
 
 	srv, err := director.New(director.Config{
-		SessionKey:   []byte(cfg.SessionKey),
-		CookieSecure: cfg.CookieSecure,
-		FlowDays:     cfg.FlowDays,
+		SessionKey:         []byte(cfg.SessionKey),
+		CookieSecure:       cfg.CookieSecure,
+		FlowDays:           cfg.FlowDays,
+		RevalidateSessions: true,
 	}, st, fr, log)
 	if err != nil {
 		return err
 	}
 
-	hs := &http.Server{Addr: cfg.Bind, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	handler := srv.Handler()
+	if cfg.Upstream != "" {
+		handler, err = srv.ManagementHandler(cfg.Upstream)
+		if err != nil {
+			return err
+		}
+	}
+	hs := &http.Server{Addr: cfg.Bind, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("director listening", "bind", cfg.Bind, "clickhouse", cfg.ClickHouse.Addr != "")

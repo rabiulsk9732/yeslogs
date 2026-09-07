@@ -35,22 +35,24 @@ const flowWindowDays = 1
 
 // Config configures the Director server.
 type Config struct {
-	SessionKey   []byte
-	CookieSecure bool
-	FlowDays     int
+	SessionKey         []byte
+	CookieSecure       bool
+	FlowDays           int
+	RevalidateSessions bool
 }
 
 // Server is the Director HTTP service.
 type Server struct {
-	store      store.Store
-	flows      *FlowReader // may be nil if ClickHouse is not configured
-	tmpl       *template.Template
-	sessionKey []byte
-	secure     bool
-	flowDays   int
-	dummyHash  string // bcrypt hash used to equalize login timing for unknown users
-	startedAt  time.Time
-	log        *slog.Logger
+	revalidateSessions bool
+	store              store.Store
+	flows              *FlowReader // may be nil if ClickHouse is not configured
+	tmpl               *template.Template
+	sessionKey         []byte
+	secure             bool
+	flowDays           int
+	dummyHash          string // bcrypt hash used to equalize login timing for unknown users
+	startedAt          time.Time
+	log                *slog.Logger
 
 	// retention / archive (optional; set via SetArchive / SetRetentionDays).
 	// Guarded by archMu — written by the applier goroutine, read by handlers.
@@ -166,7 +168,7 @@ func New(cfg Config, st store.Store, fr *FlowReader, log *slog.Logger) (*Server,
 		},
 	}
 	return &Server{
-		store: st, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure,
+		store: st, revalidateSessions: cfg.RevalidateSessions, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure,
 		flowDays: days, dummyHash: dummy, startedAt: time.Now(), log: log,
 		crmHTTP: crmHTTP, crmCache: map[string]crmCacheEntry{},
 	}, nil
@@ -188,6 +190,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/console/data", s.handleConsoleData)
 	mux.HandleFunc("GET /api/v1/isps", s.apiListISPs)
 	mux.HandleFunc("POST /api/v1/isps", s.apiCreateISP)
+	mux.HandleFunc("GET /api/v1/isps/{id}", s.apiGetISP)
+	mux.HandleFunc("PUT /api/v1/isps/{id}", s.apiUpdateISP)
+	mux.HandleFunc("DELETE /api/v1/isps/{id}", s.apiDeleteISP)
 	mux.HandleFunc("POST /api/v1/isps/{id}/toggle", s.apiToggleISP)
 	mux.HandleFunc("GET /api/v1/devices", s.apiListDevices)
 	mux.HandleFunc("POST /api/v1/devices", s.apiCreateDevice)
@@ -304,7 +309,7 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	email := strings.TrimSpace(strings.ToLower(r.FormValue("email")))
 	pw := r.FormValue("password")
-	u, err := s.store.GetUserByEmail(r.Context(), email)
+	u, err := s.store.GetUserByLogin(r.Context(), email)
 	// Always run bcrypt (against a dummy hash for unknown users) so the response
 	// time does not reveal whether the account exists.
 	hash := s.dummyHash
@@ -326,10 +331,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // ispLoginAllowed reports whether the user may sign in: directors always may; an
 // ISP user may only if their tenant exists and is enabled. (Disabling an ISP
-// blocks new logins; existing stateless sessions expire within sessionTTL.)
+// blocks new logins; the management gateway also revalidates existing sessions.)
 func (s *Server) ispLoginAllowed(ctx context.Context, u store.User) bool {
-	if u.ISPID == 0 {
-		return true
+	if u.Role == store.RoleDirector {
+		return u.ISPID == 0
+	}
+	if u.Role != store.RoleISP || u.ISPID == 0 {
+		return false
 	}
 	isp, err := s.store.GetISP(ctx, u.ISPID)
 	return err == nil && isp.Enabled

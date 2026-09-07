@@ -1646,6 +1646,8 @@
   </style>
   <link rel="stylesheet" href="/assets/dashboard.css">
   <script src="/assets/dashboard.js"></script>
+  <link rel="stylesheet" href="/assets/isps.css">
+  <script src="/assets/isps.js"></script>
 </head>
 
 <body>
@@ -1700,7 +1702,7 @@
             <div id="login-err"
               style="display:none;background:#fdecec;color:var(--bad);border-radius:5px;padding:9px 12px;font-size:13px;margin-bottom:16px">
             </div>
-            <label class="lbl">Email</label>
+            <label class="lbl" for="li-email">Email or username</label>
             <div
               style="display:flex;align-items:center;border:1px solid #ced4da;border-radius:5px;height:42px;padding:0 12px;margin-bottom:16px;gap:10px">
               <i class="fas fa-user" style="color:var(--mut);font-size:14px"></i>
@@ -1923,7 +1925,7 @@
     }
 
     // ---- auth ----
-    function showLogin() { YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
+    function showLogin() { YesLogsISPs.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
     function showApp() { $('#login').css('display', 'none'); $('#app').css('display', 'grid'); }
     function initials(email) { const n = (email || '?').split('@')[0].split(/[.\-_]/); const a = (n[0] || '?')[0] || '?', b = (n[1] || '')[0] || ''; return (a + b).toUpperCase(); }
 
@@ -2038,7 +2040,7 @@
 
     // ---- data ----
     async function loadData() {
-      if (S.view === 'Overview') return renderPage();
+      if (S.view === 'Overview' || S.view === 'ISPs') return renderPage();
       const r = await api('/api/v1/console/data?days=' + encodeURIComponent(S.days));
       if (r.status === 401) { showLogin(); return; }
       S.data = await r.json();
@@ -2068,10 +2070,11 @@
     }
     function renderPage() {
       YesLogsDashboard.dispose();
+      YesLogsISPs.dispose();
       setHead();
       $('#globalSearchWrap').hide();
-      $('#pageTools').prop('hidden', S.view === 'Overview');
-      $('#footBuild').text(S.view === 'Overview' ? 'v1.9.1-dashboard' : 'logs.sayratechnologies.in');
+      $('#pageTools').prop('hidden', S.view === 'Overview' || S.view === 'ISPs');
+      $('#footBuild').text(['Overview', 'ISPs'].includes(S.view) ? 'v1.10.0-isps' : 'logs.sayratechnologies.in');
       const b = $('#pageBody').empty();
       return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
@@ -2086,6 +2089,7 @@
         if (filters.isp && S.me.isDirector) $('#s-isp').val(String(filters.isp)).trigger('change');
         if (filters.device) $('#s-dev').val(String(filters.device));
       }
+      if (view === 'ISPs' && filters.add) $('#isp-create').trigger('click');
       if (view === 'Devices' && filters.add) $('#open-add').trigger('click');
     }
     function pgOverview(b) {
@@ -2542,33 +2546,7 @@ async function pgCompliance(b){
 
     // ==================== ISPs (Director) ====================
     async function pgISPs(b) {
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading ISPs…</div>');
-      const r = await api('/api/v1/isps');
-      if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load ISPs (Director only).</div>'); return; }
-      const isps = (await r.json()).isps || []; // null-safe (empty list serializes as null)
-      let h = `<div class="card" style="margin-bottom:20px">${chead('fa-building', 'Onboard ISP (tenant)')}
-  <div style="padding:16px 18px 4px">${note("Each ISP is an isolated tenant — its users only ever see their own devices, flows and reports. Optionally create the ISP's first admin login now; you can add more users later.", 'fa-circle-info')}</div>
-  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
-    <div style="flex:1 1 220px"><label class="lbl">ISP name<span class="req">*</span></label><input id="isp-name" class="inp" placeholder="Wadhai Online Multi Services">${hint('Shown across the console; also the tenant scope')}</div>
-    <div style="flex:1 1 220px"><label class="lbl">ISP admin email</label><input id="isp-email" class="inp" placeholder="admin@wadhai.in">${hint('Optional — the tenant login (leave blank to add later)')}</div>
-    <div style="flex:1 1 170px"><label class="lbl">ISP admin password</label><input id="isp-pass" type="password" class="inp" placeholder="••••••••">${hint('Min 8 chars; share securely')}</div>
-    <div style="padding-top:23px"><button id="isp-add" class="btn"><i class="fas fa-plus"></i> Create ISP</button></div>
-  </div><div id="isp-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>`;
-      h += '<div class="card">' + chead('fa-list-check', 'ISPs', pill(isps.length + ' tenant' + (isps.length === 1 ? '' : 's'), 'mut')) + '<div style="overflow-x:auto"><table><thead><tr><th>isp_id</th><th>Name</th><th>Status</th><th>Created (IST)</th><th></th></tr></thead><tbody>';
-      if (!isps.length) h += emptyRow(5, 'fa-building', 'No ISPs yet', 'Onboard your first ISP tenant above to start collecting their NAT/NetFlow logs.');
-      isps.forEach(i => {
-        h += `<tr><td class="mono">${i.ID}</td><td style="font-weight:600;color:var(--ink)">${esc(i.Name)}</td>
-    <td>${i.Enabled ? pill('enabled', 'ok') : pill('disabled', 'mut')}</td>
-    <td class="mono" style="color:var(--slate)">${(i.CreatedAt || '').replace('T', ' ').slice(0, 16)}</td>
-    <td style="text-align:right"><button class="btn out sm isp-tog" data-id="${i.ID}">${i.Enabled ? 'Disable' : 'Enable'}</button></td></tr>`;
-      });
-      h += '</tbody></table></div></div>';
-      b.html(h);
-      $('#isp-add').on('click', async () => {
-        const r = await apiJSON('/api/v1/isps', 'POST', { Name: $('#isp-name').val(), AdminEmail: $('#isp-email').val(), AdminPassword: $('#isp-pass').val() });
-        if (r.status === 200) { pgISPs(b); } else { const e = await r.json().catch(() => ({})); $('#isp-msg').text(e.error || 'failed'); }
-      });
-      $('.isp-tog').on('click', async function () { await apiJSON('/api/v1/isps/' + $(this).data('id') + '/toggle', 'POST'); pgISPs(b); });
+      return YesLogsISPs.mount(b[0], { csrf: S.csrf, expired: showLogin, toast });
     }
 
     // ==================== DEVICES ====================

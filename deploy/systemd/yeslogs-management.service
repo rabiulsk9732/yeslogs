@@ -1,0 +1,23 @@
+[Unit]
+Description=YesLogs ISP management gateway (collector stays running)
+After=network.target mariadb.service natlog.service yeslogs-management-guard.service
+Requires=yeslogs-management-guard.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/yeslogs-management --config /etc/natlog/management.yaml
+Restart=on-failure
+RestartSec=3
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

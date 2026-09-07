@@ -21,6 +21,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Test release validation and rollback
         run: python3 -m unittest discover -s scripts/tests -v
+      - name: Test Director management backend
+        run: go test ./internal/director/... ./cmd/director
       - name: Build the exact committed UI
         run: python3 scripts/console-release.py build --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/console"
       - name: Install browser test dependencies
@@ -30,6 +32,8 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Check the versioned release in a browser
         run: node scripts/check-console.cjs "$RUNNER_TEMP/console"
+      - name: Check ISP modal CRUD
+        run: node scripts/check-isps.cjs "$RUNNER_TEMP/console"
       - name: Check Director and ISP dashboards
         run: node scripts/check-dashboard.cjs "$RUNNER_TEMP/console"
 

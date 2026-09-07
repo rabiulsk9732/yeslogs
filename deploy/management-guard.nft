@@ -1,0 +1,5 @@
+# Own only this table. Preserve all other host rules and all UDP receivers.
+add table inet yeslogs_management
+flush table inet yeslogs_management
+add chain inet yeslogs_management input { type filter hook input priority 0; policy accept; }
+add rule inet yeslogs_management input iifname != "lo" tcp dport 8080 counter reject with tcp reset

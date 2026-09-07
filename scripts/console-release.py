@@ -136,12 +136,36 @@ def build(repo, revision, output):
     return revision
 
 
-def check_backend(repo, baseline, candidate):
+def check_backend(repo, baseline, candidate, management_revision=None):
     changes = git(repo, "diff", "--name-only", baseline, candidate, "--",
                   "cmd", "internal", "configs", "go.mod", "go.sum",
                   ":(exclude)" + CONSOLE).decode().splitlines()
+    if management_revision:
+        if not SHA.fullmatch(management_revision):
+            raise ValueError("Management revision must be a full commit ID")
+        # The separately installed Director owns only control-plane code. Other
+        # collector code and shared dependencies still match the original binary.
+        managed = [p for p in changes if p.startswith(("internal/director/", "cmd/director/"))]
+        if managed:
+            drift = git(repo, "diff", "--name-only", management_revision, candidate,
+                        "--", *managed).decode().splitlines()
+            if not drift:
+                changes = [p for p in changes if p not in managed]
     if changes:
         raise ValueError("UI release needs a separately deployed backend; blocked: " + ", ".join(changes[:12]))
+
+
+def probe_management(config):
+    revision = config.get("management_revision")
+    if not revision:
+        return
+    url = config.get("management_probe_url", "")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port:
+        raise ValueError("Management probe must use an explicit loopback HTTP port")
+    with urllib.request.urlopen(url, timeout=10) as response:
+        if json.load(response).get("revision") != revision:
+            raise ValueError("Installed management backend revision does not match configuration")
 
 
 def verify_release(release):
@@ -223,7 +247,8 @@ def fetch(config):
         revision = git(repo, "rev-parse", "refs/remotes/origin/console-live").decode().strip()
         # Only CI-promoted commits on main, and never silently move backwards.
         git(repo, "merge-base", "--is-ancestor", revision, "refs/remotes/origin/main")
-        check_backend(repo, config["backend_revision"], revision)
+        check_backend(repo, config["backend_revision"], revision, config.get("management_revision"))
+        probe_management(config)
         current = root / "current" / "ui-version.json"
         if current.exists():
             old = json.loads(current.read_text())["revision"]

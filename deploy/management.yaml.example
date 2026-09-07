@@ -1,0 +1,9 @@
+# Reuse cp.mysql_dsn and cp.session_key from the installed natlog configuration.
+# Protect the real file with mode 0600. Bind only to loopback.
+bind: 127.0.0.1:8081
+upstream: http://127.0.0.1:8080
+session_key: REPLACE_WITH_EXISTING_SESSION_KEY
+cookie_secure: true
+mysql_dsn: REPLACE_WITH_EXISTING_MYSQL_DSN
+flow_days: 1
+# Do not configure ClickHouse here: flow/runtime APIs go to the collector.

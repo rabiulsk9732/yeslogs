@@ -14,3 +14,10 @@
   only the intended, reviewed changes. Do not stage unrelated user work.
 - Runtime backend changes are outside static hot reload. Preserve the
   collector's ingestion continuity when planning backend deployments.
+
+- Module index pages start with five statistics cards on desktop. Create and
+  edit use modals with jQuery AJAX submission, inline client validation and
+  matching server validation. Apply this as each module is refined; the locked
+  Dashboard retains its explicit ten-card layout.
+- ISP onboarding requires name, unique username/email, phone, password and
+  confirmation, and an explicit status. Edit preserves the password if blank.

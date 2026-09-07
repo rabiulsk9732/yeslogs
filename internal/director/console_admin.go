@@ -65,63 +65,6 @@ func (s *Server) jsonErr(w http.ResponseWriter, err error) {
 
 // ---- ISPs (director only) ----
 
-func (s *Server) apiListISPs(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.authJSON(w, r)
-	if !ok {
-		return
-	}
-	if !id.isDirector() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-		return
-	}
-	isps, err := s.store.ListISPs(r.Context())
-	if err != nil {
-		s.log.Error("api list isps", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"isps": nz(isps)})
-}
-
-func (s *Server) apiCreateISP(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.authJSON(w, r)
-	if !ok {
-		return
-	}
-	if !id.isDirector() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
-		return
-	}
-	if !s.csrfOK(w, r, id) {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
-	var body struct {
-		Name, AdminEmail, AdminPassword string
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		s.jsonErr(w, clientErr("bad request"))
-		return
-	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		s.jsonErr(w, clientErr("name required"))
-		return
-	}
-	isp, err := s.store.CreateISP(r.Context(), name)
-	if err != nil {
-		s.jsonErr(w, err)
-		return
-	}
-	email := strings.TrimSpace(strings.ToLower(body.AdminEmail))
-	if email != "" && body.AdminPassword != "" {
-		if hash, herr := HashPassword(body.AdminPassword); herr == nil {
-			_, _ = s.store.CreateUser(r.Context(), store.User{ISPID: isp.ID, Email: email, PasswordHash: hash, Role: store.RoleISP})
-		}
-	}
-	writeJSON(w, http.StatusOK, isp)
-}
-
 func (s *Server) apiToggleISP(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
 	if !ok {
