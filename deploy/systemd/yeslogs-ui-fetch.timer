@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a validated YesLogs console release every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=yeslogs-ui-fetch.service
+
+[Install]
+WantedBy=timers.target

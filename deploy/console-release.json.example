@@ -1,0 +1,8 @@
+{
+  "remote": "git@github.com:rabiulsk9732/yeslogs.git",
+  "repository": "/var/lib/yeslogs-ui/repository.git",
+  "root": "/srv/yeslogs-ui",
+  "backend_revision": "REPLACE_WITH_INSTALLED_NATLOG_VCS_REVISION",
+  "probe_url": "http://127.0.0.1",
+  "probe_host": "logs.sayratechnologies.in"
+}

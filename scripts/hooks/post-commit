@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Optional repository-local hook. Push committed main only; never stage files.
+set -euo pipefail
+if [[ "$(git symbolic-ref --quiet --short HEAD || true)" != main ]]; then
+    exit 0
+fi
+if ! git push origin HEAD:refs/heads/main; then
+    echo "Commit saved locally, but auto-push failed. Resolve the error and run git push origin main." >&2
+    exit 1
+fi

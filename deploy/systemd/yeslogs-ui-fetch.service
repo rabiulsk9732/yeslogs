@@ -1,0 +1,20 @@
+[Unit]
+Description=Fetch and atomically publish the CI-approved YesLogs console
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=GIT_TERMINAL_PROMPT=0
+ExecStart=/usr/bin/python3 /usr/local/lib/yeslogs-ui/console-release.py fetch
+TimeoutStartSec=180
+UMask=0022
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/var/lib/yeslogs-ui /srv/yeslogs-ui
+RestrictSUIDSGID=true

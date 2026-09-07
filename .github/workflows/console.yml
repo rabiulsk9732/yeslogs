@@ -1,0 +1,51 @@
+name: Console release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: console-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test release validation and rollback
+        run: python3 -m unittest discover -s scripts/tests -v
+      - name: Build the exact committed UI
+        run: python3 scripts/console-release.py build --revision "$GITHUB_SHA" --output "$RUNNER_TEMP/console"
+      - name: Install browser test dependencies
+        working-directory: tests/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Check the versioned release in a browser
+        run: node scripts/check-console.cjs "$RUNNER_TEMP/console"
+
+  promote:
+    needs: validate
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Promote only the current main commit
+        run: |
+          remote_main=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$remote_main" != "$GITHUB_SHA" ]; then
+            echo "A newer main commit exists; skipping stale release."
+            exit 0
+          fi
+          git push origin "$GITHUB_SHA:refs/heads/console-live"

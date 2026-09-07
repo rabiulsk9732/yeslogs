@@ -1,0 +1,23 @@
+# Import once at the top of the Caddyfile, then import yeslogs_console_static
+# inside the site's block. Static releases never require a natlog restart.
+(yeslogs_console_static) {
+	@console path / /index.html /ui-version.json
+	handle @console {
+		root * /srv/yeslogs-ui/current
+		header Cache-Control "no-store"
+		file_server
+	}
+
+	@release_assets path_regexp release_assets ^/_ui/[0-9a-f]{40}/assets/.+
+	handle @release_assets {
+		uri strip_prefix /_ui
+		root * /srv/yeslogs-ui/releases
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# APIs, legacy pages and legacy asset URLs retain the existing backend.
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}
