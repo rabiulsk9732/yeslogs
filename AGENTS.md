@@ -4,9 +4,9 @@
   in server-side queries/actions as well as the UI. Director scope is this
   installation unless actual fleet aggregation is implemented.
 - Retain the implemented console theme. For dashboard work, read
-  `docs/DASHBOARD-SCOPE.md` for the selected v1 component scope, metric semantics
-  and known gaps. The document is an implementation target, not evidence that
-  all components already exist.
+  `docs/DASHBOARD-SCOPE.md` for the implemented v1.9.0-dashboard scope, metric
+  semantics and known API boundaries. Both roles have ten cards: two rows of
+  five on desktop, as explicitly requested by the owner.
 - Public UI releases use the static Caddy pipeline described in
   `deploy/CONSOLE-RELEASES.md`. Do not rebuild/restart natlog for HTML/CSS/JS
   changes: restarting its UDP receiver creates an ingestion gap.

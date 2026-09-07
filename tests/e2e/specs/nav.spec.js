@@ -23,10 +23,11 @@ test('director navigation has all 10 sections in order', async ({ page }) => {
 test('overview shows the operations cards', async ({ page }) => {
   await login(page, ADMIN_EMAIL, ADMIN_PW);
   await nav(page, 'Overview');
-  await expect(page.locator('#pageBody')).toContainText('Flows Ingested');
-  await expect(page.locator('#pageBody')).toContainText('Active Dataplanes');
-  await expect(page.locator('#pageBody')).toContainText('Hot Storage Used');
-  await expect(page.locator('#pageBody')).toContainText('Queue Pressure');
+  await expect(page.locator('.dash-kpi')).toHaveCount(10);
+  await expect(page.locator('#pageBody')).toContainText('Flows decoded');
+  await expect(page.locator('#pageBody')).toContainText('Online exporters');
+  await expect(page.locator('#pageBody')).toContainText('Hot data size');
+  await expect(page.locator('#pageBody')).toContainText('Queue pressure');
 });
 
 test('capture policies can be created and assigned', async ({ page }) => {

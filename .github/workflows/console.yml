@@ -30,6 +30,8 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Check the versioned release in a browser
         run: node scripts/check-console.cjs "$RUNNER_TEMP/console"
+      - name: Check Director and ISP dashboards
+        run: node scripts/check-dashboard.cjs "$RUNNER_TEMP/console"
 
   promote:
     needs: validate

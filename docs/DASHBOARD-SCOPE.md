@@ -1,122 +1,118 @@
-# Dashboard v1 — implementation baseline
+# Dashboard — v1.9.0-dashboard release contract
 
-Decided for the dashboard planning task on 2026-09-07. This document locks the
-component scope for the next implementation; it does not claim that the new
-dashboard or its required API data already exists.
+This replaces the initial six-card proposal. The owner requested **ten cards,
+two rows of five**, and delegated the remaining component choices. The scope
+below is implemented in the static console for both Director and ISP roles.
 
-## Theme and access model
+## Theme and layout
 
-- Retain the implemented YesLogs theme: navy sidebar, blue accents, light page
-  background, white panels, compact tables, Source Sans 3 text and monospace
-  addresses/numbers. Reuse existing tokens and components.
-- Two access levels: Director and ISP. Director covers all tenants registered
-  with this installation. Independent servers are not a federated fleet unless
-  a real aggregation source has been implemented.
-- ISP views and APIs must use the authenticated tenant scope. An ISP never
-  chooses another tenant or sees global host capacity, other ISPs, credentials,
-  infrastructure administration or cross-tenant audit details.
-- The dashboard answers: Are records arriving? Are they being saved? Which
-  devices need attention? What historical evidence is available to search?
+Retain the existing navy sidebar, blue accents, colored summary tiles, white
+panels, compact tables, Source Sans 3 and monospace addresses/numbers. At desktop
+widths above 1100px the dashboard has exactly two rows of five equal-width
+cards. At 1100px and below, use two columns and stacked content panels; tables
+scroll within their panels. No horizontal overflow of the document.
 
-## Layout, top to bottom
+The header identifies the role/scope, reporting timezone (Asia/Kolkata / IST),
+last successful response, Refresh and Pause/Resume. Shortcuts open Logs,
+Reports and Add Device; Director also has Add ISP. The sidebar identifies ISP
+sessions as ISP CONSOLE. The toolbar findings button opens Needs attention.
 
-1. Header: Dashboard, explicit tenant scope, reporting timezone, updated time,
-   refresh and pause/resume. Default chart window is the last 24 hours; the
-   "today" cards explicitly use the installation's reporting timezone.
-2. Six summary cards per role, defined below.
-3. Stored-record trend (two-thirds width) and current collection/storage health
-   (one-third). Chart buckets have real timestamps and units.
-4. Prioritized "Needs attention" panel and device/tenant status table.
-5. A compact recent-record preview with a link into the full Logs page.
-6. Search Logs and Generate Report shortcuts. Director also gets Add ISP and
-   Add Device; ISP gets its authorized device-management action.
+## Ten Director cards, in display order
 
-## Director summary cards
+| Row | Cards | Semantics |
+| --- | --- | --- |
+| 1 | Registered ISPs; Enabled exporters; Online exporters; Silent exporters; No recent evidence | This installation only. Configuration, observed liveness and missing measurements are distinct. |
+| 2 | Records stored today; Flows decoded; Flows skipped; Hot data size; Queue pressure | Today in IST; decoded/skipped since process start; compressed flow-table size; current queue occupancy. |
 
-| Card | Meaning |
-| --- | --- |
-| ISPs | Registered total, with enabled/disabled breakdown |
-| Exporters receiving | Exporters with recent observed input / enabled exporters; show stale and unknown separately |
-| Records stored today | Persisted flow-record rows for today, across the installation |
-| Collector health | Observed collector/writer status, queue pressure and last successful write; unavailable is unknown |
-| Storage capacity | Actual hot-store disk usage and available disk capacity, explicitly labelled |
-| Devices needing attention | Distinct affected devices, with critical/warning breakdown and drill-down reasons |
+## Ten ISP cards, in display order
 
-The operational table has ISP, enabled/receiving exporters, records today,
-latest receive time and attention status. Selecting an ISP opens its scoped
-devices/logs. A selected ISP scope applies consistently to every tenant metric;
-host health and disk capacity remain explicitly labelled installation-wide.
+| Row | Cards | Semantics |
+| --- | --- | --- |
+| 1 | Registered exporters; Enabled exporters; Online exporters; Silent exporters; No recent evidence | Only the authenticated ISP. Disabled devices are excluded from liveness counts. |
+| 2 | Records stored today; Records in window; Subscriber IPs seen; Logged traffic volume; Public NAT IPs seen | Today or the explicitly labelled window starting yesterday 00:00 IST. Subscriber IPs are approximate distinct IPs, not an account count. Traffic volume is flow bytes, not disk usage. |
 
-## ISP summary cards
+Ten cards remain visible during loading/failure. Missing measurements are
+reported as unavailable/unknown, not zero. Failed refreshes retain previous
+values with a Stale label. Large counts can be compacted visually; their full
+value remains in the accessible label and tooltip. Cards link to useful pages.
 
-| Card | Meaning |
-| --- | --- |
-| Exporters receiving | This ISP's recently observed exporters / enabled exporters |
-| Records stored today | This ISP's persisted record rows for today |
-| Last data received | Latest observed receive timestamp for this ISP, with freshness state |
-| Searchable coverage | Observed covered days in the retention window; hot/archive availability distinguished |
-| NAT data quality | Devices with usable NAT address/port fields / graded enabled devices; unknown states separate |
-| Devices needing attention | This ISP's distinct affected devices and highest-severity reasons |
+## Components below the cards
 
-The operational table has device name, exporter IP, protocol, enabled state,
-last receive time, collection status, NAT data quality and Logs action. It has
-no other ISP names or global host resource metrics.
+1. **Records stored by hour:** 24 labelled hourly buckets for **today**, the
+   semantics the current endpoint actually supports. Total, scale and accessible
+   per-hour values. This is not a rolling-24-hour or live-packets chart.
+2. **Collector resources / Collection health:** Director sees process uptime,
+   queue pressure, actual disk free/total, memory and CPU load. ISP sees only its
+   enabled/online exporters, latest evidence timestamp and unmeasured devices.
+3. **Needs attention:** deduplicated device findings for silence, no evidence,
+   unavailable observations and NAT quality. Also observed coverage gaps;
+   Director additionally sees measured disk/queue pressure. Findings link to
+   Logs, quality review or the relevant operational page. No hardcoded ALL OK.
+4. **NAT data quality & coverage:** fully populated NAT fields, incomplete ports,
+   devices needing review, unknown grades, audit timestamp, observed dates and
+   reported missing dates. This is technical evidence quality, not a legal
+   certification or a claim that archives have been verified.
+5. **ISP collection status / Exporter status:** searchable, filterable,
+   ten-row pagination. Director gets per-ISP account state, enabled/total,
+   online, observation/quality findings and last evidence. ISP gets its own
+   devices, IPs, protocol, observations and NAT grades. Search Logs preselects
+   the corresponding ISP/device without running an unaudited automatic search.
+6. **Recent stored records:** latest ten returned records with timestamp/IST,
+   device, private/public IP:port, protocol and destination. Director also sees
+   ISP when the device can be attributed unambiguously. The full Logs page
+   retains search and export functions. Missing NAT addresses and unchanged
+   translations are labelled.
 
-## Shared component behavior
+## Refresh and failure behavior
 
-- Trend: stored records per hour for the last 24 hours, using timestamped
-  buckets. Call it "Records stored", not live ingestion throughput: stored
-  rows can include backfilled data and are not a packets-per-second signal.
-- Director health panel: collector, persistence, queue/backlog, disk and
-  archive job status, based on actual observations.
-- ISP health panel: its exporter freshness, record availability, NAT field
-  quality and coverage gaps. Archive status must be tenant-scoped and backed
-  by actual inventory; never infer successful archival from configuration.
-- Needs attention: silent exporters, input with no successful writes, unusable
-  NAT fields, and observed coverage gaps. Director additionally sees verified
-  queue, disk and archive failures. Show reason, last observation and a useful
-  next action. Count a device once even when it has multiple findings.
-- NAT field quality is a technical data-quality signal, not a legal compliance
-  certification. Packet-loss percentages require suitable measured counters;
-  gaps and silence alone do not establish the number of lost packets.
-- Recent records: latest 10 stored records, event timestamp with timezone,
-  device, private/public IP:port, protocol and destination; Director also sees
-  ISP. Label the time semantics and link to the full Logs page. Full search,
-  pagination and export configuration remain on their existing pages.
-- Refresh lightweight summaries/recent records every 15 seconds while the
-  dashboard is visible. Refresh charts/expensive coverage summaries at most
-  every 60 seconds or from a bounded cache. Pause when hidden, prevent
-  overlapping requests, preserve user focus and allow a manual refresh.
-- Every component supports loading, empty, stale and error states. Keep the
-  last successful data visible with its timestamp if a refresh fails. Unknown
-  must not become zero, healthy or "no flows".
-- Desktop: six compact summary cards with responsive wrapping; two-column
-  panels. Small screens: stacked panels and horizontally scrollable tables.
+- Overview and device inventory/health: every 15 seconds while visible.
+- Record/chart snapshots and Director host metrics: at most every 60 seconds
+  automatically. Manual Refresh requests new responses.
+- Expensive NAT/coverage audit: separately loaded, at most every five minutes
+  automatically; manual retry is available after failure. The API can return
+  cached audits, so the audit's own generated timestamp is shown.
+- No overlapping summary refreshes. Network requests have bounded timeouts;
+  navigating away or losing authentication aborts/discards dashboard requests.
+- Pause/hidden tabs stop scheduled polling. Resume and visibility changes
+  restore polling. Manual Refresh works while paused. Table filters, page and
+  focus are retained across refreshes.
+- Independent components load as their responses arrive. Failures show a
+  partial/stale banner and per-source timestamps; last-known values are kept.
+- Empty and failed responses have different presentations. An API response
+  timestamp is not presented as the time a record was persisted.
 
-## Current implementation gaps to resolve
+## Scope and existing API boundaries
 
-- `overview.go` counts enabled devices as "Active Exporters"; configuration
-  state is not proof of live collection.
-- `pgOverview` hardcodes an "ALL OK" health badge and shares that health panel
-  between roles.
-- Current cards mix process-lifetime counters and today's records; each metric
-  needs explicit time semantics. Do not compare them as a loss/delivery ratio.
-- The hourly chart currently receives bare values without timestamp labels.
-- The 15-second tail refresh updates recent rows but not all overview cards or
-  charts; the redesigned refresh must update the corresponding components.
-- Device freshness based on stored event times is not the same as receive-time
-  telemetry. New metrics must identify their actual source and limitations.
-- Some summary queries discard errors. Propagate partial/unavailable states
-  rather than rendering successful-looking zeroes.
+- Director means all tenants registered to this installation, not aggregation
+  of independent servers. The summary stays installation-wide; table search
+  does not silently change its scope.
+- ISP dashboard requests only existing tenant-scoped endpoints. It never
+  requests `/system` or `/isps`, renders no global host metrics, and additionally
+  filters inventory to the signed-in tenant. Server-side scope remains the
+  authorization boundary; hiding UI elements alone is not authorization.
+- Liveness follows the existing configured silence threshold and three-day
+  evidence lookback. Evidence can include stored flow timestamps and observed
+  dropped-flow signals; this is not a raw UDP receive-time or packet-loss meter.
+- Current summary APIs can suppress individual database-query errors, and
+  rollups can lag. The frontend handles transport/shape/availability failures
+  but cannot detect every query error hidden by a successful API response.
+- Current recent-record payloads omit ISP IDs. A repeated DeviceID across
+  tenants is not attributed by guessing; the ISP column says Not reported.
+- Last successful storage-write telemetry, verified archive inventory and
+  real rolling timestamped buckets require backend contracts. They are not
+  fabricated in this release. Existing quality observations and resources
+  provide the supported v1 panels.
 
-## Implementation and release boundary
+## Validation and release
 
-Implement Director first, then the ISP view using the same component contracts
-and explicit tenant tests. Reuse trustworthy existing endpoints where their
-scope and time semantics fit. Add required telemetry/API work explicitly; do
-not manufacture unavailable metrics to complete a visual layout.
+`scripts/check-dashboard.cjs` exercises both roles against synthetic APIs,
+5-by-2 desktop layout, responsive layout, role-scoped requests, enabled vs
+online states, missing health, stale/error/empty states, refresh/pause/hidden
+tabs, preserved filters, duplicate DeviceID attribution and Logs drill-down.
+GitHub Actions runs it against the exact versioned release bundle.
 
-Static UI changes use the GitHub CI → console-live → 30-second fetcher pipeline
-documented in [CONSOLE-RELEASES.md](../deploy/CONSOLE-RELEASES.md). Backend API and
-collector changes need a separate deployment plan that addresses ingestion
-continuity. Do not restart `natlog` merely to deliver dashboard HTML/CSS/JS.
+The Director dashboard is additionally checked against live APIs in a browser.
+UI delivery follows [CONSOLE-RELEASES.md](../deploy/CONSOLE-RELEASES.md): Git push,
+CI, promotion to console-live and atomic deployment by the fetcher. The release
+tag is applied only after CI and live verification. The collector must retain
+its existing PID/start time; no natlog rebuild/restart is part of this release.

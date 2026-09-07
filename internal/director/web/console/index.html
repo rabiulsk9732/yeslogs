@@ -1629,6 +1629,8 @@
     }
 
   </style>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js"></script>
 </head>
 
 <body>
@@ -1750,7 +1752,7 @@
         <div style="flex:1"></div>
 
         <div class="live-chip" id="dpLive"><i></i><span>DATAPLANES LIVE</span></div>
-        <button class="icon-btn" title="Alerts" aria-label="Alerts"><span class="ms">notifications</span></button>
+        <button class="icon-btn" id="dashboardAlerts" title="Dashboard findings" aria-label="Dashboard findings"><span class="ms">notifications</span></button>
         <div class="tb-div"></div>
 
         <div class="tb-user" id="tbUser">
@@ -1812,7 +1814,7 @@
     };
     // [label, Material Symbols icon, subtitle, role, sidebar group]
     const MENU = [
-      ['Overview', 'dashboard', 'Ingestion, storage & dataplane health', 'all', 'MONITOR'],
+      ['Overview', 'dashboard', 'Collection, stored records & device health · IST', 'all', 'MONITOR'],
       ['ISPs', 'apartment', 'Tenant ISPs — onboarding & status', 'director', 'MONITOR'],
       ['Dataplanes', 'lan', 'Collectors & dataplane status', 'director', 'MONITOR'],
       ['Devices', 'router', 'Exporter devices & capture policy', 'all', 'MONITOR'],
@@ -1897,7 +1899,7 @@
     }
 
     // ---- auth ----
-    function showLogin() { $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
+    function showLogin() { YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
     function showApp() { $('#login').css('display', 'none'); $('#app').css('display', 'grid'); }
     function initials(email) { const n = (email || '?').split('@')[0].split(/[.\-_]/); const a = (n[0] || '?')[0] || '?', b = (n[1] || '')[0] || ''; return (a + b).toUpperCase(); }
 
@@ -1919,8 +1921,10 @@
       $('#hdr-initials').text(initials(S.me.email));
       $('#umenu-role').text(S.me.isDirector ? 'DIRECTOR' : 'ISP');
       $('#umenu-scope').text(S.me.isDirector ? 'scope · all ISPs' : 'scope · ISP #' + S.me.ispId);
+      $('.sbrand-sub').text(S.me.isDirector ? 'DIRECTOR' : 'ISP CONSOLE');
+      $('#mnu-settings').toggle(S.me.isDirector);
       // operator-only chrome stays out of the tenant view
-      $('#dpLive').css('display', S.me.isDirector ? 'flex' : 'none');
+      $('#dpLive').hide();
       showApp(); renderMenu();
       $('#lockTitle').text('Loading console');
       $('#lockSub').text('director · natlog-01 · fetching flow data');
@@ -2001,10 +2005,15 @@
       });
     })();
 
-    $('#globalSearch').on('input', function () { S.search = this.value; if (S.view === 'Overview') { $('#tsearch').val(this.value); if (dtFlows) dtFlows.search(this.value).draw(); } });
+    $('#bandExport').on('click', () => dashboardNavigate('Reports'));
+    $('#dashboardAlerts').on('click', async () => {
+      if (S.view !== 'Overview') await dashboardNavigate('Overview');
+      document.getElementById('dash-attention-body')?.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
 
     // ---- data ----
     async function loadData() {
+      if (S.view === 'Overview') return renderPage();
       const r = await api('/api/v1/console/data?days=' + encodeURIComponent(S.days));
       if (r.status === 401) { showLogin(); return; }
       S.data = await r.json();
@@ -2027,198 +2036,37 @@
     }
     function setHead() {
       const m = MENU.find(x => x[0] === S.view);
-      $('#pageTitle').text(S.view); $('#pageSub').text(m ? m[2] : '');
+      $('#pageTitle').text(S.view === 'Overview' ? 'Dashboard' : S.view); $('#pageSub').text(m ? m[2] : '');
     }
     function renderPage() {
+      YesLogsDashboard.dispose();
       setHead();
-      $('#globalSearchWrap').css('display', S.view === 'Overview' ? 'flex' : 'none'); // filter box only where it works
+      $('#globalSearchWrap').hide();
+      $('#rangeSw, #bandExport').toggle(S.view !== 'Overview');
+      $('#footBuild').text(S.view === 'Overview' ? 'v1.9.0-dashboard' : 'logs.sayratechnologies.in');
       const b = $('#pageBody').empty();
-      if (!S.data) { b.html('<div class="card" style="padding:40px;text-align:center;color:var(--mut)">Loading…</div>'); return; }
-      ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
+      return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
 
     // ==================== OVERVIEW ====================
-    // Tile gradients: the server sends one accent per card; the design draws each
-    // tile as that colour falling to a darkened mix of itself, so the second stop
-    // is derived rather than shipped twice.
-    function tile(c) {
-      const ic = c.icon || 'fa-chart-simple', col = c.color || 'var(--pri)';
-      const gauge = c.pct ? `<div class="bar"><i style="width:${Math.min(100, c.pct)}%"></i></div>` : '';
-      // Only show a right-hand metric when the server actually sent a number for
-      // it — an invented figure on an evidence console is worse than a blank.
-      const metric = c.pct ? `<span class="m">${c.pct}%</span>` : '';
-      return `<div class="tile" style="--tc:${col}">
-      <div class="glass"></div><i class="fas ${ic} wm"></i>
-      <div class="body">
-        <div class="v">${esc(c.value)}</div>
-        <div class="l">${esc(c.label)}</div>
-        ${gauge}
-        <div class="f"><span class="s">${esc(c.sub)}</span>${metric}</div>
-      </div></div>`;
+    async function dashboardNavigate(view, filters = {}) {
+      if (!MENU.some(item => item[0] === view && (item[3] !== 'director' || S.me?.isDirector))) return;
+      S.view = view; S.page = 1; renderMenu();
+      await renderPage();
+      if (S.view !== view) return;
+      if (view === 'Logs') {
+        if (filters.isp && S.me.isDirector) $('#s-isp').val(String(filters.isp)).trigger('change');
+        if (filters.device) $('#s-dev').val(String(filters.device));
+      }
+      if (view === 'Devices' && filters.add) $('#open-add').trigger('click');
     }
-
-    function barChart(hourly) {
-      const v = (hourly || []).slice(-26);
-      if (!v.length) return '<div class="empty"><div class="ed">No hourly data in this window yet.</div></div>';
-      const max = Math.max.apply(null, v) || 1;
-      const cols = v.map(n => `<div class="col"><div class="main" style="height:${Math.max(2, Math.round(n / max * 100))}%"></div></div>`).join('');
-      return `<div class="barchart">${cols}</div>
-    <div class="barchart-x"><span>oldest</span><span>&mdash;</span><span>latest</span></div>`;
+    function pgOverview(b) {
+      YesLogsDashboard.mount(b[0], { user: S.me, navigate: dashboardNavigate, expired: showLogin });
     }
-
-    function meters(boxes) {
-      if (!boxes || !boxes.length) return '<div class="hint">No dataplane metrics reported.</div>';
-      return boxes.map(b => {
-        const pct = Math.max(0, Math.min(100, parseInt(b.pct, 10) || 0));
-        const tone = pct >= 85 ? ' warn' : pct <= 10 ? ' ok' : '';
-        return `<div class="meter">
-        <div class="row"><b>${esc(b.label)}</b><span class="v">${esc(b.value)}</span></div>
-        <div class="track"><i class="${tone.trim()}" style="width:${pct}%"></i></div>
-      </div>`;
-      }).join('');
-    }
-
-    async function pgOverview(b) {
-      b.html(loadingCard('Loading dashboard…'));
-      const r = await api('/api/v1/overview');
-      const cards = (r.status === 200 ? ((await r.json()).cards || []) : []);
-      const d = S.data || {};
-
-      let h = cards.length
-        ? `<div class="grid-tiles">${cards.map(tile).join('')}</div>`
-        : `<div class="card"><div class="empty"><div class="ei"><i class="fas fa-satellite-dish"></i></div><div class="et">No flows yet</div><div class="ed">Add an <b>Exporter Device</b> (Devices tab) and point your router's NetFlow/IPFIX export at this collector — flows will appear here within seconds.</div></div></div>`;
-
-      h += `<div class="grid-cards" style="margin-top:18px">
-      <div class="card span2">
-        <div class="ch">
-          <span class="ms">show_chart</span><h2>Ingestion Throughput</h2>
-          <span class="ch-tag">flows / hour</span>
-          <div class="legend" style="margin-left:auto"><span><i style="background:var(--pri)"></i>ingested</span></div>
-        </div>
-        <div style="padding:16px">${barChart(d.hourly)}</div>
-      </div>
-      <div class="card">
-        <div class="ch">
-          <span class="ms">monitor_heart</span><h2>Dataplane Health</h2>
-          <span class="pill ok" style="margin-left:auto">ALL OK</span>
-        </div>
-        <div style="padding:14px 16px">${meters(d.infoBoxes)}</div>
-      </div>
-    </div>`;
-
-      h += `<div class="card" id="flowCard" style="margin-top:18px">
-      <div class="proc"><div><span class="spin"></span><span class="t">PROCESSING…</span></div></div>
-      <div class="ch">
-        <span class="ms">table_rows</span><h2>Recent Flow Logs</h2>
-        <span class="ch-tag" id="tailTag">live tail</span>
-        <div class="ch-ctl">
-          <label class="ctl-search"><span class="ms">search</span>
-            <input id="ftSearch" placeholder="Search flows…" aria-label="Search flows"></label>
-          <label class="ctl-len"><select id="ftLen" aria-label="Rows per page">
-            <option>10</option><option>25</option><option>50</option><option>100</option>
-          </select><span class="ms">expand_more</span></label>
-          <button class="ctl-btn" id="ftPause" title="Pause live tail" aria-pressed="false"><span class="ms">pause</span></button>
-          <button class="ctl-btn" id="refresh" title="Refresh now"><span class="ms">refresh</span></button>
-        </div>
-      </div>
-      <div class="dt-scroll"><table id="flowTable" style="width:100%;min-width:940px"><thead><tr>
-        <th>Timestamp</th><th>Device</th><th style="text-align:right">Private (NAT)</th>
-        <th style="text-align:right">Public (NAT)</th><th>Proto</th><th>Destination</th><th>Export</th>
-      </tr></thead><tbody></tbody></table></div>
-    </div>`;
-
-      b.html(h);
-      renderTable();
-      $('#ftSearch').val(S.search).on('input', function () {
-        S.search = this.value; if (dtFlows) dtFlows.search(this.value).draw();
-      });
-      $('#ftLen').val(String(S.pageSize)).on('change', function () {
-        S.pageSize = +this.value; if (dtFlows) dtFlows.page.len(S.pageSize).draw();
-      });
-      $('#refresh').on('click', () => tailTick(true));
-      $('#ftPause').on('click', function () {
-        S.tail = !S.tail;
-        $(this).toggleClass('off', !S.tail).attr({ 'aria-pressed': String(!S.tail), title: S.tail ? 'Pause live tail' : 'Resume live tail' })
-          .find('.ms').text(S.tail ? 'pause' : 'play_arrow');
-        $('#tailTag').toggleClass('paused', !S.tail).text(S.tail ? 'live tail' : 'paused');
-      });
-    }
-
-    // Live tail. The design's pause button implies the table keeps itself current,
-    // so it does — fetching only while Overview is open and not paused, and
-    // swapping rows in place so it never steals the page you are reading.
-    async function tailTick(force) {
-      if (!force && (!S.tail || S.view !== 'Overview' || document.hidden)) return;
-      if (!dtFlows) return;
-      // Only a deliberate refresh shows the veil; the 15s tail must not strobe it.
-      if (force) busy('#flowCard', true);
-      try {
-        const r = await api('/api/v1/console/data?days=' + encodeURIComponent(S.days));
-        if (r.status !== 200) return;
-        const d = await r.json();
-        S.data = d; S.records = d.records || [];
-        renderTable();
-      } finally { if (force) busy('#flowCard', false); }
-    }
-    setInterval(() => tailTick(false), 15000);
-
+    setInterval(() => YesLogsDashboard.refresh(), 15000);
     function ipNum(ip) { return (ip || '').split('.').reduce((a, o) => a * 256 + (+o || 0), 0); }
-    function computeRows() {
-      // Only the selector filters live here now — free-text search and column
-      // sorting are DataTables' job, so they are not duplicated.
-      let rows = S.records.slice();
-      if (S.qIp) rows = rows.filter(r => r.pubIp.includes(S.qIp.trim()));
-      if (S.qPort) rows = rows.filter(r => String(r.pubPort).includes(S.qPort.trim()));
-      if (S.qProto !== 'Any') rows = rows.filter(r => r.proto === S.qProto);
-      return rows;
-    }
-    // shared flow-table cell renderers (consistent everywhere)
     const protoPill = p => { const v = { TCP: 'info', UDP: 'ok', ICMP: 'warn' }[p] || 'mut'; return `<span class="pill ${v}">${esc(p || '—')}</span>`; };
     const typePill = t => t ? `<span class="pill info">${esc(t)}</span>` : '<span style="color:var(--mut)">—</span>';
-    let dtFlows = null;
-    function renderTable() {
-      const rows = computeRows();
-      let tb = '';
-      rows.forEach(r => {
-        // data-order carries the sortable value: IPs sort numerically (10.0.100.9
-        // before 10.0.100.104, which a string sort gets backwards) and the
-        // timestamp sorts on the full stamp, not the split date/clock lines.
-        tb += `<tr>
-      <td class="mono ts" data-order="${esc(r.time)}"><span class="d">${esc(r.date)}</span> <span class="t">${esc(r.clock)}</span></td>
-      <td class="mono dev"><a href="#">${esc(r.sub)}</a></td>
-      <td class="num-col" data-order="${ipNum(r.privIp)}">${esc(r.privIp)}:${r.privPort}</td>
-      <td class="num-col pub" data-order="${ipNum(r.pubIp)}">${natCell(r)}</td>
-      <td>${protoPill(r.proto)}</td>
-      <td class="mono dest">${esc(r.dest)}</td>
-      <td>${typePill(r.action)}</td></tr>`;
-      });
-      // Swap rows through the API rather than rebuilding: the live tail redraws
-      // every few seconds and destroy/recreate would throw away the page you are
-      // on, your search, and the sort you picked.
-      if (dtFlows) {
-        dtFlows.clear();
-        if (tb) dtFlows.rows.add($(tb));
-        dtFlows.draw(false);
-        return;
-      }
-      $('#flowTable tbody').html(tb);
-      dtFlows = new DataTable('#flowTable', {
-        pageLength: 10,
-        order: [[0, 'desc']],
-        pagingType: 'simple_numbers',
-        search: { search: S.search || '' },
-        language: {
-          info: 'Showing _START_–_END_ of _TOTAL_ flows',
-          infoEmpty: 'No flows', infoFiltered: '(filtered from _MAX_)',
-          zeroRecords: 'No flow matches that filter',
-          emptyTable: 'No flow logs stored yet',
-          paginate: { previous: 'Prev', next: 'Next' }
-        },
-        // The card header already carries search and page-length, so DataTables'
-        // own top row is switched off — otherwise there are two of each.
-        layout: { topStart: null, topEnd: null, bottomStart: 'info', bottomEnd: 'paging' }
-      });
-    }
 
     // ==================== LOGS SEARCH ====================
     async function pgLogs(b) {
