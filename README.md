@@ -22,6 +22,11 @@ dataplane (UDP collector → ClickHouse) and the control plane (web console + AP
 the device registry + capture policies are shared in-process, so changes in the
 UI apply to ingestion within seconds — no restart, no token.
 
+For production UI updates, use the [console release pipeline](deploy/CONSOLE-RELEASES.md).
+Commits on `main` are validated in GitHub Actions, then a fetcher publishes the
+approved static console through Caddy without restarting the UDP collector.
+The public domain serves these releases; port 8080 retains the embedded console.
+
 The console (`http://host:8080`) is a self-contained SPA (vendored jQuery +
 Font Awesome, **no CDN**). Director navigation:
 
