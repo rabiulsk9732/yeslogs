@@ -30,6 +30,10 @@
 .isp-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 16px }
 .isp-field { min-width:0 }
 .isp-field .inp { width:100% }
+.isp-field .lbl { display:flex; align-items:center; gap:7px; width:100% }
+.isp-field .lbl .req { margin-left:auto; color:var(--bad); font-weight:700 }
+.isp-field .lbl .ms, .isp-label-icon { width:17px; height:17px; flex:0 0 17px; font-size:17px; color:var(--mut2) }
+.isp-field .inp::placeholder { color:var(--mut2); opacity:1 }
 .isp-field .inp[aria-invalid=true] { border-color:var(--bad); box-shadow:0 0 0 1px var(--bad) }
 .isp-field-error { font-size:12px; line-height:1.4; color:var(--bad-d); margin-top:5px }
 .isp-field-error:empty { display:none }

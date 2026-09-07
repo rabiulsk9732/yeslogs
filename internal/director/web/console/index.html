@@ -1951,6 +1951,7 @@
       $('#mnu-settings').toggle(S.me.isDirector);
       // operator-only chrome stays out of the tenant view
       $('#dpLive').hide();
+      S.view = routeView(); syncRoute(S.view, true);
       showApp(); renderMenu();
       $('#lockTitle').text('Loading console');
       $('#lockSub').text('director · natlog-01 · fetching flow data');
@@ -2049,6 +2050,18 @@
     }
 
     // ---- shell ----
+    function routeHash(view) { return '#/' + view.toLowerCase().replace(/ /g, '-').replace(/^overview$/, 'dashboard'); }
+    function routeView() {
+      const match = MENU.find(item => routeHash(item[0]) === location.hash.toLowerCase());
+      return match && (match[3] !== 'director' || S.me?.isDirector) ? match[0] : 'Overview';
+    }
+    function syncRoute(view, replace = false) {
+      const hash = routeHash(view);
+      if (location.hash !== hash) history[replace ? 'replaceState' : 'pushState'](null, '', location.pathname + location.search + hash);
+    }
+    $(window).on('hashchange', () => {
+      if (S.me && $('#app').is(':visible')) dashboardNavigate(routeView(), {}, true);
+    });
     function renderMenu() {
       const $m = $('#menu').empty();
       let group = null;
@@ -2056,9 +2069,9 @@
         if (m[3] === 'director' && !(S.me && S.me.isDirector)) return;
         if (m[4] !== group) { group = m[4]; $('<div class="snav-group">').text(group).appendTo($m); }
         $('<a>').addClass('menua' + (m[0] === S.view ? ' on' : ''))
-          .attr({ title: m[0], 'aria-current': m[0] === S.view ? 'page' : null })
+          .attr({ href: routeHash(m[0]), title: m[0], 'aria-current': m[0] === S.view ? 'page' : null })
           .html('<span class="ms">' + m[1] + '</span><span>' + m[0] + '</span>')
-          .on('click', () => { S.view = m[0]; S.page = 1; renderMenu(); renderPage(); }).appendTo($m);
+          .on('click', e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); dashboardNavigate(m[0]); }).appendTo($m);
       });
     }
     function setHead() {
@@ -2074,14 +2087,15 @@
       setHead();
       $('#globalSearchWrap').hide();
       $('#pageTools').prop('hidden', S.view === 'Overview' || S.view === 'ISPs');
-      $('#footBuild').text(['Overview', 'ISPs'].includes(S.view) ? 'v1.10.0-isps' : 'logs.sayratechnologies.in');
+      $('#footBuild').text(['Overview', 'ISPs'].includes(S.view) ? 'v1.10.1-isps' : 'logs.sayratechnologies.in');
       const b = $('#pageBody').empty();
       return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
 
     // ==================== OVERVIEW ====================
-    async function dashboardNavigate(view, filters = {}) {
+    async function dashboardNavigate(view, filters = {}, replaceRoute = false) {
       if (!MENU.some(item => item[0] === view && (item[3] !== 'director' || S.me?.isDirector))) return;
+      syncRoute(view, replaceRoute);
       S.view = view; S.page = 1; renderMenu();
       await renderPage();
       if (S.view !== view) return;

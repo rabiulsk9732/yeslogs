@@ -29,6 +29,14 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
   });
   await page.goto('http://isps.test/');await page.locator('#menu .menua').filter({hasText:'ISPs'}).click();
   await page.waitForFunction(()=>document.querySelector('.index-stats .v')?.textContent==='12');
+  assert.equal(new URL(page.url()).hash,'#/isps');
+  await page.reload();await page.waitForFunction(()=>document.querySelector('.index-stats .v')?.textContent==='12');
+  assert.equal(await page.locator('#pageTitle').innerText(),'ISPs');
+  await page.locator('#menu .menua').filter({hasText:'Logs'}).click();await page.locator('#s-pub').waitFor();
+  await page.reload();await page.locator('#s-pub').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'Logs');
+  await page.goBack();await page.locator('#isp-create').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'ISPs');
+  await page.goForward();await page.locator('#s-pub').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'Logs');
+  await page.locator('#menu .menua').filter({hasText:'ISPs'}).click();await page.waitForFunction(()=>document.querySelector('.index-stats .v')?.textContent==='12');
   assert.equal(await page.locator('.index-stats .tile').count(),5);
   for(const width of [1280,1440,1920]){await page.setViewportSize({width,height:1100});const rows=await page.locator('.index-stats .tile').evaluateAll(ns=>new Set(ns.map(n=>n.offsetTop)).size);assert.equal(rows,1,'Five cards occupy one desktop row')}
   assert.equal(await page.locator('#isp-rows tr').count(),10);
@@ -36,6 +44,11 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
   await page.locator('#isp-search').fill('isp1@example.invalid');assert.equal(await page.locator('#isp-rows tr').count(),1);
   await page.locator('#isp-search').fill('');await page.locator('#isp-status-filter').selectOption('disabled');assert.equal(await page.locator('#isp-rows tr').count(),4);
   await page.locator('#isp-status-filter').selectOption('all');await page.locator('#isp-create').click();
+  const fields=await page.locator('.isp-field').evaluateAll(nodes=>nodes.map(n=>{
+   const label=n.querySelector('label'),star=label.querySelector('.req'),control=n.querySelector('input,select');
+   return {icon:!!label.querySelector('.ms,svg'),prompt:control.tagName==='SELECT'?control.querySelector('option[value=""]')?.textContent:control.placeholder,starAtRight:Math.abs(star.getBoundingClientRect().right-label.getBoundingClientRect().right)<2,color:getComputedStyle(star).color};
+  }));
+  assert.equal(fields.length,7);assert(fields.every(f=>f.icon&&f.prompt&&f.starAtRight&&f.color==='rgb(193, 67, 67)'),'Every field has a label icon, right red star and placeholder');
   await page.getByRole('button',{name:'Create ISP',exact:true}).last().click();assert.equal(writes.length,0);assert.equal(await page.locator('.isp-modal [aria-invalid=true]').count(),7);
   const data={Name:'New ISP',Username:'new.isp',Email:'new@example.invalid',Phone:'+91 9999999999',Password:'test-only-password',ConfirmPassword:'mismatch'};
   for(const [k,v]of Object.entries(data))await page.locator(`[name="${k}"]`).fill(v);

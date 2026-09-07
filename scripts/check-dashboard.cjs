@@ -115,6 +115,9 @@ async function run() {
     await director.context.close();
 
     const isp=await open(browser,false);
+    await isp.page.goto('http://dashboard.test/#/isps');
+    await isp.page.waitForURL('**/#/dashboard');
+    assert.equal(await isp.page.locator('#pageTitle').innerText(),'Dashboard','Forbidden saved route falls back for ISP role');
     assert.equal(await isp.page.locator('.dash-kpi').count(),10);
     assert(!isp.calls.includes('/api/v1/system'),'ISP never requests global host metrics');
     assert(!isp.calls.includes('/api/v1/isps'),'ISP never requests another tenant directory');

@@ -21,3 +21,9 @@
   Dashboard retains its explicit ten-card layout.
 - ISP onboarding requires name, unique username/email, phone, password and
   confirmation, and an explicit status. Edit preserves the password if blank.
+
+- Preserve the active module in the URL so refresh and browser Back/Forward
+  restore it, subject to the signed-in role's permissions.
+- Form fields use an icon at the left of the label, a red required star at the
+  right edge of the label row, and a descriptive input placeholder or initial
+  select prompt. Apply this rule to every form as its module is refined.
