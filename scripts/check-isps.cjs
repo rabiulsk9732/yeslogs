@@ -17,6 +17,7 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
    if(!url.pathname.startsWith('/api/')){const relative=url.pathname==='/'?'index.html':url.pathname.replace(/^\/_ui\/[a-f0-9]{40}\//,'/').slice(1);const file=path.resolve(root,relative);if(!file.startsWith(root+path.sep)||!fs.existsSync(file))return r.fulfill({status:404});return r.fulfill({contentType:mime[path.extname(file)]||'application/octet-stream',body:fs.readFileSync(file)})}
    if(url.pathname==='/api/v1/me')return reply(200,{email:'director@example.invalid',isDirector:true,ispId:0,role:'director',csrf:'test-csrf'});
    if(!url.pathname.startsWith('/api/v1/isps'))return reply(200,{});
+   if(process.env.ISP_TEST_DELAY_MS)await new Promise(resolve=>setTimeout(resolve,Number(process.env.ISP_TEST_DELAY_MS)));
    const id=Number(url.pathname.split('/')[4]);
    if(method==='GET'){if(fail)return reply(503,{error:'Service temporarily unavailable'});return reply(200,id?items.find(i=>i.ID===id):{isps:items})}
    const b=r.request().postDataJSON();writes.push({method,body:b,csrf:r.request().headers()['x-csrf-token']});
@@ -52,10 +53,10 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
   await page.locator('#isp-search').fill('');fail=true;await page.locator('#isp-refresh').click();await page.locator('#isp-banner').waitFor();assert.equal(await page.locator('.index-stats .v').first().innerText(),'12');fail=false;await page.locator('#isp-refresh').click();await page.locator('#isp-banner').waitFor({state:'hidden'});
   // User-controlled names must stay text in table attributes and form values.
   items[0].Name='ISP " onfocus="window.injected=1';await page.locator('#isp-refresh').click();await page.waitForFunction(()=>!document.querySelector('#isp-refresh').disabled);
-  await page.locator('#isp-rows [data-action=edit]').first().click();assert.equal(await page.evaluate(()=>window.injected),undefined);await page.keyboard.press('Escape');
+  await page.locator('#isp-rows [data-action=edit]').first().click();await page.locator('.isp-modal').waitFor();await page.locator('[name=Name]').focus();assert.equal(await page.evaluate(()=>window.injected),undefined);await page.keyboard.press('Escape');
   const shots=process.env.ISP_SHOTS_DIR;if(shots){fs.mkdirSync(shots,{recursive:true});await page.setViewportSize({width:1440,height:1100});await page.screenshot({path:path.join(shots,'index.png')})}
   await page.locator('#isp-create').click();if(shots)await page.screenshot({path:path.join(shots,'create.png')});
   await page.setViewportSize({width:390,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await page.locator('.isp-modal').evaluate(n=>n.getBoundingClientRect().width<=innerWidth),true);if(shots)await page.screenshot({path:path.join(shots,'mobile.png')});
   assert.deepEqual(errors,[]);console.log('ISP browser checks passed: five stats, filters/pagination, modal CRUD, required fields, AJAX/CSRF, password confirmation, server errors, escaping and mobile.');
  }finally{await browser.close()}
-})().catch(e=>{console.error(e);process.exitCode=1});
+})().catch(e=>{console.error(e);console.error('::error title=ISP browser checks::'+String(e).replace(/\n/g,'%0A'));process.exitCode=1});
