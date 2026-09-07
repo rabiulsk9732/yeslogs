@@ -193,6 +193,8 @@ window.YesLogsDashboard = (() => {
 
   function render(s) {
     if(active!==s || !s.root.isConnected)return;
+    const focused=document.activeElement;
+    const focusKey=s.root.contains(focused) && focused.matches('[data-go]')?{...focused.dataset}:null;
     const m=model(s);
     renderCards(s,m);renderChart(s);renderHealth(s,m);renderAttention(s,m);renderQuality(s,m);renderStatus(s,m);renderRecent(s,m);
     const failed=Object.keys(s.entries).filter(k=>s.entries[k].error);
@@ -207,6 +209,10 @@ window.YesLogsDashboard = (() => {
       el.textContent=errors?'Unavailable / stale':at?'Updated '+clock(at)+' IST':'Loading';
     });
     const button=s.root.querySelector('#dash-refresh');button.disabled=s.busy;button.setAttribute('aria-busy',String(s.busy));
+    if(focusKey && !focused.isConnected){
+      const replacement=Array.from(s.root.querySelectorAll('[data-go]')).find(n=>n.dataset.go===focusKey.go && n.dataset.isp===focusKey.isp && n.dataset.device===focusKey.device);
+      replacement?.focus({preventScroll:true});
+    }
   }
 
   async function request(s,key,url) {

@@ -80,6 +80,9 @@ async function run() {
     assert.equal(await page.locator('#dash-filter').inputValue(),'North');
     assert.equal(await page.locator('#dash-status-rows tr').count(),1);
     await page.locator('#dash-filter').fill('');
+    await page.locator('#dash-status-rows [data-go="Logs"]').first().focus();
+    await page.evaluate(()=>YesLogsDashboard.refresh(true));
+    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.isp),'1','Polling preserves focused row action');
     await page.locator('#dash-pause').click();
     const pausedCalls=director.calls.length;
     await page.clock.fastForward(16000);
