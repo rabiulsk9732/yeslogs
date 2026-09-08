@@ -123,6 +123,7 @@ type Store interface {
 	ListUsers(ctx context.Context, ispID uint32) ([]User, error)
 	UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error
 	DeleteUser(ctx context.Context, id int64) error
+	SaveUser(ctx context.Context, expected User, replacement *User) (User, error)
 	CountUsers(ctx context.Context) (int, error)
 
 	CreateDevice(ctx context.Context, d Device) (Device, error)

@@ -214,6 +214,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/dataplanes", s.handleDataplanes)
 	mux.HandleFunc("GET /api/v1/users", s.apiListUsers)
 	mux.HandleFunc("POST /api/v1/users", s.apiCreateUser)
+	mux.HandleFunc("GET /api/v1/users/{id}", s.apiGetUser)
+	mux.HandleFunc("PUT /api/v1/users/{id}", s.apiUpdateUser)
 	mux.HandleFunc("DELETE /api/v1/users/{id}", s.apiDeleteUser)
 	mux.HandleFunc("POST /api/v1/users/{id}/reset", s.apiResetPassword)
 	mux.HandleFunc("POST /api/v1/account/password", s.apiChangeOwnPassword)

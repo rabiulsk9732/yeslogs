@@ -1,11 +1,16 @@
 package director
 
 import (
+	"crypto/sha256"
 	"encoding/json"
-	"net/http"
-	"strings"
-
+	"errors"
+	"fmt"
 	"github.com/natflow/natflow-dataplane/internal/director/store"
+	"net/http"
+	"net/mail"
+	"strconv"
+	"strings"
+	"unicode/utf8"
 )
 
 type userView struct {
@@ -15,202 +20,321 @@ type userView struct {
 	Role      string `json:"role"`
 	CreatedAt string `json:"createdAt"`
 	Self      bool   `json:"self"`
+	Primary   bool   `json:"primary"`
+	Version   string `json:"version"`
 }
 
-// apiListUsers lists logins. Director sees all (optionally ?isp=N); an ISP user
-// sees only their own tenant's users.
+func userVersion(u store.User) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%s|%s|%s", u.ID, u.ISPID, u.Email, u.Role, u.PasswordHash))))
+}
+func (s *Server) userView(r *http.Request, u store.User, id Identity) userView {
+	primary := false
+	if u.ISPID != 0 {
+		if i, e := s.store.GetISP(r.Context(), u.ISPID); e == nil {
+			primary = i.AdminUserID == u.ID
+		}
+	}
+	return userView{u.ID, u.ISPID, u.Email, string(u.Role), u.CreatedAt.In(istLoc).Format("2006-01-02 15:04"), u.ID == id.UserID, primary, userVersion(u)}
+}
 func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
 	if !ok {
 		return
 	}
-	scope := tenantScope(id) // 0 for director → all; own ISP otherwise
+	scope := tenantScope(id)
 	if id.isDirector() {
-		scope = parseUint32(r.URL.Query().Get("isp")) // optional filter; 0 = all
+		scope = parseUint32(r.URL.Query().Get("isp"))
 	}
-	us, err := s.store.ListUsers(r.Context(), scope)
-	if err != nil {
-		s.jsonErr(w, err)
+	us, e := s.store.ListUsers(r.Context(), scope)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
 	out := make([]userView, 0, len(us))
 	for _, u := range us {
-		out = append(out, userView{ID: u.ID, ISPID: u.ISPID, Email: u.Email, Role: string(u.Role),
-			CreatedAt: u.CreatedAt.In(istLoc).Format("2006-01-02 15:04"), Self: u.ID == id.UserID})
+		full, e := s.store.GetUser(r.Context(), u.ID)
+		if e != nil {
+			s.jsonErr(w, e)
+			return
+		}
+		out = append(out, s.userView(r, full, id))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": out, "isDirector": id.isDirector()})
+	res := map[string]any{"users": out, "isDirector": id.isDirector(), "editableUsers": true}
+	if id.isDirector() {
+		isps, e := s.store.ListISPs(r.Context())
+		if e != nil {
+			s.jsonErr(w, e)
+			return
+		}
+		res["isps"] = isps
+	}
+	writeJSON(w, 200, res)
 }
-
-// apiCreateUser adds a login. A director can add a user to any ISP (or another
-// director); an ISP user can only add users within their own tenant.
-func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ownedUser(r *http.Request, id Identity) (store.User, error) {
+	n, e := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if e != nil || n < 1 {
+		return store.User{}, store.ErrNotFound
+	}
+	u, e := s.store.GetUser(r.Context(), n)
+	if e != nil {
+		return u, e
+	}
+	if !s.canManageUser(id, u) {
+		return u, store.ErrNotFound
+	}
+	return u, nil
+}
+func (s *Server) apiGetUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
 	if !ok {
 		return
 	}
-	if !s.csrfOK(w, r, id) {
+	u, e := s.ownedUser(r, id)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
+	writeJSON(w, 200, s.userView(r, u, id))
+}
+
+type userForm struct {
+	Email, Password, ConfirmPassword, Role, Version, OldPassword, NewPassword string
+	ISPID                                                                     uint32
+}
+
+func userFormRead(w http.ResponseWriter, r *http.Request) (userForm, error) {
+	var b userForm
 	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
-	var b struct {
-		Email, Password, Role string
-		ISPID                 uint32
+	if e := json.NewDecoder(r.Body).Decode(&b); e != nil {
+		return b, clientErr("invalid user form")
 	}
-	if json.NewDecoder(r.Body).Decode(&b) != nil {
-		s.jsonErr(w, clientErr("bad request"))
+	b.Email = strings.ToLower(strings.TrimSpace(b.Email))
+	return b, nil
+}
+func userPassword(p, c string) string {
+	if utf8.RuneCountInString(p) < 8 || len(p) > 72 {
+		return "Use at least 8 characters, up to 72 UTF-8 bytes."
+	}
+	if p != c {
+		return "Passwords must match."
+	}
+	return ""
+}
+func userFields(w http.ResponseWriter, fields map[string]string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	writeJSON(w, 422, map[string]any{"error": "Check the highlighted fields.", "fields": fields})
+	return true
+}
+func (s *Server) userError(w http.ResponseWriter, e error) {
+	switch {
+	case errors.Is(e, store.ErrConflict):
+		writeJSON(w, 409, map[string]string{"error": "This account changed. Close and reopen it before saving."})
+	case errors.Is(e, store.ErrPrimaryUser):
+		writeJSON(w, 409, map[string]string{"error": "Manage the primary ISP login through the ISPs page."})
+	case errors.Is(e, store.ErrDuplicate):
+		writeJSON(w, 409, map[string]any{"error": "Email already exists.", "fields": map[string]string{"Email": "Choose a unique email address."}})
+	default:
+		s.jsonErr(w, e)
+	}
+}
+func (s *Server) userSave(w http.ResponseWriter, r *http.Request, update bool) {
+	id, ok := s.authJSON(w, r)
+	if !ok || !s.csrfOK(w, r, id) {
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(b.Email))
-	if email == "" || !strings.Contains(email, "@") {
-		s.jsonErr(w, clientErr("a valid email is required"))
-		return
-	}
-	if len(b.Password) < 8 {
-		s.jsonErr(w, clientErr("password must be at least 8 characters"))
-		return
-	}
-	role := store.RoleISP
-	ispID := id.ISPID
-	if id.isDirector() {
-		if b.Role == "director" {
-			role, ispID = store.RoleDirector, 0
-		} else {
-			ispID = b.ISPID
-			if ispID == 0 {
-				s.jsonErr(w, clientErr("choose an ISP for this user"))
-				return
-			}
+	var old store.User
+	var e error
+	if update {
+		old, e = s.ownedUser(r, id)
+		if e != nil {
+			s.jsonErr(w, e)
+			return
 		}
-	}
-	if ispID != 0 { // verify the tenant exists
-		if _, err := s.store.GetISP(r.Context(), ispID); err != nil {
-			s.jsonErr(w, clientErr("unknown ISP"))
+		if s.userView(r, old, id).Primary {
+			s.userError(w, store.ErrPrimaryUser)
+			return
+		}
+		if old.ID == id.UserID {
+			writeJSON(w, 400, map[string]string{"error": "Use Change my password for your own account."})
 			return
 		}
 	}
-	hash, err := HashPassword(b.Password)
-	if err != nil {
-		s.jsonErr(w, err)
+	b, e := userFormRead(w, r)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	if _, err := s.store.CreateUser(r.Context(), store.User{ISPID: ispID, Email: email, PasswordHash: hash, Role: role}); err != nil {
-		s.jsonErr(w, err)
+	fields := map[string]string{}
+	a, e := mail.ParseAddress(b.Email)
+	if e != nil || a.Address != b.Email || len(b.Email) > 190 || !strings.Contains(b.Email, ".") {
+		fields["Email"] = "Enter a valid email address (up to 190 characters)."
+	}
+	if !update || b.Password != "" || b.ConfirmPassword != "" {
+		if msg := userPassword(b.Password, b.ConfirmPassword); msg != "" {
+			fields["Password"] = msg
+			fields["ConfirmPassword"] = msg
+		}
+	}
+	role, scope := store.Role(b.Role), b.ISPID
+	if update {
+		role, scope = old.Role, old.ISPID
+		if b.Role != "" && store.Role(b.Role) != role || b.ISPID != scope {
+			fields["Role"] = "Account role and ISP cannot change. Create a separate login."
+		}
+		if b.Version != userVersion(old) {
+			s.userError(w, store.ErrConflict)
+			return
+		}
+	}
+	if role != store.RoleDirector && role != store.RoleISP {
+		fields["Role"] = "Choose Director or ISP."
+	}
+	if !id.isDirector() {
+		if role != store.RoleISP || scope != 0 && scope != id.ISPID {
+			writeJSON(w, 403, map[string]string{"error": "Cannot manage users outside your ISP."})
+			return
+		}
+		role, scope = store.RoleISP, id.ISPID
+	}
+	if role == store.RoleDirector {
+		scope = 0
+	} else if _, e = s.store.GetISP(r.Context(), scope); e != nil {
+		fields["ISPID"] = "Choose an existing ISP."
+	}
+	if userFields(w, fields) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	hash := old.PasswordHash
+	if b.Password != "" {
+		hash, e = HashPassword(b.Password)
+		if e != nil {
+			s.jsonErr(w, e)
+			return
+		}
+	}
+	u := store.User{ISPID: scope, Email: b.Email, PasswordHash: hash, Role: role}
+	if update {
+		u, e = s.store.SaveUser(r.Context(), old, &u)
+	} else {
+		u, e = s.store.CreateUser(r.Context(), u)
+	}
+	if e != nil {
+		s.userError(w, e)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "id": u.ID})
 }
-
-// apiDeleteUser removes a login (revocation). Cannot remove yourself; an ISP user
-// can only remove users in their own tenant.
+func (s *Server) apiCreateUser(w http.ResponseWriter, r *http.Request) { s.userSave(w, r, false) }
+func (s *Server) apiUpdateUser(w http.ResponseWriter, r *http.Request) { s.userSave(w, r, true) }
 func (s *Server) apiDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
-	if !ok {
+	if !ok || !s.csrfOK(w, r, id) {
 		return
 	}
-	if !s.csrfOK(w, r, id) {
+	u, e := s.ownedUser(r, id)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	target, err := s.store.GetUser(r.Context(), int64(parseUint32(r.PathValue("id"))))
-	if err != nil {
-		s.jsonErr(w, err)
+	if u.ID == id.UserID {
+		writeJSON(w, 400, map[string]string{"error": "You cannot delete your own account."})
 		return
 	}
-	if target.ID == id.UserID {
-		s.jsonErr(w, clientErr("you cannot delete your own account"))
+	b, e := userFormRead(w, r)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	if !s.canManageUser(id, target) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	if b.Email != u.Email {
+		userFields(w, map[string]string{"Email": "Enter the account email to confirm."})
 		return
 	}
-	if err := s.store.DeleteUser(r.Context(), target.ID); err != nil {
-		s.jsonErr(w, err)
+	if b.Version != userVersion(u) {
+		s.userError(w, store.ErrConflict)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	if _, e = s.store.SaveUser(r.Context(), u, nil); e != nil {
+		s.userError(w, e)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
-
-// apiResetPassword lets an admin set another user's password (no old password).
 func (s *Server) apiResetPassword(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
-	if !ok {
+	if !ok || !s.csrfOK(w, r, id) {
 		return
 	}
-	if !s.csrfOK(w, r, id) {
+	u, e := s.ownedUser(r, id)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-	var b struct{ Password string }
-	if json.NewDecoder(r.Body).Decode(&b) != nil || len(b.Password) < 8 {
-		s.jsonErr(w, clientErr("password must be at least 8 characters"))
+	if u.ID == id.UserID {
+		writeJSON(w, 400, map[string]string{"error": "Use Change my password for your own account."})
 		return
 	}
-	target, err := s.store.GetUser(r.Context(), int64(parseUint32(r.PathValue("id"))))
-	if err != nil {
-		s.jsonErr(w, err)
+	b, e := userFormRead(w, r)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	if !s.canManageUser(id, target) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+	if msg := userPassword(b.Password, b.ConfirmPassword); msg != "" {
+		userFields(w, map[string]string{"Password": msg, "ConfirmPassword": msg})
 		return
 	}
-	hash, err := HashPassword(b.Password)
-	if err != nil {
-		s.jsonErr(w, err)
+	if b.Version != userVersion(u) {
+		s.userError(w, store.ErrConflict)
 		return
 	}
-	if err := s.store.UpdateUserPassword(r.Context(), target.ID, hash); err != nil {
-		s.jsonErr(w, err)
+	next := u
+	next.PasswordHash, e = HashPassword(b.Password)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	if _, e = s.store.SaveUser(r.Context(), u, &next); e != nil {
+		s.userError(w, e)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
-
-// apiChangeOwnPassword lets any signed-in user rotate their own password.
 func (s *Server) apiChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
-	if !ok {
+	if !ok || !s.csrfOK(w, r, id) {
 		return
 	}
-	if !s.csrfOK(w, r, id) {
+	b, e := userFormRead(w, r)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-	var b struct{ OldPassword, NewPassword string }
-	if json.NewDecoder(r.Body).Decode(&b) != nil {
-		s.jsonErr(w, clientErr("bad request"))
+	if msg := userPassword(b.NewPassword, b.ConfirmPassword); msg != "" {
+		userFields(w, map[string]string{"NewPassword": msg, "ConfirmPassword": msg})
 		return
 	}
-	if len(b.NewPassword) < 8 {
-		s.jsonErr(w, clientErr("new password must be at least 8 characters"))
+	u, e := s.store.GetUser(r.Context(), id.UserID)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	me, err := s.store.GetUser(r.Context(), id.UserID)
-	if err != nil {
-		s.jsonErr(w, err)
+	if !VerifyPassword(u.PasswordHash, b.OldPassword) {
+		userFields(w, map[string]string{"OldPassword": "Current password is incorrect."})
 		return
 	}
-	if !VerifyPassword(me.PasswordHash, b.OldPassword) {
-		s.jsonErr(w, clientErr("current password is incorrect"))
+	next := u
+	next.PasswordHash, e = HashPassword(b.NewPassword)
+	if e != nil {
+		s.jsonErr(w, e)
 		return
 	}
-	hash, err := HashPassword(b.NewPassword)
-	if err != nil {
-		s.jsonErr(w, err)
+	if _, e = s.store.SaveUser(r.Context(), u, &next); e != nil {
+		s.userError(w, e)
 		return
 	}
-	if err := s.store.UpdateUserPassword(r.Context(), id.UserID, hash); err != nil {
-		s.jsonErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
-
-// canManageUser: a director may manage anyone; an ISP user only users in their
-// own tenant (and never a director).
 func (s *Server) canManageUser(id Identity, target store.User) bool {
-	if id.isDirector() {
-		return true
-	}
-	return target.ISPID == id.ISPID && target.Role == store.RoleISP
+	return id.isDirector() || target.ISPID == id.ISPID && target.Role == store.RoleISP
 }

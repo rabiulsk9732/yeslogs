@@ -20,6 +20,7 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 		return nil, fmt.Errorf("upstream must be an explicit loopback HTTP origin")
 	}
 	proxy := httputil.NewSingleHostReverseProxy(u)
+	proxy.ModifyResponse = s.decorateSettingsResponse
 	local := s.Handler()
 	var mutations sync.Mutex
 	revision := "unknown"
@@ -34,7 +35,7 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 		p := r.URL.Path
 		// Serialize tenant and dependent inventory/account writes through this
 		// gateway, including forwarded writes served by the running collector.
-		if r.Method != "GET" && r.Method != "HEAD" && (strings.HasPrefix(p, "/api/v1/isps") || strings.HasPrefix(p, "/api/v1/devices") || strings.HasPrefix(p, "/api/v1/users") || strings.HasPrefix(p, "/api/v1/policies") || strings.HasPrefix(p, "/devices") || strings.HasPrefix(p, "/isps")) {
+		if (r.Method == "GET" && p == "/api/v1/settings") || r.Method != "GET" && r.Method != "HEAD" && (strings.HasPrefix(p, "/api/v1/isps") || strings.HasPrefix(p, "/api/v1/devices") || strings.HasPrefix(p, "/api/v1/users") || strings.HasPrefix(p, "/api/v1/settings/") || p == "/api/v1/account/password" || strings.HasPrefix(p, "/api/v1/policies") || strings.HasPrefix(p, "/devices") || strings.HasPrefix(p, "/isps")) {
 			mutations.Lock()
 			defer mutations.Unlock()
 		}
@@ -43,7 +44,7 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 			writeJSON(w, 200, map[string]string{"revision": revision})
 			return
 		}
-		owned := p == "/api/v1/policies" || strings.HasPrefix(p, "/api/v1/policies/") || p == "/api/v1/isps" || strings.HasPrefix(p, "/api/v1/isps/") || p == "/api/v1/login" || p == "/api/v1/logout" || p == "/api/v1/me" || p == "/login"
+		owned := p == "/api/v1/users" || strings.HasPrefix(p, "/api/v1/users/") || p == "/api/v1/account/password" || p == "/api/v1/policies" || strings.HasPrefix(p, "/api/v1/policies/") || p == "/api/v1/isps" || strings.HasPrefix(p, "/api/v1/isps/") || p == "/api/v1/login" || p == "/api/v1/logout" || p == "/api/v1/me" || p == "/login"
 		public := p == "/healthz" || p == "/api/v1/agent/config" || p == "/" || strings.HasPrefix(p, "/assets/")
 		if !public && p != "/api/v1/login" && p != "/login" && p != "/api/v1/logout" {
 			if _, ok := s.currentIdentity(r); !ok {
@@ -62,6 +63,9 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 			} else {
 				writeJSON(w, 400, map[string]string{"error": "Use the ISP management form."})
 			}
+			return
+		}
+		if r.Method == "PUT" && strings.HasPrefix(p, "/api/v1/settings/") && !s.checkRuntimeSettings(w, r, upstream) {
 			return
 		}
 		if owned {

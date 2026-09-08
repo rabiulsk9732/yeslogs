@@ -1652,6 +1652,10 @@
   <script src="/assets/devices.js"></script>
   <link rel="stylesheet" href="/assets/policies.css">
   <script src="/assets/policies.js"></script>
+  <link rel="stylesheet" href="/assets/console-pages.css">
+  <script src="/assets/console-kit.js"></script>
+  <script src="/assets/console-settings.js"></script>
+  <script src="/assets/console-pages.js"></script>
 </head>
 
 <body>
@@ -1830,7 +1834,7 @@
         </div>
         <div id="pageBody"></div>
         <div class="page-foot">
-          <span>YesLogs Director &middot; Sayra Technologies &middot; DoT / IPDR retention mode active</span>
+          <span>YesLogs Director &middot; Sayra Technologies &middot; Director → ISP console · Times shown in IST</span>
           <span class="mono" id="footBuild">logs.sayratechnologies.in</span>
         </div>
       </main>
@@ -1854,10 +1858,10 @@
       ['Capture Policies', 'shield', 'Reusable skip-rule presets', 'all', 'GOVERN'],
       ['Retention', 'inventory_2', 'Hot storage window & S3 archive', 'all', 'GOVERN'],
       ['Audit', 'history', 'Search & export audit trail', 'all', 'GOVERN'],
-      ['Users', 'group', 'Operators &amp; access', 'all', 'GOVERN'],
+      ['Users', 'group', 'Operators and access', 'all', 'GOVERN'],
       ['Settings', 'tune', 'Dataplane, skip rules, retention & S3', 'director', 'GOVERN'],
     ];
-    const esc = s => $('<div>').text(s == null ? '' : s).html();
+    const esc = s => YesLogsKit.esc(s);
     const humanBytes = n => { n = Number(n) || 0; const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']; let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; };
     const api = (p, o) => fetch(p, Object.assign({ headers: { 'Content-Type': 'application/json' } }, o || {}));
     // ---- loaders (Component Kit) ----
@@ -1929,7 +1933,7 @@
     }
 
     // ---- auth ----
-    function showLogin() { YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
+    function showLogin() { YesLogsPages.dispose(); S.logReq = (S.logReq || 0) + 1; S.logXHR?.abort(); YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
     function showApp() { $('#login').css('display', 'none'); $('#app').css('display', 'grid'); }
     function initials(email) { const n = (email || '?').split('@')[0].split(/[.\-_]/); const a = (n[0] || '?')[0] || '?', b = (n[1] || '')[0] || ''; return (a + b).toUpperCase(); }
 
@@ -2044,14 +2048,7 @@
     });
 
     // ---- data ----
-    async function loadData() {
-      if (['Overview', 'ISPs', 'Devices', 'Capture Policies'].includes(S.view)) return renderPage();
-      const r = await api('/api/v1/console/data?days=' + encodeURIComponent(S.days));
-      if (r.status === 401) { showLogin(); return; }
-      S.data = await r.json();
-      S.records = S.data.records || [];
-      renderPage();
-    }
+    async function loadData() { return renderPage(); }
 
     // ---- shell ----
     function routeHash(view) { return '#/' + view.toLowerCase().replace(/ /g, '-').replace(/^overview$/, 'dashboard'); }
@@ -2086,13 +2083,15 @@
       $('#breadcrumbCurrent').text(S.view === 'Overview' ? 'Dashboard' : S.view);
     }
     function renderPage() {
-      YesLogsDashboard.dispose();
+      YesLogsDashboard.dispose(); YesLogsPages.dispose();
+      S.logReq = (S.logReq || 0) + 1; S.lq = null; S.logXHR?.abort();
+      $('#s-from, #s-to').each(function(){ if ($(this).data('xdsoft_datetimepicker')) $(this).datetimepicker('destroy'); });
       YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose();
       setHead();
       $('#globalSearchWrap').hide();
-      $('#pageTools').prop('hidden', ['Overview', 'ISPs', 'Devices', 'Capture Policies'].includes(S.view));
-      $('#footBuild').text(['Overview', 'ISPs', 'Devices', 'Capture Policies'].includes(S.view) ? 'v1.12.0-policies' : 'logs.sayratechnologies.in');
-      const b = $('#pageBody').empty();
+      $('#pageTools').prop('hidden', true);
+      $('#footBuild').text('v1.13.0-console');
+      const b = $('<div class="module-page">').appendTo($('#pageBody').empty());
       return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
 
@@ -2106,6 +2105,13 @@
       if (view === 'Logs') {
         if (filters.isp && S.me.isDirector) $('#s-isp').val(String(filters.isp)).trigger('change');
         if (filters.device) $('#s-dev').val(String(filters.device));
+        const historicalTime = v => !v || String(v).startsWith('0001') ? '' : String(v).replace('T',' ').slice(0,16);
+        if (filters.review) {
+          $('#s-port').val(filters.port || ''); $('#s-proto').val(filters.proto || 'Any');
+          $('#s-from').val(historicalTime(filters.from)); $('#s-to').val(historicalTime(filters.to));
+          $('#s-reason').val(filters.reason || '');
+          $('#s-msg').text('Review all filters before searching. Historical IP metadata does not distinguish public, private and destination IP; device and subscriber filters were not recorded.');
+        }
       }
       if (view === 'ISPs' && filters.add) $('#isp-create').trigger('click');
       if (view === 'Devices' && filters.policy) {
@@ -2124,8 +2130,11 @@
 
     // ==================== LOGS SEARCH ====================
     async function pgLogs(b) {
+      b.html('<div class="index-stats" aria-label="Logs statistics"></div>'); logStats();
       let isps = [], devs = [];
-      const dr = await api('/api/v1/devices'); if (dr.status === 200) { const d = await dr.json(); devs = d.devices || []; isps = d.isps || []; }
+      try { const dr = await api('/api/v1/devices'); if (dr.status === 401) { showLogin(); return; } if (!dr.ok) throw new Error('Cannot load ISP and device filters. Refresh to retry.'); const d = await dr.json(); devs = d.devices || []; isps = d.isps || []; }
+      catch(e) { if(b[0].isConnected) b.append('<div class="card module-note" role="alert">'+esc(e.message || 'Cannot load filters. Refresh to retry.')+'</div>'); return; }
+      if (!b[0].isConnected) return;
       const dir = S.me && S.me.isDirector;
       const ispOpts = dir ? `<div>
       <label class="lbl"><span class="ms">apartment</span>ISP</label>
@@ -2135,13 +2144,13 @@
       const initialDevOpts = dir
         ? '<option value="0">Select an ISP first</option>'
         : `<option value="0">Any device</option>${devs.map(d => `<option value="${d.DeviceID}">${esc(d.Name)} (#${d.DeviceID})</option>`).join('')}`;
-      b.html(`<div class="card" style="margin-bottom:18px">
+      b.html(`<div class="index-stats" aria-label="Logs statistics"></div><form id="logs-form" novalidate><div class="card" style="margin-bottom:18px">
     <div class="ch">
       <span class="ms">search</span><h2>Logs Search</h2>
       <span class="ch-tag">NAT mapping → subscriber</span>
       <span class="pill warn" style="margin-left:auto"><span class="ms">receipt_long</span>every search is audited</span>
     </div>
-    <div style="padding:16px 16px 0">${note("Resolve a NAT mapping by <b>Public IP + port</b> at a moment in time, or filter by private/destination IP, subscriber or device. Leaving both timestamps empty searches indexed hot storage and is instant. Set <b>both</b> From and To to reach archived days in S3 — long ranges are walked newest-first and stop once the result window is full.", 'fa-circle-info')}</div>
+    <div style="padding:16px 16px 0">${note("Resolve a NAT mapping by <b>Public IP + port</b> at a moment in time, or filter by private/destination IP, subscriber or device. Leaving both timestamps empty searches indexed hot storage. Set <b>both</b> From and To to reach archived days in S3 — long ranges are walked newest-first and stop once the result window is full.", 'fa-circle-info')}</div>
     <div class="fgrid" style="padding:16px">
       ${ispOpts}
       <div>
@@ -2154,7 +2163,7 @@
       </div>
       <div>
         <label class="lbl"><span class="ms">dns</span>Public IP</label>
-        <input id="s-pub" class="inp mono" placeholder="203.0.113.x">
+        <input id="s-pub" class="inp mono" placeholder="203.0.113.10">
         <div class="hint">The CGNAT address seen by the outside world.</div>
       </div>
       <div>
@@ -2164,7 +2173,7 @@
       </div>
       <div>
         <label class="lbl"><span class="ms">dns</span>Private IP</label>
-        <input id="s-priv" class="inp mono" placeholder="100.64.x.x">
+        <input id="s-priv" class="inp mono" placeholder="100.64.1.10">
       </div>
       <div>
         <label class="lbl"><span class="ms">send</span>Destination IP</label>
@@ -2197,10 +2206,12 @@
     <div class="modal-foot">
       <span class="hint" style="margin:0">Provide at least one of: public IP, private IP, destination IP, subscriber or device.</span>
       <span id="s-msg" class="hint" style="margin:0;color:var(--bad);font-weight:600"></span>
-      <button id="s-run" class="btn" style="margin-left:auto"><span class="ms">search</span>Search</button>
+      <button type="button" id="s-clear" class="btn out">Clear filters</button><button type="submit" id="s-run" class="btn" style="margin-left:auto"><span class="ms">search</span>Search</button>
     </div>
   </div>
-  <div id="s-results"><div class="card"><div class="empty"><div class="ei"><span class="ms">search</span></div><div class="et">Run a search to see flow logs</div><div class="ed">Enter a public IP, private IP, destination IP or pick a device, optionally narrow by time, then hit Search. Hot and archived results are merged here.</div></div></div></div>`);
+  </form><div id="s-results"><div class="card"><div class="empty"><div class="ei"><span class="ms">search</span></div><div class="et">Run a search to see flow logs</div><div class="ed">Enter a public IP, private IP, destination IP or pick a device, optionally narrow by time, then hit Search. Hot and archived results are merged here.</div></div></div></div>`);
+      logStats();
+      b.find('.fgrid .inp').each(function(){ $(this).closest('.fgrid > div').find('label').attr('for',this.id); $(this).attr('aria-describedby',this.id+'-error').closest('.fgrid > div').append('<div class="isp-field-error" id="'+this.id+'-error"></div>'); });
       if (dir) $('#s-isp').on('change', function () {
         const ispID = +this.value;
         const matches = ispID ? devs.filter(d => +d.ISPID === ispID) : [];
@@ -2214,31 +2225,57 @@
           if (matches.length === 1) sd.val(String(matches[0].DeviceID));
         }
         S.logReq = (S.logReq || 0) + 1; // discard an in-flight response for the previous ISP
-        S.lq = null;
+        S.lq = null; logStats();
         $('#s-msg').text('');
         $('#s-results').html('<div class="card"><div class="empty"><div class="ei"><i class="fas fa-filter"></i></div><div class="et">ISP filter changed</div><div class="ed">The Device list now contains only devices belonging to this ISP. Review the filters and click Search.</div></div></div>');
       });
-      $('#s-run').on('click', () => runLogs(true));
-      $('#s-pub,#s-priv,#s-dst,#s-port,#s-user').on('keydown', e => { if (e.key === 'Enter') runLogs(true); });
+      $('#logs-form').on('submit', e => { e.preventDefault(); runLogs(true); });
+      $('#s-clear').on('click', () => { S.logReq = (S.logReq || 0)+1; S.logXHR?.abort(); S.lq=null; $('#logs-form')[0].reset(); if(dir) $('#s-isp').trigger('change'); b.find('[aria-invalid]').removeAttr('aria-invalid'); b.find('.isp-field-error').text(''); $('#s-msg').text(''); $('#s-results').html('<div class="card module-note">Filters cleared. Run a search to see results.</div>'); logStats(); });
       $('#s-from, #s-to').datetimepicker({ format: 'Y-m-d H:i', step: 15 });
     }
     function logBody() { return { PublicIP: $('#s-pub').val().trim(), PrivateIP: $('#s-priv').val().trim(), DestIP: $('#s-dst').val().trim(), Username: $('#s-user').val().trim(), PublicPort: +($('#s-port').val() || 0), Proto: $('#s-proto').val(), DeviceID: +($('#s-dev').val() || 0), ISPID: +($('#s-isp').length ? $('#s-isp').val() : 0), From: $('#s-from').val(), To: $('#s-to').val(), Reason: $('#s-reason').val() }; }
     // runLogs(true)=new search (reset to page 1); runLogs(false)=page/size change (keep filter).
+    function logStats(rows) {
+      const q=S.lq;
+      YesLogsKit.stats(document.querySelector('#pageBody'), [
+        ['Matching records',q?.total==null?'—':Number(q.total).toLocaleString()+(q.capped?'+':''),'Current result window','table_rows'],
+        ['Rows on page',rows==null?'—':rows,'Current response','list'],
+        ['Search duration',q?.elapsedMs==null?'—':q.elapsedMs+' ms','Server search time','timer'],
+        ['Storage searched',q?.total==null?'—':q.cold?'Hot + S3':'Hot','Set both timestamps to include S3','storage'],
+        ['CRM matches',q?.total==null?'—':q.crm?.enabled?Number(q.crm.matched||0).toLocaleString():'Off','Current response enrichment','person_search']
+      ]);
+    }
     async function runLogs(reset) {
       if (!S.lq) S.lq = { pageSize: 50, offset: 0 };
-      if (reset !== false) { S.lq.offset = 0; S.lq.body = logBody(); }
-      const b = S.lq.body;
+      const b = reset !== false ? logBody() : S.lq.body, errors = {};
+      const ip = v => /^(\d{1,3}\.){3}\d{1,3}$/.test(v) && v.split('.').every(x=>+x<=255);
+      for(const [key,id] of [['PublicIP','s-pub'],['PrivateIP','s-priv'],['DestIP','s-dst']]) if(b[key]&&!ip(b[key])) errors[id]='Enter a complete IPv4 address.';
+      if($('#s-port').val()&&(!Number.isInteger(b.PublicPort)||b.PublicPort<1||b.PublicPort>65535)) errors['s-port']='Enter a port from 1 to 65535.';
+      if(!!b.From!==!!b.To) errors[b.From?'s-to':'s-from']='Set both From and To, or leave both blank.';
+      for(const [key,id] of [['From','s-from'],['To','s-to']]) if(b[key]&&(!/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(b[key])||!Number.isFinite(Date.parse(b[key].replace(' ','T')+':00+05:30'))||new Date(Date.parse(b[key].replace(' ','T')+':00+05:30')+330*60000).toISOString().slice(0,16).replace('T',' ')!==b[key]))errors[id]='Use YYYY-MM-DD HH:MM in IST.';
+      if(b.From&&b.To&&b.From>b.To)errors['s-to']='To must be on or after From.';
+      $('#logs-form [aria-invalid]').removeAttr('aria-invalid');$('#logs-form .isp-field-error').text('');
+      for(const [id,message]of Object.entries(errors)){$('#'+id).attr('aria-invalid','true');$('#'+id+'-error').text(message)}
+      if(Object.keys(errors).length){$('#s-msg').text('Check the highlighted fields.');$('#logs-form [aria-invalid=true]').first().trigger('focus');return}
       if (!b.PublicIP && !b.PrivateIP && !b.DestIP && !b.DeviceID && !b.Username) { $('#s-msg').text('Provide a Public IP, Private IP, Destination IP, Subscriber, or Device'); return; }
+      if (reset !== false) { S.lq.offset = 0; S.lq.body = b; }
+      S.lq.total = null; S.lq.elapsedMs = null; logStats();
       $('#s-msg').text('');
-      $('#s-results').html('<div class="card" style="min-height:150px"><div class="proc"><div><span class="spin"></span><span class="t">SEARCHING…</span></div></div></div>').find('.card').addClass('busy');
-      const req = Object.assign({}, b, { Limit: S.lq.pageSize, Offset: S.lq.offset });
+      $('#s-results').html('<div class="card module-note" role="status">Searching…</div>');
+      S.logXHR?.abort();
       const reqID = S.logReq = (S.logReq || 0) + 1;
-      const r = await apiJSON('/api/v1/search', 'POST', req);
-      if (reqID !== S.logReq) return;
-      if (r.status !== 200) { const e = await r.json().catch(() => ({})); $('#s-results').html(''); $('#s-msg').text(e.error || 'search failed'); return; }
-      const d = await r.json();
-      S.lq.total = d.total || 0; S.lq.capped = !!d.capped; S.lq.cold = !!d.cold; S.lq.crm = d.crm || { enabled: false }; S.lq.elapsedMs = Number(d.elapsedMs || 0);
-      renderLogResults(d.records || [], b);
+      const req = {...b, Limit:S.lq.pageSize, Offset:S.lq.offset};
+      try {
+        const d = await (S.logXHR=$.ajax({url:'/api/v1/search',method:'POST',contentType:'application/json',dataType:'json',headers:{'X-CSRF-Token':S.csrf},data:JSON.stringify(req),timeout:120000}));
+        if (reqID !== S.logReq) return;
+        S.lq.total = d.total || 0; S.lq.capped = !!d.capped; S.lq.cold = !!d.cold; S.lq.crm = d.crm || {enabled:false}; S.lq.elapsedMs = Number(d.elapsedMs || 0);
+        logStats((d.records||[]).length); renderLogResults(d.records || [], b);
+      } catch(e) {
+        if (reqID !== S.logReq) return;
+        if(e.status===401){showLogin();return}
+        $('#s-results').html('<div class="card module-note">No new results loaded. Review the error and retry.</div>');
+        $('#s-msg').text(e.responseJSON?.error || 'Search connection failed or timed out.');
+      }
     }
     function logQstr(body) { const p = new URLSearchParams(); if (body.PublicIP) p.set('ip', body.PublicIP); if (body.PrivateIP) p.set('priv', body.PrivateIP); if (body.DestIP) p.set('dst', body.DestIP); if (body.Username) p.set('user', body.Username); if (body.PublicPort) p.set('port', body.PublicPort); if (body.Proto && body.Proto !== 'Any') p.set('proto', body.Proto); if (body.DeviceID) p.set('device', body.DeviceID); if (body.ISPID) p.set('isp', body.ISPID); if (body.From) p.set('from', body.From); if (body.To) p.set('to', body.To); if (body.Reason) p.set('reason', body.Reason); p.set('csrf', S.csrf); return p.toString(); }
     function renderLogResults(rows, body) {
@@ -2277,7 +2314,7 @@
         }
         h += `<tr>
     <td class="mono ts"><span class="d">${esc(r.date)}</span> <span class="t">${esc(r.clock)}</span></td>
-    <td class="mono dev"><a href="#">${esc(r.sub)}</a></td>
+    <td class="mono dev">${esc(r.sub)}</td>
     <td class="num-col pub">${esc(r.privIp)}:${r.privPort}</td>
     <td>${subCell(r)}</td>
     <td class="num-col">${natCell(r)}</td>
@@ -2304,269 +2341,11 @@
     }
 
     // ==================== REPORTS ====================
-    async function pgReports(b) {
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading reports…</div>');
-      const r = await api('/api/v1/audit'); if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load reports.</div>'); return; }
-      const exports = ((await r.json()).queries || []).filter(q => (q.CaseRef || '').includes('[export:'));
-      const fmt = cr => { const m = /\[export:(\w+)\]/.exec(cr || ''); return m ? m[1] : 'csv'; };
-      const reason = cr => (cr || '').replace(/\s*\[export:\w+\]\s*/, '') || '—';
-      const dl = q => { const p = new URLSearchParams(); if (q.QueryIP) p.set('ip', q.QueryIP); if (q.QueryPort) p.set('port', q.QueryPort); if (q.QueryProto && q.QueryProto !== 'Any') p.set('proto', q.QueryProto); p.set('format', fmt(q.CaseRef)); p.set('csrf', S.csrf); return '/api/v1/report?' + p.toString(); };
-      let h = `<div style="margin-bottom:16px">${note('Reports are generated from <b>Logs Search</b> — run a search and use the CSV / Excel / PDF buttons. Recent exports are listed below and can be re-downloaded.', 'fa-circle-info')}</div>`;
-      h += '<div class="card"><div class="ch"><i class="fas fa-file-export" style="color:var(--pri)"></i><h2>Recent Reports</h2></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>By</th><th>Format</th><th>Filter (IP)</th><th>Rows</th><th>Reason</th><th></th></tr></thead><tbody>';
-      if (!exports.length) h += '<tr><td colspan="7" style="text-align:center;color:var(--mut);padding:24px">No reports generated yet.</td></tr>';
-      exports.forEach(q => {
-        h += `<tr><td class="mono" style="color:var(--ink2)">${(q.CreatedAt || '').replace('T', ' ').slice(0, 19)}</td><td>${esc(q.UserEmail)}</td>
-    <td><span class="pill" style="background:#eef7fc;color:#2490d8">${esc(fmt(q.CaseRef).toUpperCase())}</span></td>
-    <td class="mono">${esc(q.QueryIP || '—')}</td><td class="mono">${q.ResultCount}</td><td>${esc(reason(q.CaseRef))}</td>
-    <td><a class="btn out" style="height:28px" href="${dl(q)}"><i class="fas fa-download"></i></a></td></tr>`;
-      });
-      h += '</tbody></table></div></div>';
-      b.html(h);
-    }
+    function pgReports(b) { return pgModule(b, "Reports"); }
+    function pgCompliance(b) { return pgModule(b, "Compliance"); }
+    function pgAudit(b) { return pgModule(b, "Audit"); }
+    function pgRetention(b) { return pgModule(b, "Retention"); }
 
-    // ==================== AUDIT ====================
-// ==================== IPDR COMPLIANCE ====================
-// Grades every exporter on whether the records it produces can answer a lawful
-// request. A device can be green in Devices and still fail here: flows arriving
-// and rows stored say nothing about whether the NAT translation was logged.
-const COMPSTATE = {
-  ok:             ['ok',  'Answerable',       'fa-circle-check'],
-  partial_port:   ['warn','Ports incomplete', 'fa-triangle-exclamation'],
-  no_port:        ['bad', 'No post-NAT port', 'fa-circle-xmark'],
-  no_nat_fields:  ['bad', 'No NAT fields',    'fa-circle-xmark'],
-  no_translation: ['bad', 'No translation',   'fa-circle-xmark'],
-  silent:         ['bad', 'Silent',           'fa-plug-circle-xmark'],
-  disabled:       ['mut', 'Disabled',         'fa-ban'],
-};
-async function pgCompliance(b){
-  b.html(loadingCard('Auditing IPDR compliance…'));
-  const r=await api('/api/v1/compliance');
-  if(r.status!==200){ b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load the compliance audit.</div>'); return; }
-  const d=await r.json();
-  if(!d.available){ b.html('<div class="card" style="padding:24px;color:var(--slate)">Flow store unavailable — compliance cannot be audited.</div>'); return; }
-  const devs=d.devices||[], gaps=d.missingDays||[], dead=d.unanswerableDays||[], days=d.days||[];
-  const badDates=gaps.length+dead.length;
-  const graded=devs.filter(x=>x.state!=='disabled');
-  let h='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px">';
-  h+=kpiCard('Can answer a request', String(d.answerable||0)+' / '+graded.length, 'exporters logging translations', 'fa-scale-balanced', d.failing?'#cf7f18':'#12946a');
-  h+=kpiCard('Cannot answer', String(d.failing||0), d.failing?'needs exporter-side fixes':'all exporters compliant', 'fa-triangle-exclamation', d.failing?'#cf7f18':'#12946a');
-  h+=kpiCard('Retention', d.retentionDays+' days', 'floor audited: '+d.retentionMin+' days', 'fa-clock', d.retentionOk?'#12946a':'#cf7f18');
-  h+=kpiCard('Unanswerable dates', String(badDates), badDates?gaps.length+' with no records · '+dead.length+' with no translation':'every retained day can answer', 'fa-calendar-xmark', badDates?'#cf7f18':'#12946a');
-  h+='</div>';
-
-  // What this page means — an operator should not have to guess.
-  h+=`<div class="card" style="margin-bottom:18px"><div style="padding:14px 18px;font-size:13px;color:var(--ink2);line-height:1.65">
-    A lawful request asks <b>"at time T, which subscriber held public IP X, port P?"</b>. Answering it needs the exporter to log the NAT
-    <b>translation</b> — the private ip:port paired with the public ip:port — not just that traffic flowed. An exporter can be online, sending
-    millions of flows a day, and still log nothing that can answer that question. This page grades each one on that, and only that.
-    </div></div>`;
-
-  if(!d.retentionOk){
-    h+=`<div class="card" style="margin-bottom:18px;border-left:3px solid var(--bad)"><div style="padding:14px 18px;font-size:13.5px;color:var(--ink2)">
-      <b style="color:var(--bad)"><i class="fas fa-clock"></i> Retention below the audited floor.</b>
-      Hot retention is <b>${d.retentionDays} days</b>, under the <b>${d.retentionMin}-day</b> floor. Raise it in <b>Settings → Retention</b>,
-      or archive to S3 so older days stay reachable. Confirm the exact window your licence requires.</div></div>`;
-  }
-  if(gaps.length){
-    h+=`<div class="card" style="margin-bottom:18px;border-left:3px solid var(--bad)"><div style="padding:14px 18px;font-size:13.5px;color:var(--ink2)">
-      <b style="color:var(--bad)"><i class="fas fa-calendar-xmark"></i> ${gaps.length} day(s) inside the retention window hold zero records.</b>
-      A request landing on one of these dates can only be answered "no records exist". Flow export is fire-and-forget, so these cannot be recovered.
-      <div class="mono" style="margin-top:8px;font-size:12.5px;color:var(--bad);word-break:break-word">${gaps.map(esc).join(' · ')}</div></div></div>`;
-  }
-
-  if(dead.length){
-    h+=`<div class="card" style="margin-bottom:18px;border-left:3px solid var(--bad)"><div style="padding:14px 18px;font-size:13.5px;color:var(--ink2)">
-      <b style="color:var(--bad)"><i class="fas fa-ban"></i> ${dead.length} day(s) stored flows but recorded no translation at all.</b>
-      These look fully populated in <b>Retention</b> — the row counts are healthy — yet a request about them is just as unanswerable as a missing day.
-      <div class="mono" style="margin-top:8px;font-size:12.5px;color:var(--bad);word-break:break-word">${dead.map(esc).join(' · ')}</div></div></div>`;
-  }
-  h+=`<div class="card"><div class="ch" style="justify-content:space-between"><div style="display:flex;align-items:center;gap:10px">
-      <i class="fas fa-server" style="color:var(--pri)"></i><h2>Exporter grades</h2>
-      <span class="pill mut">last ${d.windowMins} min</span></div>
-      <button id="comp-refresh" class="btn out" style="height:32px"><i class="fas fa-arrows-rotate"></i></button></div>`;
-  if(!devs.length){
-    h+='<div class="empty" style="padding:30px"><div class="et">No devices registered</div><div class="ed">Add an exporter in <b>Devices</b> first.</div></div>';
-  } else {
-    h+='<div style="overflow-x:auto"><table><thead><tr><th>Device</th><th>Exporter</th><th>Grade</th><th>Flows</th><th>Translations</th><th>With port</th></tr></thead><tbody>';
-    devs.forEach(c=>{
-      const m=COMPSTATE[c.state]||['mut',c.state,'fa-circle-question'];
-      const pct=(c.flows>0)?(' <span style="color:var(--mut)">('+c.translatedPct.toFixed(1)+'%)</span>'):'';
-      h+=`<tr><td><b>${esc(c.name)}</b><div style="font-size:11.5px;color:var(--mut)">device_id ${c.deviceId}</div></td>
-        <td class="mono">${esc(c.exporterIp)}</td>
-        <td><span class="pill ${m[0]}"><i class="fas ${m[2]}"></i> ${esc(m[1])}</span></td>
-        <td class="mono">${Number(c.flows||0).toLocaleString()}</td>
-        <td class="mono">${Number(c.translated||0).toLocaleString()}${pct}</td>
-        <td class="mono">${Number(c.withPort||0).toLocaleString()}</td></tr>`;
-      if(c.detail||c.remedy){
-        h+=`<tr class="comp-row"><td colspan="6">
-          <div class="comp-detail">
-            ${c.detail?`<div>${esc(c.detail)}</div>`:''}
-            ${c.remedy?`<div class="comp-fix ${c.answerable?'warn':'bad'}"><b>Fix on the exporter:</b> ${esc(c.remedy)}</div>`:''}
-          </div></td></tr>`;
-      }
-    });
-    h+='</tbody></table></div>';
-  }
-  h+='</div>';
-
-  if(days.length){
-    const maxT=days.reduce((m,x)=>x.translatedKnown?Math.max(m,Number(x.translated)||0):m,0)||1;
-    const unmeasured=days.filter(x=>!x.translatedKnown).length;
-    h+=`<div class="card" style="margin-top:18px"><div class="ch"><i class="fas fa-calendar-days" style="color:var(--pri)"></i><h2>Answerable records by day</h2>
-      <span class="pill mut">${days.length} days retained</span></div>
-      <div style="padding:0 18px 8px;font-size:12.5px;color:var(--mut)">Stored rows say the collector was working. Only the translations column says a request about that day can be answered.${unmeasured?` Counting translations across ${unmeasured} of these days did not complete on this collector — those rows are marked <b>not measured</b>, which is not the same as zero.`:''}</div>
-      <div style="overflow-x:auto;max-height:420px"><table><thead><tr><th>Date</th><th>Stored flows</th><th>Translations</th><th style="width:38%"></th></tr></thead><tbody>`;
-    days.forEach(x=>{
-      const t=Number(x.translated)||0, f=Number(x.flows)||0;
-      // Counting translations across a whole day reads two IP columns over every
-      // row and does not finish on the largest collectors. Saying "0" there would
-      // brand a healthy day unanswerable, so an unmeasured day says so instead.
-      if(!x.translatedKnown){
-        h+=`<tr><td class="mono">${esc(x.date)}</td><td class="mono">${f.toLocaleString()}</td>
-          <td class="mono" style="color:var(--mut)">not measured</td><td></td></tr>`;
-        return;
-      }
-      const bar=Math.round(t/maxT*100);
-      const col = t===0 ? 'var(--bad)' : (t<maxT*0.05 ? 'var(--warn)' : 'var(--ok)');
-      h+=`<tr><td class="mono">${esc(x.date)}</td><td class="mono">${f.toLocaleString()}</td>
-        <td class="mono" style="color:${col};font-weight:${t===0?'700':'400'}">${t.toLocaleString()}${t===0&&f>0?' — unanswerable':''}</td>
-        <td><div style="background:var(--bg);border-radius:3px;height:8px;overflow:hidden"><div style="width:${bar}%;height:100%;background:${col}"></div></div></td></tr>`;
-    });
-    h+='</tbody></table></div></div>';
-  }
-  b.html(h);
-  $('#comp-refresh').on('click',()=>pgCompliance(b));
-}
-    // The public-IP cell.
-    //
-    // No badge for rows whose post-NAT address equals the source. Those are
-    // customers on public addresses — no NAT happens, so the exporter copies the
-    // source into the post-NAT field. That is normal, not a fault, and it is
-    // already self-evident from the row: the private and public columns show the
-    // same value. A warning badge on 97.6% of one exporter's rows (measured
-    // 2026-08-26) makes a healthy page look broken and teaches people to ignore
-    // badges, which costs more than it explains. The row still carries
-    // `untranslated` in the API for anything that needs to reason about it.
-    // The subscriber cell. When the exporter reports a username (IE 371) the
-    // record identifies the subscriber outright — no CRM resolution, and no
-    // inference from an address that may have been reallocated since. That is
-    // the strongest answer this system can give, so it leads.
-    function subCell(r){
-      if(r.username) return '<b>'+esc(r.username)+'</b>';
-      if(r.crmUsername) return esc(r.crmUsername)+' <span style="font-size:10.5px;color:var(--mut)">via CRM</span>';
-      return '<span style="color:var(--mut)">—</span>';
-    }
-
-    function natCell(r){
-      if(!r.pubIp) return '<span style="color:var(--mut)" title="The exporter sent no post-NAT address for this flow">—</span>';
-      return esc(r.pubIp) + ':' + r.pubPort;
-    }
-
-    async function pgAudit(b) {
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading audit…</div>');
-      const r = await api('/api/v1/audit'); if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load audit.</div>'); return; }
-      const queries = (await r.json()).queries || []; // null-safe
-      const t = s => (s && !String(s).startsWith('0001')) ? String(s).replace('T', ' ').slice(0, 16) : 'any';
-      let h = '<div class="card"><div class="ch"><i class="fas fa-clipboard-list" style="color:var(--pri)"></i><h2>Access Audit</h2><span class="pill" style="background:#f1f4f7;color:var(--mut)">searches &amp; exports are recorded</span></div><div style="overflow-x:auto"><table><thead><tr><th>When (IST)</th><th>User</th><th>ISP</th><th>IP</th><th>Port</th><th>Proto</th><th>Window</th><th>Rows</th><th>Reason</th></tr></thead><tbody>';
-      if (!queries.length) h += '<tr><td colspan="9" style="text-align:center;color:var(--mut);padding:24px">No queries yet.</td></tr>';
-      queries.forEach(q => {
-        h += `<tr><td class="mono" style="color:var(--ink2)">${(q.CreatedAt || '').replace('T', ' ').slice(0, 19)}</td><td>${esc(q.UserEmail)}</td><td class="mono">${q.ISPID || 'all'}</td>
-    <td class="mono" style="font-weight:600">${esc(q.QueryIP)}</td><td class="mono">${q.QueryPort || 'any'}</td><td>${esc(q.QueryProto || 'any')}</td>
-    <td class="mono" style="font-size:12px;color:var(--slate)">${t(q.FromTS)} → ${t(q.ToTS)}</td><td class="mono">${q.ResultCount}</td><td>${esc(q.CaseRef || '—')}</td></tr>`;
-      });
-      h += '</tbody></table></div></div>';
-      b.html(h);
-    }
-
-    // ==================== RETENTION & ARCHIVE ====================
-    async function pgRetention(b) {
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading retention…</div>');
-      const r = await api('/api/v1/retention'); if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load retention.</div>'); return; }
-      const d = await r.json();
-      if (!d.available) { b.html('<div class="card" style="padding:24px;color:var(--slate)">Flow store unavailable.</div>'); return; }
-      const st = d.storage || {}, win = d.window || {}, arch = d.archive || {};
-      let h = '<div class="grid-tiles" style="margin-bottom:18px">';
-      h += kpiCard('Retention target', d.retentionDays + ' days', 'regulatory window', 'fa-clock', '#2490d8');
-      h += kpiCard('Stored records', Number(st.rows || 0).toLocaleString(), 'on disk', 'fa-table-list', '#12946a');
-      h += kpiCard('Disk used', st.human || '0 B', 'compressed', 'fa-hard-drive', '#cf7f18');
-      h += kpiCard('Data window', (win.from || '—'), 'to ' + (win.to || '—'), 'fa-calendar-days', '#1c9ad0');
-      h += '</div>';
-      // S3 archive card
-      const autoPill = arch.auto ? `<span class="pill" style="background:#e6f4ea;color:#1e7e34">auto-archive ON · after ${arch.afterDays || 7}d</span>` : `<span class="pill" style="background:#f1f4f7;color:var(--mut)">auto-archive OFF</span>`;
-      h += `<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-box-archive" style="color:var(--pri)"></i><h2>S3 Cold Archive</h2>${arch.enabled ? `<span class="pill" style="background:#e6f4ea;color:#1e7e34">enabled · ${esc(arch.bucket)}</span>` : '<span class="pill" style="background:#fff4e0;color:#a86700">not configured</span>'}${arch.enabled ? autoPill : ''}</div>
-    <div style="padding:16px 18px;font-size:13.5px;color:var(--ink2)">${arch.enabled ? `Days older than the hot window (<b>${arch.afterDays || 7} days</b>) ${arch.auto ? 'are <b>automatically moved to S3</b> and dropped from hot storage' : 'can be archived to S3 manually below'}. Configure in <b>Settings → S3 Archive</b>.` : 'Enable S3 in <b>Settings → S3 Archive</b> (endpoint, bucket, keys) for off-box cold storage. Hot storage + search work without it.'}
-    ${(arch.canRun && arch.auto) ? '<div style="margin-top:12px"><button class="btn" id="sweep-now"><i class="fas fa-cloud-arrow-up"></i> Run auto-archive now</button> <span id="sweep-msg" style="font-size:12.5px;color:var(--slate)"></span></div>' : ''}</div>`;
-      // archived days (director)
-      const ad = arch.archivedDays || [];
-      if (arch.canRun) {
-        h += '<div class="card" style="margin-bottom:18px"><div class="ch"><i class="fas fa-clock-rotate-left" style="color:var(--pri)"></i><h2>Archived to S3</h2><span class="pill" style="background:#f1f4f7;color:var(--mut)">' + ad.length + ' days</span></div><div style="overflow-x:auto"><table><thead><tr><th>Day</th><th>Objects</th><th>Rows</th><th>Bytes</th><th>Archived at (IST)</th></tr></thead><tbody>';
-        if (!ad.length) h += '<tr><td colspan="5" style="text-align:center;color:var(--mut);padding:18px">Nothing archived yet.</td></tr>';
-        ad.forEach(a => { h += `<tr><td class="mono">${esc(a.Day)}</td><td class="mono">${a.Objects || 0}</td><td class="mono">${Number(a.Rows || 0).toLocaleString()}</td><td class="mono">${humanBytes(a.Bytes || 0)}</td><td class="mono">${esc((a.ArchivedAt || '').replace('T', ' ').slice(0, 19))}</td></tr>`; });
-        h += '</tbody></table></div></div>';
-      }
-      // ---- per-day data table (full retention window; client-side filter + sort) ----
-      const days = d.perDay || [];
-      const maxc = days.reduce((m, x) => Math.max(m, Number(x.count) || 0), 0) || 1;
-      const totalRecs = days.reduce((s, x) => s + (Number(x.count) || 0), 0);
-      const colspan = arch.canRun ? 4 : 3;
-      const stickyTh = 'position:sticky;top:0;z-index:2';
-      let rtSort = { k: 'date', dir: -1 }; // dir -1 = desc (date desc = newest first)
-      let rtQuery = '';
-      h += `<div class="card"><div class="ch"><i class="fas fa-calendar-week" style="color:var(--pri)"></i><h2>Records by day</h2>
-    <span class="pill" style="background:#f1f4f7;color:var(--mut)">${days.length} day${days.length === 1 ? '' : 's'}</span>
-    <span class="pill" style="background:#f1f4f7;color:var(--mut)">${Number(totalRecs).toLocaleString()} records</span>
-    <input id="rt-q" class="inp mono" placeholder="filter date… e.g. 2026-07" style="margin-left:auto;max-width:210px;height:32px;padding:6px 10px">
-  </div>
-  <div style="max-height:520px;overflow:auto"><table><thead><tr>
-    <th class="rt-h" data-k="date" style="${stickyTh}">Date <span id="rt-i-date"></span></th>
-    <th class="rt-h" data-k="count" style="${stickyTh}">Records <span id="rt-i-count"></span></th>
-    <th style="${stickyTh};cursor:default">Coverage</th>
-    ${arch.canRun ? `<th style="${stickyTh};cursor:default">Archive</th>` : ''}
-  </tr></thead><tbody id="rt-body"></tbody></table></div></div>`;
-      b.html(h);
-      const sortIcon = k => rtSort.k === k
-        ? `<i class="fas fa-sort-${rtSort.dir < 0 ? 'down' : 'up'}" style="color:var(--pri)"></i>`
-        : '<i class="fas fa-sort" style="opacity:.35"></i>';
-      function rtRender() {
-        const q = rtQuery.trim().toLowerCase();
-        const rows = days.filter(x => !q || String(x.date).toLowerCase().includes(q));
-        rows.sort((a, bb) => (rtSort.k === 'count'
-          ? Number(a.count) - Number(bb.count)
-          : (a.date < bb.date ? -1 : a.date > bb.date ? 1 : 0)) * rtSort.dir);
-        let tb = '';
-        if (!days.length) tb = `<tr><td colspan="${colspan}" style="text-align:center;color:var(--mut);padding:24px">No data yet.</td></tr>`;
-        else if (!rows.length) tb = `<tr><td colspan="${colspan}" style="text-align:center;color:var(--mut);padding:24px">No days match “${esc(rtQuery)}”.</td></tr>`;
-        else rows.forEach(x => {
-          const c = Number(x.count) || 0;
-          tb += `<tr><td class="mono">${esc(x.date)}</td><td class="mono">${c.toLocaleString()}</td>
-      <td style="width:38%"><div style="height:8px;background:#eef1f4;border-radius:5px;overflow:hidden"><div style="height:100%;width:${Math.round(c / maxc * 100)}%;background:var(--pri);border-radius:5px"></div></div></td>`
-            + (arch.canRun ? `<td><button class="btn out arch-run" data-d="${esc(x.date)}" style="height:28px"><i class="fas fa-cloud-arrow-up"></i> S3</button></td>` : '') + '</tr>';
-        });
-        $('#rt-body').html(tb);
-        $('#rt-i-date').html(sortIcon('date'));
-        $('#rt-i-count').html(sortIcon('count'));
-      }
-      rtRender();
-      $('.rt-h').on('click', function () {
-        const k = $(this).data('k');
-        if (rtSort.k === k) rtSort.dir *= -1; else { rtSort.k = k; rtSort.dir = -1; }
-        rtRender();
-      });
-      $('#rt-q').on('input', function () { rtQuery = this.value; rtRender(); });
-      $('#rt-body').on('click', '.arch-run', async function () {
-        const day = $(this).data('d'); const btn = $(this); btn.prop('disabled', true).text('…');
-        const r = await apiJSON('/api/v1/archive/' + day, 'POST'); const e = await r.json().catch(() => ({}));
-        if (r.status === 200) { btn.replaceWith('<span class="pill" style="background:#e6f4ea;color:#1e7e34">' + (e.rows || 0) + ' rows → S3</span>'); } else { btn.prop('disabled', false).text('retry'); toast(e.error || 'archive failed', 'err'); }
-      });
-      $('#sweep-now').on('click', async function () {
-        const btn = $(this); btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> sweeping…'); $('#sweep-msg').text('');
-        const r = await apiJSON('/api/v1/archive/sweep', 'POST'); const e = await r.json().catch(() => ({}));
-        if (r.status === 200) { $('#sweep-msg').css('color', '#1e7e34').text(`archived ${e.days || 0} day(s), ${Number(e.rows || 0).toLocaleString()} rows → S3`); setTimeout(() => pgRetention(b), 1200); }
-        else { btn.prop('disabled', false).html('<i class="fas fa-cloud-arrow-up"></i> Run auto-archive now'); $('#sweep-msg').css('color', '#c0392b').text(e.error || 'sweep failed'); }
-      });
-    }
-
-    // ==================== ISPs (Director) ====================
     async function pgISPs(b) {
       return YesLogsISPs.mount(b[0], { csrf: S.csrf, expired: showLogin, toast });
     }
@@ -2577,251 +2356,17 @@ async function pgCompliance(b){
     }
 
     // ==================== USERS ====================
-    async function pgUsers(b) {
-      b.html(loadingCard('Loading users…'));
-      const r = await api('/api/v1/users');
-      if (r.status !== 200) { b.html('<div class="card"><div class="empty"><div class="ei"><i class="fas fa-users"></i></div><div class="et">Cannot load users</div></div></div>'); return; }
-      const d = await r.json(); const users = d.users || [], dir = d.isDirector;
-      let isps = []; if (dir) { const ir = await api('/api/v1/isps'); if (ir.status === 200) isps = (await ir.json()).isps || []; }
-      const ispSel = dir ? `<div style="flex:1 1 180px"><label class="lbl">ISP</label><select id="u-isp" class="inp"><option value="">— ISP —</option>${isps.map(i => `<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select>${hint('or set role = Director')}</div>` : '';
-      const roleSel = dir ? `<div style="flex:1 1 140px"><label class="lbl">Role</label><select id="u-role" class="inp"><option value="isp">ISP user</option><option value="director">Director</option></select></div>` : '';
-      let h = `<div style="margin-bottom:16px">${note('Give every operator their <b>own</b> login — shared credentials break the per-user audit trail. ' + (dir ? 'You manage users across all ISPs.' : 'You manage users within your ISP.'), 'fa-users')}</div>`;
-      h += `<div class="card" style="margin-bottom:18px">${chead('fa-user-plus', 'Add User')}
-   <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
-    <div style="flex:1 1 220px"><label class="lbl">Email<span class="req">*</span></label><input id="u-email" class="inp" placeholder="analyst@isp.in"></div>
-    <div style="flex:1 1 170px"><label class="lbl">Password<span class="req">*</span></label><input id="u-pass" type="password" class="inp" placeholder="min 8 characters"></div>
-    ${ispSel}${roleSel}
-    <div style="padding-top:23px"><button id="u-add" class="btn"><i class="fas fa-plus"></i> Add User</button></div>
-   </div><div id="u-msg" style="padding:0 18px 14px;color:var(--bad);font-weight:600;font-size:13px"></div></div>`;
-      h += '<div class="card">' + chead('fa-users', 'Users', pill(users.length + (users.length === 1 ? ' user' : ' users'), 'mut') + '<button class="btn out sm" id="u-mypw" style="margin-left:auto"><i class="fas fa-key"></i> Change my password</button>') + '<div style="overflow-x:auto"><table><thead><tr><th>Email</th><th>Role</th><th>ISP</th><th>Created (IST)</th><th></th></tr></thead><tbody>';
-      if (!users.length) h += emptyRow(5, 'fa-users', 'No users yet', 'Add a login above so each operator signs in as themselves.');
-      users.forEach(u => {
-        h += `<tr><td style="font-weight:600;color:var(--ink)">${esc(u.email)}${u.self ? ' ' + pill('you', 'info') : ''}</td>
-    <td>${u.role === 'director' ? pill('Director', 'info') : pill('ISP user', 'mut')}</td>
-    <td class="mono">${u.ispId || '—'}</td><td class="mono" style="color:var(--slate)">${esc(u.createdAt)}</td>
-    <td style="text-align:right;white-space:nowrap"><button class="btn out sm u-reset" data-id="${u.id}" data-email="${esc(u.email)}"><i class="fas fa-key"></i> Reset</button> ${u.self ? '' : `<button class="btn danger sm u-del" data-id="${u.id}" data-email="${esc(u.email)}" title="Delete"><i class="fas fa-trash"></i></button>`}</td></tr>`;
-      });
-      h += '</tbody></table></div></div>';
-      b.html(h);
-      $('#u-add').on('click', async () => {
-        const body = { Email: $('#u-email').val(), Password: $('#u-pass').val(), ISPID: +($('#u-isp').length ? $('#u-isp').val() || 0 : 0), Role: ($('#u-role').length ? $('#u-role').val() : 'isp') };
-        const rr = await apiJSON('/api/v1/users', 'POST', body);
-        if (rr.status === 200) { toast('User added'); pgUsers(b); } else { const e = await rr.json().catch(() => ({})); $('#u-msg').text(e.error || 'failed'); }
-      });
-      $('.u-del').on('click', async function () { const em = $(this).data('email'); if (confirm('Delete user ' + em + '? They will lose access.')) { const rr = await apiJSON('/api/v1/users/' + $(this).data('id'), 'DELETE'); if (rr.status === 200) { toast('User deleted'); pgUsers(b); } else { const e = await rr.json().catch(() => ({})); toast(e.error || 'failed', 'err'); } } });
-      $('.u-reset').on('click', function () {
-        const uid = $(this).data('id'), em = $(this).data('email');
-        modal(chead('fa-key', 'Reset password — ' + em) + `<div style="padding:18px">${srow('New password', `<input id="rp-pw" type="password" class="inp" placeholder="min 8 characters">`, 'The user should change it after next sign-in.')}<div id="rp-msg" style="color:var(--bad);font-weight:600;font-size:13px;margin-top:6px"></div><div style="display:flex;gap:10px;margin-top:16px"><button class="btn" id="rp-go"><i class="fas fa-floppy-disk"></i> Set password</button><button class="btn out" onclick="closeModal()">Cancel</button></div></div>`);
-        $('#rp-go').on('click', async () => { const rr = await apiJSON('/api/v1/users/' + uid + '/reset', 'POST', { Password: $('#rp-pw').val() }); if (rr.status === 200) { closeModal(); toast('Password reset'); } else { const e = await rr.json().catch(() => ({})); $('#rp-msg').text(e.error || 'failed'); } });
-      });
-      $('#u-mypw').on('click', function () {
-        modal(chead('fa-key', 'Change my password') + `<div style="padding:18px">${srow('Current password', `<input id="mp-old" type="password" class="inp">`)}${srow('New password', `<input id="mp-new" type="password" class="inp" placeholder="min 8 characters">`)}<div id="mp-msg" style="color:var(--bad);font-weight:600;font-size:13px;margin-top:6px"></div><div style="display:flex;gap:10px;margin-top:16px"><button class="btn" id="mp-go"><i class="fas fa-floppy-disk"></i> Update password</button><button class="btn out" onclick="closeModal()">Cancel</button></div></div>`);
-        $('#mp-go').on('click', async () => { const rr = await apiJSON('/api/v1/account/password', 'POST', { OldPassword: $('#mp-old').val(), NewPassword: $('#mp-new').val() }); if (rr.status === 200) { closeModal(); toast('Password updated'); } else { const e = await rr.json().catch(() => ({})); $('#mp-msg').text(e.error || 'failed'); } });
-      });
+    function pgModule(b, view) {
+      return YesLogsPages.mount(b[0], { view, user: S.me, csrf: S.csrf, expired: showLogin, toast, navigate: dashboardNavigate });
     }
-
-    // ==================== SETTINGS (Director) ====================
-    const opts = (arr, sel) => arr.map(o => `<option ${o === sel ? 'selected' : ''}>${o}</option>`).join('');
-    const srow = (label, ctrl, h) => `<div class="fgrid"><label class="lbl">${label}</label><div>${ctrl}${h ? hint(h) : ''}</div></div>`;
-    const chk = (id, v, lbl) => `<label class="chk"><input type="checkbox" id="${id}" ${v ? 'checked' : ''}> ${lbl || 'enabled'}</label>`;
-    async function saveSetting(section, body) {
-      const r = await apiJSON('/api/v1/settings/' + section, 'PUT', body);
-      if (r.status === 200) { toast(section === 'crm' ? 'CRM connector saved' : 'Saved · applied to dataplane'); return true; }
-      const e = await r.json().catch(() => ({})); toast(e.error || 'save failed', 'err'); return false;
-    }
-    async function pgSettings(b) {
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading settings…</div>');
-      const r = await api('/api/v1/settings'); if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load settings (Director only).</div>'); return; }
-      const j = await r.json(); const cfg = j.settings || {}, secretSet = j.secretSet, notifyPassSet = j.notifyPassSet, crmKeySet = j.crmKeySet || {}, isps = j.isps || [];
-      const tabs = [['Dataplane', () => dpTab(cfg)], ['Skip Rules', () => skipTab(cfg)], ['Retention', () => retTab(cfg)], ['S3 Archive', () => s3Tab(cfg, secretSet)], ['CRM / RADIUS', () => crmTab(cfg, crmKeySet, isps)], ['Notifications', () => notifyTab(cfg, notifyPassSet)]];
-      b.html('<div class="tabs">' + tabs.map((t, i) => `<div class="tab${i ? '' : ' on'}" data-i="${i}">${t[0]}</div>`).join('') + '</div><div id="set-body" class="card" style="padding:18px"></div>');
-      const open = i => { $('.tab').removeClass('on').eq(i).addClass('on'); tabs[i][1](); };
-      $('.tab').on('click', function () { open(+$(this).data('i')); }); open(0);
-    }
-    function dpTab(cfg) {
-      const d = cfg.dataplane || {};
-      $('#set-body').html('<div class="sect"><i class="fas fa-gauge-high"></i> Ingest pipeline tuning</div>' +
-        note('These control how fast flows are written to ClickHouse. Changes apply <b>live</b> — no restart. The validated 50k-subscriber baseline is <b>6 workers / 25k batch / 500k queue / block</b>.', 'fa-bolt') + '<div style="height:14px"></div>' +
-        srow('Batch size', `<input id="dp-batch" class="inp mono" value="${d.batchSize || 5000}">`, 'Rows per ClickHouse insert. The #1 throughput lever — larger batches insert far more efficiently. 25,000–50,000 recommended.') +
-        srow('Flush interval (ms)', `<input id="dp-flush" class="inp mono" value="${d.flushIntervalMs || 300}">`, 'Max time a partial batch waits before being flushed. Lower = fresher data but more, smaller inserts. 300 ms is a good balance.') +
-        srow('Writer workers', `<input id="dp-workers" class="inp mono" value="${d.writerWorkers || 2}">`, 'Parallel insert workers. Scale roughly with CPU cores; too many causes contention. 6 on this 6-vCPU box.') +
-        srow('Max queue rows', `<input id="dp-queue" class="inp mono" value="${d.maxQueueRows || 200000}">`, 'In-memory buffer that absorbs ingest bursts. Bigger soaks up spikes; backpressure engages only when it fills.') +
-        srow('Backpressure', `<select id="dp-bp" class="inp">${opts(['block', 'drop_new', 'drop_old'], d.backpressureMode)}</select>`, 'When the queue is full: <b>block</b> = never drop (receiver slows) — safest. <b>drop_new</b>/<b>drop_old</b> = shed load to stay real-time.') +
-        srow('Unknown exporter', `<select id="dp-unk" class="inp">${opts(['reject', 'observe', 'allow'], d.unknownExporterMode)}</select>`, 'Flows from IPs not registered as devices: <b>reject</b> = secure default. <b>observe</b> = count but drop. <b>allow</b> = accept all (open).') +
-        `<div style="margin-top:16px"><button class="btn" id="dp-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
-      $('#dp-save').on('click', () => saveSetting('dataplane', { batchSize: +$('#dp-batch').val(), flushIntervalMs: +$('#dp-flush').val(), writerWorkers: +$('#dp-workers').val(), maxQueueRows: +$('#dp-queue').val(), backpressureMode: $('#dp-bp').val(), unknownExporterMode: $('#dp-unk').val() }));
-    }
-    function skipTab(cfg) {
-      const s = cfg.skiprules || {};
-      $('#set-body').html('<div class="sect"><i class="fas fa-filter"></i> Global skip rules</div>' +
-        note('Skip rules drop low-value flows <b>before</b> storage to cut volume &amp; cost. These are the global defaults + the default for new devices — each device can override them on the <b>Devices</b> page or via a <b>Capture Policy</b>.', 'fa-filter') + '<div style="height:14px"></div>' +
-        srow('Skip DNS (port 53)', chk('sk-dns', s.skipDns, 'skip'), 'Drops DNS lookups — very high volume, low value for NAT mapping. Big storage saver.') +
-        srow('Skip private → private', chk('sk-priv', s.skipPrivate, 'skip'), 'Drops internal-only flows (both ends private) — not subscriber↔internet traffic, rarely needed for IPDR.') +
-        srow('Skip zero-byte flows', chk('sk-zero', s.skipZero, 'skip'), 'Drops empty/keepalive flows with no payload bytes.') +
-        `<div style="margin-top:16px"><button class="btn" id="sk-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
-      $('#sk-save').on('click', () => saveSetting('skiprules', { skipDns: $('#sk-dns').is(':checked'), skipPrivate: $('#sk-priv').is(':checked'), skipZero: $('#sk-zero').is(':checked') }));
-    }
-    function retTab(cfg) {
-      const r = cfg.retention || {};
-      $('#set-body').html('<div class="sect"><i class="fas fa-database"></i> Hot-storage retention</div>' +
-        note('How long flow logs stay in ClickHouse (hot) before the TTL drops them. <b>180 days</b> matches India CERT-In retention norms. With S3 auto-archive on, data older than the hot window is moved to cold storage first and stays searchable.', 'fa-clock') + '<div style="height:14px"></div>' +
-        srow('Retention (days)', `<input id="rt-days" type="number" min="1" class="inp mono" value="${r.days || 180}">`, 'ClickHouse table TTL. Data past this age is removed from hot storage (after archival, if enabled).') +
-        `<div style="margin-top:16px"><button class="btn" id="rt-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
-      $('#rt-save').on('click', () => saveSetting('retention', { days: +$('#rt-days').val() }));
-    }
-    function s3Tab(cfg, secretSet) {
-      const s = cfg.s3 || {};
-      $('#set-body').html('<div class="sect"><i class="fas fa-box-archive"></i> S3 cold archive &amp; auto-tiering</div>' +
-        note('Aged days are streamed from ClickHouse straight to S3 (Parquet) and dropped from hot storage, keeping hot bounded while older data stays searchable via cold search. Works with any S3-compatible store (Zata, AWS, Wasabi, MinIO). <b>Director-only.</b>', 'fa-cloud-arrow-up') + '<div style="height:14px"></div>' +
-        srow('Enabled', chk('s3-en', s.enabled, 'enable S3 archive'), 'Master switch for cold archiving. Hot storage &amp; search work fine without it.') +
-        srow('Endpoint', `<input id="s3-ep" class="inp mono" placeholder="https://idr01.zata.ai" value="${esc(s.endpoint || '')}">`, 'S3-compatible endpoint URL including https://.') +
-        srow('Region', `<input id="s3-rg" class="inp mono" placeholder="us-east-1" value="${esc(s.region || 'us-east-1')}">`, 'Signing region. <b>us-east-1</b> works for most S3-compatible providers.') +
-        srow('Bucket', `<input id="s3-bk" class="inp mono" placeholder="yeslogs-archive" value="${esc(s.bucket || '')}">`, 'Target bucket — auto-created if it does not exist.') +
-        srow('Access key', `<input id="s3-ak" class="inp mono" placeholder="access key id" value="${esc(s.accessKey || '')}">`, '') +
-        srow('Secret key', `<input id="s3-sk" type="password" class="inp mono" placeholder="${secretSet ? '•••••••• (unchanged — leave blank to keep)' : 'secret access key'}">`, 'Stored encrypted-at-rest in the DB; never shown again after saving. Leave blank to keep the current one.') +
-        srow('Path prefix', `<input id="s3-pp" class="inp mono" placeholder="natlog" value="${esc(s.pathPrefix || 'natlog')}">`, 'Folder prefix inside the bucket. Objects land at <span class="mono">prefix/isp_id=…/year=…/month=…/day=…</span>.') +
-        srow('Export format', `<select id="s3-fmt" class="inp">${opts(['parquet', 'csvgz'], s.exportFormat)}</select>`, '<b>parquet</b> = columnar, smaller, fast cold-search with pushdown (recommended). <b>csvgz</b> = portable gzip CSV.') +
-        srow('Auto-archive', chk('s3-auto', s.autoArchive, 'move aged days to S3 automatically'), 'When on, a sweep runs every 6 h moving days older than the hot window to S3 and dropping them from hot.') +
-        srow('Archive after (days)', `<input id="s3-after" type="number" min="1" class="inp mono" value="${s.archiveAfterDays || 7}">`, 'Hot window length. Days older than this are archived &amp; dropped from hot storage. 7 is typical; lower it if hot disk fills under heavy load.') +
-        `<div style="margin-top:16px"><button class="btn" id="s3-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button></div>`);
-      $('#s3-save').on('click', () => saveSetting('s3', { enabled: $('#s3-en').is(':checked'), endpoint: $('#s3-ep').val(), region: $('#s3-rg').val(), bucket: $('#s3-bk').val(), accessKey: $('#s3-ak').val(), secretKey: $('#s3-sk').val(), pathPrefix: $('#s3-pp').val(), exportFormat: $('#s3-fmt').val(), autoArchive: $('#s3-auto').is(':checked'), archiveAfterDays: +$('#s3-after').val() }));
-    }
-
-    function crmTab(cfg, keySet, isps) {
-      const connectors = cfg.crmConnectors || (cfg.crmConnectors = []);
-      if (!isps.length) {
-        $('#set-body').html('<div class="sect"><i class="fas fa-address-card"></i> CRM / RADIUS subscriber enrichment</div>' +
-          note('Create an ISP first. Each ISP gets its own isolated CRM endpoint and API credential.', 'fa-circle-info'));
-        return;
-      }
-      const ispOpts = isps.map(i => `<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('');
-      $('#set-body').html('<div class="sect"><i class="fas fa-address-card"></i> CRM / RADIUS subscriber enrichment</div>' +
-        note('When enabled, an ISP-scoped Logs search or export sends batched <b>private source IP + UTC event time + NAS identity</b> to that ISP’s CRM endpoint. Returned username, name, phone and address are joined to the row. Raw ingest and ClickHouse/S3 storage are never blocked or modified. <b>Director-only.</b>', 'fa-shield-halved') + '<div style="height:14px"></div>' +
-        srow('ISP', `<select id="crm-isp" class="inp">${ispOpts}</select>`, 'Connector credentials and results are isolated per ISP.') +
-        srow('Enabled', chk('crm-en', false, 'enrich Logs search and all CSV / Excel / PDF exports'), 'When the CRM is unavailable, the original IPDR rows still return and enrichment is marked unavailable.') +
-        srow('Batch endpoint', '<input id="crm-endpoint" class="inp mono" placeholder="https://crm.example.in/api/yeslogs/v1/session-lookups">', 'Complete HTTPS URL implementing the <span class="mono">yeslogs.crm.lookup.v1</span> batch contract. Redirects are refused.') +
-        srow('Bearer API key', '<input id="crm-key" type="password" class="inp mono" placeholder="API key">', 'Encrypted before DB persistence and never shown again. Leave blank to keep the saved key.') +
-        srow('Timeout (ms)', '<input id="crm-timeout" type="number" min="500" max="30000" class="inp mono" value="5000">', 'Per batch request. 3,000–5,000 ms is typical; a timeout does not fail the base report.') +
-        srow('Rows per batch', '<input id="crm-batch" type="number" min="1" max="1000" class="inp mono" value="500">', 'Exact IP/device/second lookups are deduplicated first; up to four batches run concurrently for large exports.') +
-        `<div style="margin-top:16px"><button class="btn" id="crm-save"><i class="fas fa-floppy-disk"></i> Save connector</button></div>` +
-        note('CRM response statuses: <b>matched</b>, <b>not_found</b>, <b>ambiguous</b> or <b>error</b>. Every lookup carries a stable <span class="mono">YL-YYYYMMDD-…</span> reference code.', 'fa-code'));
-      const loadConnector = () => {
-        const id = +$('#crm-isp').val();
-        const c = connectors.find(x => +x.ispId === id) || {};
-        $('#crm-en').prop('checked', !!c.enabled);
-        $('#crm-endpoint').val(c.endpoint || '');
-        $('#crm-key').val('').attr('placeholder', keySet[String(id)] ? '•••••••• (unchanged — leave blank to keep)' : 'API key');
-        $('#crm-timeout').val(c.timeoutMs || 5000);
-        $('#crm-batch').val(c.batchSize || 500);
-      };
-      $('#crm-isp').on('change', loadConnector);
-      $('#crm-save').on('click', async () => {
-        const ispId = +$('#crm-isp').val(), apiKey = $('#crm-key').val();
-        const body = { ispId, enabled: $('#crm-en').is(':checked'), endpoint: $('#crm-endpoint').val(), apiKey, timeoutMs: +$('#crm-timeout').val(), batchSize: +$('#crm-batch').val() };
-        if (await saveSetting('crm', body)) {
-          const at = connectors.findIndex(x => +x.ispId === ispId);
-          const saved = Object.assign({}, body, { apiKey: '' });
-          if (at >= 0) connectors[at] = saved; else connectors.push(saved);
-          if (apiKey) keySet[String(ispId)] = true;
-          loadConnector();
-        }
-      });
-      loadConnector();
-    }
-
-    function notifyTab(cfg, passSet) {
-      const n = cfg.notifications || {};
-      $('#set-body').html('<div class="sect"><i class="fas fa-bell"></i> Device alerts (email)</div>' +
-        note('Get an email the moment a registered exporter <b>stops sending flows</b> (device down), and again when it <b>recovers</b>. Liveness is checked every minute against ClickHouse. <b>Director-only.</b>', 'fa-bell') + '<div style="height:14px"></div>' +
-        srow('Enabled', chk('nf-en', n.enabled, 'enable device-down email alerts'), 'Master switch. When off, no emails are sent — the liveness badges on the Devices page still work.') +
-        srow('SMTP host', `<input id="nf-host" class="inp mono" placeholder="smtp.gmail.com" value="${esc(n.smtpHost || '')}">`, 'Your SMTP relay hostname.') +
-        srow('SMTP port', `<input id="nf-port" type="number" min="1" max="65535" class="inp mono" value="${n.smtpPort || 587}">`, '<b>587</b> = STARTTLS · <b>465</b> = implicit TLS · <b>25</b> = none.') +
-        srow('Security', `<select id="nf-tls" class="inp">${opts(['starttls', 'tls', 'none'], n.smtpTls || 'starttls')}</select>`, '<b>starttls</b> (port 587) or <b>tls</b> (port 465) recommended. <b>none</b> only for a trusted local relay.') +
-        srow('Username', `<input id="nf-user" class="inp mono" placeholder="alerts@yourisp.in" value="${esc(n.smtpUser || '')}">`, 'SMTP login. Leave blank for a relay that needs no AUTH.') +
-        srow('Password', `<input id="nf-pass" type="password" class="inp mono" placeholder="${passSet ? '•••••••• (unchanged — leave blank to keep)' : 'SMTP password / app password'}">`, 'Stored in the DB; never shown again. For Gmail use an <b>App Password</b>, not your account password. Leave blank to keep the current one.') +
-        srow('From address', `<input id="nf-from" class="inp mono" placeholder="alerts@yourisp.in" value="${esc(n.fromAddr || '')}">`, 'Sender shown on the email. Defaults to the username if blank.') +
-        srow('Recipients', `<textarea id="nf-rcpt" class="inp mono" rows="2" placeholder="noc@yourisp.in, ops@yourisp.in">${esc(n.recipients || '')}</textarea>`, 'Comma / newline separated. Everyone listed receives every alert.') +
-        srow('Silent after (min)', `<input id="nf-silence" type="number" min="1" max="1440" class="inp mono" value="${n.silenceMins || 15}">`, 'A device with no flows for this long is flagged <b>DOWN</b> and an email fires. 15 minutes is typical.') +
-        srow('Re-remind (hours)', `<input id="nf-remind" type="number" min="0" max="168" class="inp mono" value="${n.remindHours == null ? 6 : n.remindHours}">`, 'While a device stays down, re-send the alert every N hours. <b>0</b> = alert once, then stay quiet until it recovers.') +
-        `<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center"><button class="btn" id="nf-save"><i class="fas fa-floppy-disk"></i> Save &amp; apply</button><button class="btn out" id="nf-test"><i class="fas fa-paper-plane"></i> Send test email</button><span id="nf-tmsg" style="font-weight:600;font-size:13px"></span></div>` +
-        note('Test email uses the <b>saved</b> settings — click Save first if you just changed them.', 'fa-circle-info'));
-      $('#nf-save').on('click', () => saveSetting('notifications', { enabled: $('#nf-en').is(':checked'), smtpHost: $('#nf-host').val(), smtpPort: +$('#nf-port').val(), smtpTls: $('#nf-tls').val(), smtpUser: $('#nf-user').val(), smtpPassword: $('#nf-pass').val(), fromAddr: $('#nf-from').val(), recipients: $('#nf-rcpt').val(), silenceMins: +$('#nf-silence').val(), remindHours: +$('#nf-remind').val() }));
-      $('#nf-test').on('click', async () => { const m = $('#nf-tmsg').css('color', 'var(--mut)').text('Sending…'); const r = await apiJSON('/api/v1/notifications/test', 'POST', {}); if (r.status === 200) { m.css('color', 'var(--ok)').text('✓ Sent — check the inbox'); } else { const e = await r.json().catch(() => ({})); m.css('color', 'var(--bad)').text('✗ ' + (e.error || 'failed')); } });
-    }
-
-    // ==================== SYSTEM (Director) ====================
-    function pgSystem(b) {
-      const gc = (title, icon, p, big, sub, color) => `<div class="card" style="padding:16px"><div style="display:flex;justify-content:space-between"><div style="font-size:12px;color:#8a96a3;font-weight:700;text-transform:uppercase;letter-spacing:.4px">${title}</div><i class="fas ${icon}" style="color:${color}"></i></div><div style="font-size:24px;font-weight:700;color:var(--ink);margin-top:6px">${big}</div><div style="font-size:12px;color:#a7b1bc">${sub}</div><div class="gauge"><div style="width:${p}%;background:${color}"></div></div></div>`;
-      async function load() {
-        const r = await api('/api/v1/system'); if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load system (Director only).</div>'); return; }
-        const d = await r.json(); const cpu = d.cpu || {}, mem = d.memory || {}, disk = d.disk || {}, proc = d.process || {}, ing = d.ingest || {};
-        const up = proc.uptime || 0, uph = Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm';
-        let h = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:16px">';
-        h += gc('CPU load', 'fa-microchip', cpu.loadPct || 0, (cpu.load1 || 0).toFixed(2), (cpu.cores || 0) + ' cores · ' + (cpu.loadPct || 0) + '%', '#2490d8');
-        h += gc('Memory', 'fa-memory', mem.pct || 0, mem.human || '—', (mem.pct || 0) + '% of ' + (mem.totalHuman || '—'), '#12946a');
-        h += gc('Disk', 'fa-hard-drive', disk.pct || 0, disk.human || '—', (disk.pct || 0) + '% of ' + (disk.totalHuman || '—'), '#cf7f18');
-        h += gc('Flows today', 'fa-bolt', Math.min(100, (ing.flowsToday || 0) / 10000), Number(ing.flowsToday || 0).toLocaleString(), (ing.bytesHuman || '0 B') + ' · ' + (ing.devices || 0) + ' dev', '#1c9ad0');
-        h += '</div><div class="card"><div class="ch"><i class="fas fa-gears" style="color:var(--pri)"></i><h2>natlog process</h2><span style="flex:1"></span><button class="btn out" id="sys-refresh" style="height:30px"><i class="fas fa-arrows-rotate"></i> Refresh</button></div><div style="padding:18px">';
-        h += `<div class="fgrid"><label class="lbl" style="margin:0">Worker routines</label><div class="mono">${proc.goroutines || 0}</div></div><div class="fgrid"><label class="lbl" style="margin:0">App memory (heap)</label><div class="mono">${proc.heapHuman || '—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Process memory</label><div class="mono">${proc.sysHuman || '—'}</div></div><div class="fgrid"><label class="lbl" style="margin:0">Uptime</label><div class="mono">${uph}</div></div></div></div>`;
-        b.html(h); $('#sys-refresh').on('click', load);
-      }
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading system…</div>'); load();
-    }
-
-    // ==================== DEVICE EDIT ====================
-
-    // ==================== CAPTURE POLICIES ====================
+    function pgUsers(b) { return pgModule(b, 'Users'); }
+    function pgSettings(b) { return pgModule(b, 'Settings'); }
     async function pgPolicies(b) {
       return YesLogsPolicies.mount(b[0], { user: S.me, csrf: S.csrf, expired: showLogin, toast, navigate: dashboardNavigate });
     }
 
     // ==================== DATAPLANES ====================
-    async function pgDataplanes(b) {
-      b.html(loadingCard('Loading collectors…'));
-      const r = await api('/api/v1/dataplanes'); if (r.status !== 200) { b.html('<div class="card"><div class="empty"><div class="ei"><i class="fas fa-lock"></i></div><div class="et">Director only</div><div class="ed">Dataplane status is visible to the Director role.</div></div></div>'); return; }
-      const dps = (await r.json()).dataplanes || [];
-      const sr = await api('/api/v1/system');
-      const sys = sr.status === 200 ? await sr.json() : null;
-      const short = n => { n = Number(n) || 0; if (n < 1000) return n.toLocaleString(); return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 }).format(n); };
-      const exact = n => (Number(n) || 0).toLocaleString();
-      const duration = s => { s = Number(s) || 0; const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60); return d ? d + 'd ' + h + 'h' : h + 'h ' + m + 'm'; };
-      const totals = dps.reduce((a, d) => ({ ingested: a.ingested + Number(d.ingested || 0), inserted: a.inserted + Number(d.inserted || 0), skipped: a.skipped + Number(d.skipped || 0), queue: Math.max(a.queue, Number(d.queuePct || 0)) }), { ingested: 0, inserted: 0, skipped: 0, queue: 0 });
-      const active = dps.filter(d => String(d.status).toLowerCase() === 'live').length;
-      const primary = dps[0] || {};
-      const avg = primary.uptime ? Math.round(Number(primary.ingested || 0) / Number(primary.uptime)) : 0;
-      const delta = Math.max(0, Number(primary.ingested || 0) - Number(primary.skipped || 0) - Number(primary.inserted || 0));
-      const summary = (l, v, title, sub, ic, c) => `<div class="card kpi"><div style="min-width:0"><div class="kl">${esc(l)}</div><div class="kv" title="${esc(title || v)}">${esc(v)}</div><div class="ks">${esc(sub)}</div></div><div class="ki" style="background:${c}1a;color:${c}"><i class="fas ${ic}"></i></div></div>`;
-      let h = '<div class="dp-page"><div class="dp-summary">';
-      h += summary('Active collectors', String(active), String(active), active === dps.length ? 'all collectors reporting' : 'attention required', 'fa-network-wired', '#1878b8');
-      h += summary('Flows ingested', short(totals.ingested), exact(totals.ingested), 'decoded · since service start', 'fa-bolt', '#0891b2');
-      h += summary('Flows stored', short(totals.inserted), exact(totals.inserted), 'written to hot storage', 'fa-database', '#7c3aed');
-      h += summary('Queue pressure', totals.queue + '%', totals.queue + '%', totals.queue ? 'writer backlog detected' : 'no write backlog', 'fa-gauge-high', totals.queue >= 60 ? '#d97706' : '#16a34a');
-      h += '</div><div class="dp-main"><section class="card"><div class="dp-panel-head"><div class="dp-panel-title"><span class="ci"><i class="fas fa-server"></i></span><div><h2>Collector fleet</h2><p>' + active + ' of ' + dps.length + ' collectors online</p></div></div>' + pill(active === dps.length ? 'all healthy' : 'attention', active === dps.length ? 'ok' : 'warn') + '</div><div class="dp-fleet-scroll"><table class="dp-fleet"><thead><tr><th>Collector</th><th>Status</th><th>Uptime</th><th style="text-align:right">Ingested</th><th style="text-align:right">Stored</th><th style="text-align:right">Skipped</th><th style="text-align:right">Queue</th></tr></thead><tbody>';
-      if (!dps.length) {
-        h += emptyRow(7, 'fa-network-wired', 'No dataplanes connected', 'A collector will appear here after it reports to the Director.');
-      } else dps.forEach(d => {
-        const q = Number(d.queuePct || 0), qcol = q >= 85 ? 'var(--bad)' : q >= 60 ? 'var(--warn)' : 'var(--ok)', status = String(d.status || 'unknown'), sv = status.toLowerCase() === 'live' ? 'ok' : 'warn';
-        h += `<tr><td><div class="dp-identity"><span class="dp-node-icon"><i class="fas fa-network-wired"></i></span><div><strong>${esc(d.name)}</strong><span>${esc(d.kind)}</span></div></div></td><td>${pill(status, sv)}</td><td class="mono">${duration(d.uptime)}</td><td class="dp-num mono" title="${exact(d.ingested)}">${short(d.ingested)}</td><td class="dp-num mono" title="${exact(d.inserted)}">${short(d.inserted)}</td><td class="dp-num mono" title="${exact(d.skipped)}">${short(d.skipped)}</td><td><div class="dp-queue"><span class="dp-queue-track"><span style="width:${Math.min(q, 100)}%;background:${qcol}"></span></span><strong style="color:${qcol}">${q}%</strong></div></td></tr>`;
-      });
-      h += '</tbody></table></div></section>';
-      h += `<aside class="card dp-runtime"><div class="dp-panel-head"><div class="dp-panel-title"><span class="ci"><i class="fas fa-wave-square"></i></span><div><h2>Runtime snapshot</h2><p>Primary collector process</p></div></div>${pill('live', 'ok')}</div><div class="dp-runtime-body"><div class="dp-runtime-item"><span>Node</span><strong title="${esc(primary.name || '—')}">${esc(primary.name || '—')}</strong></div><div class="dp-runtime-item"><span>Process type</span><strong title="${esc(primary.kind || '—')}">${esc(primary.kind || '—')}</strong></div><div class="dp-runtime-item"><span>Uptime</span><strong>${duration(primary.uptime)}</strong></div><div class="dp-runtime-item"><span>Average ingest</span><strong>${exact(avg)} / sec</strong></div><div class="dp-runtime-item"><span>Writer delta</span><strong title="${exact(delta)}">${short(delta)}</strong></div><div class="dp-runtime-item"><span>Queue state</span><strong style="color:${totals.queue ? 'var(--warn)' : 'var(--ok)'}">${totals.queue ? 'Backlog ' + totals.queue + '%' : 'Clear'}</strong></div></div><div class="dp-runtime-note"><i class="fas fa-circle-info"></i><div>Counters are sampled live and reset when the service restarts. A small writer delta can be rows currently in flight.</div></div></aside></div>`;
-      h += '<div class="dp-section-head"><div class="sect"><i class="fas fa-microchip"></i> Host resources</div><span>Primary collector capacity</span></div>';
-      if (sys) {
-        const cpu = sys.cpu || {}, mem = sys.memory || {}, disk = sys.disk || {}, proc = sys.process || {};
-        const resource = (l, ic, big, sub, p, c) => { p = Number(p); const has = p >= 0, pct = has ? Math.max(0, Math.min(p, 100)) : 0; return `<div class="card dp-resource"><div class="dp-resource-top"><div class="ki" style="background:${c}1a;color:${c}"><i class="fas ${ic}"></i></div>${has ? `<span class="dp-resource-pct">${pct}%</span>` : ''}</div><div class="kl">${esc(l)}</div><div class="kv" title="${esc(big)}">${esc(big)}</div><div class="ks">${esc(sub)}</div>${has ? `<div class="gauge"><div style="width:${pct}%;background:${c}"></div></div>` : ''}</div>`; };
-        const diskColor = Number(disk.pct || 0) >= 85 ? '#dc2626' : Number(disk.pct || 0) >= 70 ? '#d97706' : '#7c3aed';
-        h += '<div class="dp-resources">';
-        h += resource('CPU load', 'fa-microchip', (Number(cpu.load1) || 0).toFixed(2), (cpu.cores || 0) + ' cores · 1 minute load', cpu.loadPct || 0, '#1878b8');
-        h += resource('Memory', 'fa-memory', mem.human || '—', 'of ' + (mem.totalHuman || '—'), mem.pct || 0, '#16a34a');
-        h += resource('ClickHouse disk', 'fa-hard-drive', disk.human || '—', 'of ' + (disk.totalHuman || '—'), disk.pct || 0, diskColor);
-        h += resource('App memory', 'fa-layer-group', proc.heapHuman || '—', (proc.goroutines || 0) + ' goroutines · heap', -1, '#0891b2');
-        h += '</div>';
-      } else {
-        h += note('Host resource metrics are temporarily unavailable. Collector flow counters above are still live.', 'fa-triangle-exclamation', 'amber');
-      }
-      h += '</div>';
-      b.html(h);
-    }
+    function pgDataplanes(b) { return pgModule(b, 'Dataplanes'); }
 
     boot();
   </script>

@@ -105,3 +105,19 @@ restoring its Caddy upstream with validate/reload, restoring the previous fetche
 configuration and selecting the previous retained UI. Pause the UI fetch timer
 while rolling back and resume only after the promoted branch agrees. Never restore
 the database backup over subsequent user changes. Keep the port-8080 guard enabled.
+
+## Combined console upgrades (v1.13.0)
+
+The gateway now owns user CRUD and password routes, with tenant checks, password
+confirmation, account versions and primary-login protection. Primary ISP profile
+edits remain on ISPs; operators can change their own password on Users.
+
+Settings remain on the running collector. The gateway adds per-section snapshot
+versions to GET `/api/v1/settings` and requires `X-Settings-Version` on PUTs. It
+checks current runtime/persisted values and validates the submitted form before
+forwarding. Existing tabs must refresh to use the new forms. Blank credentials
+preserve saved values. The gateway does not apply a second copy of runtime settings.
+
+Use the same alternate-port deployment above (the v1.13 candidate uses 8083).
+Verify all eight refined modules and the existing four modules before draining
+the preceding gateway. No collector restart or database schema change is required.
