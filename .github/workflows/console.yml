@@ -34,6 +34,8 @@ jobs:
         run: node scripts/check-console.cjs "$RUNNER_TEMP/console"
       - name: Check ISP modal CRUD
         run: node scripts/check-isps.cjs "$RUNNER_TEMP/console"
+      - name: Check Devices modal CRUD
+        run: node scripts/check-devices.cjs "$RUNNER_TEMP/console"
       - name: Check Director and ISP dashboards
         run: node scripts/check-dashboard.cjs "$RUNNER_TEMP/console"
 
