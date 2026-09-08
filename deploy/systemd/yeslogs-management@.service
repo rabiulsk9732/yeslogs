@@ -1,0 +1,23 @@
+[Unit]
+Description=YesLogs management gateway on loopback port %i
+After=network.target mariadb.service natlog.service yeslogs-management-guard.service
+Requires=yeslogs-management-guard.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/yeslogs-management/%i/director --config /etc/natlog/management-%i.yaml
+Restart=on-failure
+RestartSec=3
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

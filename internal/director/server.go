@@ -219,6 +219,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/account/password", s.apiChangeOwnPassword)
 	mux.HandleFunc("GET /api/v1/policies", s.apiListPolicies)
 	mux.HandleFunc("POST /api/v1/policies", s.apiCreatePolicy)
+	mux.HandleFunc("GET /api/v1/policies/{id}", s.apiGetPolicy)
+	mux.HandleFunc("PUT /api/v1/policies/{id}", s.apiUpdatePolicy)
 	mux.HandleFunc("DELETE /api/v1/policies/{id}", s.apiDeletePolicy)
 
 	// Legacy server-rendered admin pages (session auth).

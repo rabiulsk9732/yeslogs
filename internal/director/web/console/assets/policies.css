@@ -1,0 +1,22 @@
+.policy-tools .inp[type=search] { width:280px }
+.policy-tools select.inp { width:185px }
+.policy-table { min-width:960px; table-layout:fixed }
+.policy-table th { white-space:normal; line-height:1.4 }
+.policy-table td { white-space:normal; overflow-wrap:anywhere }
+.policy-table th:last-child { width:134px; text-align:right }
+.policy-table th:nth-child(3) { width:230px }
+.policy-table th:nth-child(4) { width:130px }
+.policy-table .policy-delete { color:var(--bad) }
+.policy-note { padding:12px 16px; margin:0; color:var(--mut); border-bottom:1px solid var(--bd); font-size:12px; line-height:1.5 }
+#policy-updated { margin:0 0 0 auto; font-size:11px }
+#policy-limit { width:65px; padding:5px 8px }
+.policy-modal { width:760px }
+.policy-modal input[readonly],.policy-modal select:disabled { background:var(--wash); color:var(--mut) }
+.policy-modal .isp-modal-foot { flex-wrap:wrap }
+.policy-form-note { margin:20px 0 0 }
+.policy-linked { margin-top:20px; border-top:1px solid var(--bd) }
+.policy-linked h3 { font-size:14px }
+.policy-linked > div { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid var(--bd); font-size:13px }
+.policy-linked > div > span:first-child { min-width:0; overflow-wrap:anywhere }
+.policy-linked .isp-secondary { display:block; color:var(--mut); margin-top:4px }
+@media(max-width:520px) { .policy-tools .inp[type=search],.policy-tools select.inp { width:100% } .policy-index .ch { flex-wrap:wrap } #policy-updated { width:100%; margin:0 } .policy-modal .isp-modal-foot { padding:12px 14px } }

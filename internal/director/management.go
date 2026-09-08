@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-// ManagementHandler deploys tenant/account changes independently of the UDP
+// ManagementHandler deploys tenant/account/policy changes independently of the UDP
 // receiver. Runtime, flow and device endpoints stay with the original process.
 // Public authenticated traffic is checked here against current account state
 // before forwarding, so disabled/deleted tenants cannot keep using old cookies.
@@ -43,7 +43,7 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 			writeJSON(w, 200, map[string]string{"revision": revision})
 			return
 		}
-		owned := p == "/api/v1/isps" || strings.HasPrefix(p, "/api/v1/isps/") || p == "/api/v1/login" || p == "/api/v1/logout" || p == "/api/v1/me" || p == "/login"
+		owned := p == "/api/v1/policies" || strings.HasPrefix(p, "/api/v1/policies/") || p == "/api/v1/isps" || strings.HasPrefix(p, "/api/v1/isps/") || p == "/api/v1/login" || p == "/api/v1/logout" || p == "/api/v1/me" || p == "/login"
 		public := p == "/healthz" || p == "/api/v1/agent/config" || p == "/" || strings.HasPrefix(p, "/assets/")
 		if !public && p != "/api/v1/login" && p != "/login" && p != "/api/v1/logout" {
 			if _, ok := s.currentIdentity(r); !ok {

@@ -73,3 +73,35 @@ The backend port guard intentionally remains enabled on rollback because Caddy
 also reaches the original backend over loopback. If direct remote HTTP access
 is explicitly needed later, remove only `table inet yeslogs_management` and
 disable its dedicated service; do not flush the host ruleset.
+
+## Capture policy upgrades (v1.12.0)
+
+The gateway also owns `/api/v1/policies` and child routes. It supports preset edits,
+content versions, scoped usage and reference-protected rename/delete. Device and
+flow routes still proxy to natlog. Policy edits change only the stored preset;
+existing device skip flags are not updated automatically. The database schema is
+unchanged by this release.
+
+For a second management instance, install `systemd/yeslogs-management@.service`.
+A port instance such as `yeslogs-management@8082` reads the root-only file
+`/etc/natlog/management-8082.yaml` and runs
+`/usr/local/lib/yeslogs-management/8082/director`. That path should point to an
+immutable directory named by the reviewed commit under
+`/usr/local/lib/yeslogs-management/releases/`. Build from the clean committed
+source with Go 1.25 and verify `vcs.revision` and `vcs.modified=false`.
+
+Back up the existing management binary, config, Caddy fragment, UI fetcher config
+and control-plane database. Start the candidate using the same session key/DSN and
+upstream 127.0.0.1:8080, with no ClickHouse connection. Check login, existing-session
+compatibility, policy GETs, ISP/device GETs and read-only modal rendering against
+that candidate. Enable the candidate for boot, update the Caddy upstream, validate
+and reload Caddy. Then atomically update the fetcher's `management_revision` and
+`management_probe_url` together. Leave `backend_revision` unchanged. Successful CI
+can now publish the matching static UI. Verify the public revision and unchanged
+collector PID/start time before disabling the previous management instance.
+
+Rollback this upgrade by starting the retained previous management instance,
+restoring its Caddy upstream with validate/reload, restoring the previous fetcher
+configuration and selecting the previous retained UI. Pause the UI fetch timer
+while rolling back and resume only after the promoted branch agrees. Never restore
+the database backup over subsequent user changes. Keep the port-8080 guard enabled.

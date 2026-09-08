@@ -1650,6 +1650,8 @@
   <script src="/assets/isps.js"></script>
   <link rel="stylesheet" href="/assets/devices.css">
   <script src="/assets/devices.js"></script>
+  <link rel="stylesheet" href="/assets/policies.css">
+  <script src="/assets/policies.js"></script>
 </head>
 
 <body>
@@ -1927,7 +1929,7 @@
     }
 
     // ---- auth ----
-    function showLogin() { YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
+    function showLogin() { YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
     function showApp() { $('#login').css('display', 'none'); $('#app').css('display', 'grid'); }
     function initials(email) { const n = (email || '?').split('@')[0].split(/[.\-_]/); const a = (n[0] || '?')[0] || '?', b = (n[1] || '')[0] || ''; return (a + b).toUpperCase(); }
 
@@ -2043,7 +2045,7 @@
 
     // ---- data ----
     async function loadData() {
-      if (['Overview', 'ISPs', 'Devices'].includes(S.view)) return renderPage();
+      if (['Overview', 'ISPs', 'Devices', 'Capture Policies'].includes(S.view)) return renderPage();
       const r = await api('/api/v1/console/data?days=' + encodeURIComponent(S.days));
       if (r.status === 401) { showLogin(); return; }
       S.data = await r.json();
@@ -2085,11 +2087,11 @@
     }
     function renderPage() {
       YesLogsDashboard.dispose();
-      YesLogsISPs.dispose(); YesLogsDevices.dispose();
+      YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose();
       setHead();
       $('#globalSearchWrap').hide();
-      $('#pageTools').prop('hidden', ['Overview', 'ISPs', 'Devices'].includes(S.view));
-      $('#footBuild').text(['Overview', 'ISPs', 'Devices'].includes(S.view) ? 'v1.11.0-devices' : 'logs.sayratechnologies.in');
+      $('#pageTools').prop('hidden', ['Overview', 'ISPs', 'Devices', 'Capture Policies'].includes(S.view));
+      $('#footBuild').text(['Overview', 'ISPs', 'Devices', 'Capture Policies'].includes(S.view) ? 'v1.12.0-policies' : 'logs.sayratechnologies.in');
       const b = $('#pageBody').empty();
       return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
@@ -2106,6 +2108,10 @@
         if (filters.device) $('#s-dev').val(String(filters.device));
       }
       if (view === 'ISPs' && filters.add) $('#isp-create').trigger('click');
+      if (view === 'Devices' && filters.policy) {
+        if (filters.isp && S.me.isDirector) $('#device-isp-filter').val(String(filters.isp)).trigger('change');
+        $('#device-search').val(filters.policy).trigger('input');
+      }
       if (view === 'Devices' && filters.add) $('#open-add').trigger('click');
     }
     function pgOverview(b) {
@@ -2766,33 +2772,7 @@ async function pgCompliance(b){
 
     // ==================== CAPTURE POLICIES ====================
     async function pgPolicies(b) {
-      b.html('<div class="card" style="padding:30px;color:var(--mut)">Loading…</div>');
-      const r = await api('/api/v1/policies'); if (r.status !== 200) { b.html('<div class="card" style="padding:24px;color:var(--bad)">Cannot load capture policies.</div>'); return; }
-      const j = await r.json(); const pols = j.policies || [];
-      let h = `<div class="card" style="margin-bottom:18px">${chead('fa-shield-halved', 'Create Capture Policy')}
-  <div style="padding:16px 18px 4px">${note("A capture policy is a reusable named set of skip rules. Assign it to exporter devices instead of setting rules one by one — change the policy once and every device using it updates. Tick nothing for <b>full capture</b> (store everything).", 'fa-circle-info')}</div>
-  <div style="padding:14px 18px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end">
-    <div style="flex:1 1 240px"><label class="lbl">Policy name<span class="req">*</span></label><input id="p-name" class="inp" placeholder="e.g. default, full-capture">${hint('Referenced on the Devices page')}</div>
-    <label class="chk" style="padding-bottom:10px"><input type="checkbox" id="p-dns" checked> skip DNS</label>
-    <label class="chk" style="padding-bottom:10px"><input type="checkbox" id="p-priv" checked> skip priv→priv</label>
-    <label class="chk" style="padding-bottom:10px"><input type="checkbox" id="p-zero" checked> skip zero-byte</label>
-    <button id="p-add" class="btn" style="margin-bottom:1px"><i class="fas fa-plus"></i> Create</button>
-  </div><div id="p-msg" style="padding:0 18px 14px;color:var(--bad);font-size:13px;font-weight:600"></div></div>`;
-      h += '<div class="card">' + chead('fa-list-check', 'Capture Policies', pill('applied to devices', 'mut')) + '<div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Scope</th><th>Skip rules</th><th></th></tr></thead><tbody>';
-      if (!pols.length) h += emptyRow(4, 'fa-shield-halved', 'No capture policies yet', 'Create one above, then assign it to exporter devices on the Devices page.');
-      pols.forEach(p => {
-        h += `<tr><td>${pill(p.Name, 'info')}</td><td>${p.ISPID === 0 ? pill('global', 'mut') : pill('ISP #' + p.ISPID, 'mut')}</td>
-    <td style="font-size:12px">${skipSummary(p)}</td>
-    <td style="text-align:right"><button class="btn danger sm p-del" data-id="${p.ID}" title="Delete"><i class="fas fa-trash"></i></button></td></tr>`;
-      });
-      h += '</tbody></table></div></div>';
-      b.html(h);
-      $('#p-add').on('click', async () => {
-        const body = { Name: $('#p-name').val(), SkipDNS: $('#p-dns').is(':checked'), SkipPrivate: $('#p-priv').is(':checked'), SkipZero: $('#p-zero').is(':checked'), ISPID: 0 };
-        const r = await apiJSON('/api/v1/policies', 'POST', body);
-        if (r.status === 200) { pgPolicies(b); } else { const e = await r.json().catch(() => ({})); $('#p-msg').text(e.error || 'failed'); }
-      });
-      $('.p-del').on('click', async function () { if (confirm('Delete capture policy?')) { await apiJSON('/api/v1/policies/' + $(this).data('id'), 'DELETE'); pgPolicies(b); } });
+      return YesLogsPolicies.mount(b[0], { user: S.me, csrf: S.csrf, expired: showLogin, toast, navigate: dashboardNavigate });
     }
 
     // ==================== DATAPLANES ====================

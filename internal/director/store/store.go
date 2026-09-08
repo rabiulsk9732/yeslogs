@@ -150,6 +150,7 @@ type Store interface {
 	CreatePolicy(ctx context.Context, p CapturePolicy) (CapturePolicy, error)
 	ListPolicies(ctx context.Context, ispID uint32) ([]CapturePolicy, error)
 	DeletePolicy(ctx context.Context, id int64) error
+	SavePolicy(ctx context.Context, expected, replacement *CapturePolicy) (CapturePolicy, error)
 
 	// Archived days: tracks which hot-storage days have been moved to S3 (so the
 	// auto-archival sweep never re-uploads or re-drops a day).
