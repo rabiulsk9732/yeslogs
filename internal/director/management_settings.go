@@ -2,6 +2,7 @@ package director
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -49,8 +50,18 @@ func (s *Server) decorateSettingsResponse(resp *http.Response) error {
 	if resp.Request.Method != "GET" || resp.Request.URL.Path != "/api/v1/settings" || resp.StatusCode != 200 {
 		return nil
 	}
-	body, e := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
+	defer resp.Body.Close()
+	var reader io.Reader = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		zipped, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return err
+		}
+		defer zipped.Close()
+		reader = zipped
+		resp.Header.Del("Content-Encoding")
+	}
+	body, e := io.ReadAll(io.LimitReader(reader, 1<<20))
 	if e != nil {
 		return e
 	}

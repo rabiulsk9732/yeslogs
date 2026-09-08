@@ -1,6 +1,7 @@
 package director
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"github.com/natflow/natflow-dataplane/internal/director/store"
@@ -21,7 +22,11 @@ func TestRuntimeSettingsPreconditionsValidationAndForwarding(t *testing.T) {
 	writes := 0
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
-			writeJSON(w, 200, map[string]any{"settings": cfg, "secretSet": true})
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Encoding", "gzip")
+			zipped := gzip.NewWriter(w)
+			json.NewEncoder(zipped).Encode(map[string]any{"settings": cfg, "secretSet": true})
+			zipped.Close()
 			return
 		}
 		writes++
@@ -36,7 +41,14 @@ func TestRuntimeSettingsPreconditionsValidationAndForwarding(t *testing.T) {
 		t.Fatal(e)
 	}
 	get := func() map[string]string {
-		w := ispRequest(s, h, "GET", "/api/v1/settings", &id, nil, false)
+		request := httptest.NewRequest("GET", "/api/v1/settings", nil)
+		request.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.signSession(id)})
+		request.Header.Set("Accept-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, request)
+		if w.Header().Get("Content-Encoding") != "" {
+			t.Fatal("modified settings response still claims gzip encoding")
+		}
 		if w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
 		}
