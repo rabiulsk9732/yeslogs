@@ -27,3 +27,8 @@
 - Form fields use an icon at the left of the label, a red required star at the
   right edge of the label row, and a descriptive input placeholder or initial
   select prompt. Apply this rule to every form as its module is refined.
+
+- Legacy fleet console rollouts use `deploy/FLEET-CONSOLE.md` and the separate
+  gateway/static UI bootstrap. Keep the existing TCP 8080 console URL through
+  its dedicated redirect, and verify each collector PID/start time. Do not use
+  `scripts/deploy-fleet.sh` for console updates; it restarts UDP collectors.

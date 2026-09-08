@@ -1,0 +1,22 @@
+[Unit]
+Description=YesLogs fleet management gateway (collector remains running)
+After=network.target mariadb.service natlog.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/yeslogs-management/8083/director --config /etc/natlog/management-8083.yaml
+Restart=on-failure
+RestartSec=3
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

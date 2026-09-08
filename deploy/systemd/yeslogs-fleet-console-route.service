@@ -1,0 +1,13 @@
+[Unit]
+Description=Route legacy console TCP port through the static UI proxy
+After=network-pre.target caddy.service yeslogs-fleet-management.service ufw.service
+Requires=caddy.service yeslogs-fleet-management.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/natlog/console-route.nft
+ExecStop=-/usr/sbin/nft delete table inet yeslogs_console_route
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

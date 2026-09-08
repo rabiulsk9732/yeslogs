@@ -1,0 +1,23 @@
+# Installed as caddy.service only on a host without an existing web proxy.
+[Unit]
+Description=YesLogs static console and management proxy
+After=network.target yeslogs-fleet-management.service
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=on-failure
+RestartSec=3
+User=root
+Environment=XDG_DATA_HOME=/var/lib/caddy/data
+Environment=XDG_CONFIG_HOME=/var/lib/caddy/config
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/caddy
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

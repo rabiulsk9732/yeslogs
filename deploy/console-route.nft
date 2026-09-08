@@ -1,0 +1,9 @@
+# Own only this table. Local management still reaches the collector on :8080.
+# New external connections to the existing console URL reach Caddy on :80.
+# Do not change UDP, SSH, forwarding traffic, or other firewall tables.
+add table inet yeslogs_console_route
+flush table inet yeslogs_console_route
+add chain inet yeslogs_console_route prerouting { type nat hook prerouting priority dstnat; policy accept; }
+add rule inet yeslogs_console_route prerouting iifname != "lo" fib daddr type local tcp dport 8080 counter redirect to :80
+add chain inet yeslogs_console_route input { type filter hook input priority 0; policy accept; }
+add rule inet yeslogs_console_route input iifname != "lo" tcp dport 8080 counter reject with tcp reset
