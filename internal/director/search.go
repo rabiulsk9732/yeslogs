@@ -97,9 +97,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, Proto: body.Proto,
 		DeviceID: body.DeviceID, ExporterIP: strings.TrimSpace(body.ExporterIP), From: parseTime(body.From), To: parseTime(body.To),
 		Username: strings.TrimSpace(body.Username),
-		// Preserve records carrying either post-NAT tuple, including unchanged
-		// and historical incomplete tuples. The API states their evidence limits.
-		RequireNAT: true,
+		// Include every stored row matching the explicit filters. Missing NAT
+		// fields stay unknown in the row instead of silently excluding evidence.
 	}
 	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP).To4() == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid exporter IP"})
@@ -132,7 +131,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			ResultCount: int(total), CaseRef: strings.TrimSpace(body.Reason),
 		})
 	}
+	missingNAT := 0
+	for _, row := range rows {
+		if row.NatIP == "" {
+			missingNAT++
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"missingNAT": missingNAT, "natScope": "source_tuple",
 		"records": rows, "count": len(rows), "total": total, "offset": offset, "limit": limit,
 		"capped": capped, "cold": cold, "crm": crm, "elapsedMs": time.Since(searchStarted).Milliseconds(),
 	})
@@ -166,8 +172,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		ISPID: scope, PublicIP: strings.TrimSpace(q.Get("ip")), PrivateIP: strings.TrimSpace(q.Get("priv")),
 		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), Proto: q.Get("proto"),
 		DeviceID: parseUint32(q.Get("device")), ExporterIP: strings.TrimSpace(q.Get("exporter")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
-		Username:   strings.TrimSpace(q.Get("user")),
-		RequireNAT: true,
+		Username: strings.TrimSpace(q.Get("user")),
 	}
 	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP).To4() == nil {
 		http.Error(w, "invalid exporter IP", http.StatusBadRequest)
@@ -183,7 +188,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second) // reports may span cold (S3) days
 	defer cancel()
-	rows, _, _, _, err := s.searchAll(ctx, f, searchLimit, 0)
+	rows, _, _, capped, err := s.searchAll(ctx, f, countCap+1, 0)
 	if err != nil {
 		var ue uiError
 		if errors.As(err, &ue) {
@@ -193,6 +198,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
+	if capped || len(rows) > countCap {
+		http.Error(w, "Report exceeds the 100,000-record export window. Narrow the time range or filters; no partial report was exported.", http.StatusRequestEntityTooLarge)
+		return
+	}
+	w.Header().Set("X-YesLogs-Truncated", "false")
+	w.Header().Set("X-YesLogs-Returned-Rows", fmt.Sprintf("%d", len(rows)))
 	s.nameDevices(ctx, scope, rows)
 	crm := s.enrichCRMRows(ctx, scope, rows)
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
@@ -204,8 +215,13 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		CaseRef: q.Get("reason"), GeneratedBy: id.Email,
 		GeneratedAt: time.Now().In(istLoc).Format("2006-01-02 15:04:05 IST"),
 		QueryIP:     firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP), QueryPort: f.PublicPort, QueryProto: f.Proto,
-		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: len(rows) == searchLimit, NATOnly: true,
+		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: false, NATOnly: false,
 		CRM: crm,
+	}
+	for _, row := range rows {
+		if row.NatIP == "" {
+			meta.MissingNAT++
+		}
 	}
 	// e.g. iplog-report-45.115.107.52-222000_02.03.2026_IST_0530.pdf
 	now := time.Now().In(istLoc)

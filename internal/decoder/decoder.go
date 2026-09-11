@@ -33,10 +33,15 @@ type Flow struct {
 	FlowStart time.Time
 	FlowEnd   time.Time
 
-	// NAT translation fields. NetFlow v5 never carries these; NetFlow v9 and
-	// IPFIX NAT-event templates may. The zero value means "not translated".
+	// Raw post-NAT endpoints. NetFlow v5 never carries these; NetFlow v9 and
+	// IPFIX templates may, including ordinary flow templates without natEvent.
+	// NatPublic is the historical name for post-NAT SOURCE (IEs 225/227),
+	// which is not necessarily a translated public endpoint. A nil IP means
+	// the endpoint was not exported; an unchanged IP can still have a new port.
 	NatPublicIP   net.IP
 	NatPublicPort uint16
+	NatDestIP     net.IP // IE 226: postNATDestinationIPv4Address
+	NatDestPort   uint16 // IE 228: postNAPTDestinationTransportPort
 
 	// NatEvent is IE 230: 1 = allocation (CREATE), 2 = release (DELETE), 0 =
 	// not reported. It is what makes a mapping answerable at a point in time

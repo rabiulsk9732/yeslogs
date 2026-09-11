@@ -52,6 +52,28 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestNormalizeKeepsBothPostNATEndpoints(t *testing.T) {
+	f := decoder.Flow{
+		SrcIP: net.ParseIP("57.144.140.3"), SrcPort: 443,
+		DstIP: net.ParseIP("151.158.226.176"), DstPort: 42286,
+		NatPublicIP: net.ParseIP("57.144.140.3"), NatPublicPort: 443,
+		NatDestIP: net.ParseIP("10.0.102.12"), NatDestPort: 42286,
+	}
+	r := New().Normalize(f, "netflow9", 5, 8)
+	if !r.SrcIP.Equal(f.SrcIP) || !r.DstIP.Equal(f.DstIP) || r.SrcPort != f.SrcPort || r.DstPort != f.DstPort ||
+		!r.NatPublicIP.Equal(f.NatPublicIP) || r.NatPublicPort != f.NatPublicPort ||
+		!r.NatDestIP.Equal(f.NatDestIP) || r.NatDestPort != f.NatDestPort {
+		t.Fatalf("NAT endpoint evidence changed during normalization: %+v", r)
+	}
+	if r.NatEvent != 0 {
+		t.Fatal("normalization invented a NAT event")
+	}
+	legacy := New().Normalize(decoder.Flow{}, "netflow5", 5, 8)
+	if legacy.NatDestIP != nil || legacy.NatDestPort != 0 {
+		t.Fatal("normalization invented a missing destination endpoint")
+	}
+}
+
 // Exporter clocks are not trustworthy — one on this fleet runs 38.5 hours behind
 // — and a store holding a mixture of good and bad clocks cannot produce a
 // defensible timeline: two records a minute apart on the wire land days apart in

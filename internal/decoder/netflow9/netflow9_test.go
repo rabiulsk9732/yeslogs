@@ -175,6 +175,9 @@ func TestNATFields(t *testing.T) {
 	if flows[0].NatPublicPort != 50000 {
 		t.Errorf("natPublicPort = %d", flows[0].NatPublicPort)
 	}
+	if flows[0].NatDestIP != nil || flows[0].NatDestPort != 0 {
+		t.Fatal("destination translation invented for a source-only template")
+	}
 }
 
 func TestTemplateIsolationByExporter(t *testing.T) {

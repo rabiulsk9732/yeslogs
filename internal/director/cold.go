@@ -98,9 +98,10 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	name, _ := c.chFormat()
 	parquet := name == "Parquet"
 	// flow_start is native DateTime in Parquet; a string in CSV.
-	tsExpr := "flow_start"
+	tsExpr, endExpr := "flow_start", "flow_end"
 	if !parquet {
 		tsExpr = "parseDateTimeBestEffortOrNull(flow_start)"
+		endExpr = "parseDateTimeBestEffortOrNull(flow_end)"
 	}
 
 	f.destinationNATAvailable = true // Explicit schema supplies unknown defaults for old archives.
@@ -116,10 +117,10 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	} else {
 		src = fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
 	}
-	q := fmt.Sprintf(`SELECT %s AS ts, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
+	q := fmt.Sprintf(`SELECT %s AS ts, %s AS end_ts, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
 		dst_ip, dst_port, nat_dest_ip, nat_dest_port, protocol, flow_type, username, nat_event FROM %s
-		WHERE %s ORDER BY ts DESC LIMIT 1 BY %s LIMIT %d%s`,
-		tsExpr, src, strings.Join(conds, " AND "), dedupKeyCold, limit, coldReadSettings)
+		WHERE %s ORDER BY ts DESC, %s, exporter_ip, device_id LIMIT 1 BY %s LIMIT %d%s`,
+		tsExpr, endExpr, src, strings.Join(conds, " AND "), dedupKeyCold, dedupKeyCold, limit, coldReadSettings)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -127,17 +128,18 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	defer rs.Close()
 	out := make([]natRecord, 0, 64)
 	for rs.Next() {
-		var ts time.Time
+		var ts, end time.Time
 		var rec natRecord
 		var sp, pp, dp, pdp uint16
 		var pr uint8
 		var ft string
-		if err := rs.Scan(&ts, &rec.ISPID, &rec.DevID, &rec.ExporterIP, &rec.PrivIP, &sp, &rec.PubIP, &pp,
+		if err := rs.Scan(&ts, &end, &rec.ISPID, &rec.DevID, &rec.ExporterIP, &rec.PrivIP, &sp, &rec.PubIP, &pp,
 			&rec.DstIP, &dp, &rec.PostDstIP, &pdp, &pr, &ft, &rec.Username, &rec.NatEvent); err != nil {
 			return out, err
 		}
-		rec.At = ts.UTC()
+		rec.At, rec.EndAt = ts.UTC(), end.UTC()
 		rec.Date, rec.Clock, rec.Time = ts.In(istLoc).Format("2006-01-02"), ts.In(istLoc).Format("15:04:05"), ts.In(istLoc).Format("2006-01-02 15:04:05")
+		rec.StartTime, rec.EndTime = rec.Time, end.In(istLoc).Format("2006-01-02 15:04:05")
 		rec.Sub = fmt.Sprintf("DEV-%d", rec.DevID)
 		rec.PrivPort, rec.PubPort, rec.DstPort, rec.PostDstPort = int(sp), int(pp), int(dp), int(pdp)
 		rec.Proto, rec.Action = protoName(pr), strings.ToUpper(ft)
@@ -267,7 +269,10 @@ func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset in
 	// The capped count is cheap on the MergeTree primary key (~100 ms even for
 	// hundreds of millions of device rows) and lets broad browsing short-circuit
 	// before any remote object is opened.
-	total = s.flows.SearchCount(ctx, f)
+	total, err = s.flows.SearchCount(ctx, f)
+	if err != nil {
+		return nil, 0, false, false, fmt.Errorf("count matching flows: %w", err)
+	}
 	useCold := false
 	if cs.enabled() {
 		useCold, err = planColdSearch(f, days, total)
@@ -282,11 +287,18 @@ func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset in
 	}
 	// Cold overlap: merge hot + the relevant archived days (each bounded by the
 	// search cap), then paginate the merged set in memory (server-side, bounded).
-	hot, herr := s.flows.Search(ctx, f, searchLimit, 0)
+	windowLimit := limit + offset
+	if windowLimit < searchLimit {
+		windowLimit = searchLimit
+	}
+	if windowLimit > countCap+1 {
+		windowLimit = countCap + 1
+	}
+	hot, herr := s.flows.Search(ctx, f, windowLimit, 0)
 	if herr != nil {
 		return nil, 0, false, false, herr
 	}
-	cr, _, coldCapped, cerr := walkColdDays(ctx, days, searchLimit, func(ctx context.Context, day string, limit int) ([]natRecord, error) {
+	cr, _, coldCapped, cerr := walkColdDays(ctx, days, windowLimit, func(ctx context.Context, day string, limit int) ([]natRecord, error) {
 		return s.flows.SearchCold(ctx, f, limit, cs, []string{day})
 	})
 	if cerr != nil {
@@ -297,7 +309,7 @@ func (s *Server) searchAll(ctx context.Context, f SearchFilter, limit, offset in
 	merged := append(hot, cr...)
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Time > merged[j].Time })
 	total = uint64(len(merged))
-	capped = len(hot) == searchLimit || coldCapped
+	capped = len(hot) == windowLimit || coldCapped
 	if offset > len(merged) {
 		offset = len(merged)
 	}

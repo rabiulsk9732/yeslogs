@@ -119,6 +119,9 @@ func TestTemplateAndDataWithNATAndMs(t *testing.T) {
 	if !f.NatPublicIP.Equal(net.IPv4(203, 0, 113, 9)) || f.NatPublicPort != 40001 {
 		t.Errorf("nat = %v:%d", f.NatPublicIP, f.NatPublicPort)
 	}
+	if f.NatDestIP != nil || f.NatDestPort != 0 {
+		t.Fatal("destination translation invented for a source-only template")
+	}
 }
 
 func TestEnterpriseFieldSkipped(t *testing.T) {

@@ -68,7 +68,9 @@ const (
 	eFLOW_START_MS = 152 // flowStartMilliseconds
 	eFLOW_END_MS   = 153 // flowEndMilliseconds
 	eNAT_SRC_IPV4  = 225 // postNATSourceIPv4Address
+	eNAT_DST_IPV4  = 226 // postNATDestinationIPv4Address
 	eNAT_SRC_PORT  = 227 // postNAPTSourceTransportPort
+	eNAT_DST_PORT  = 228 // postNAPTDestinationTransportPort
 	eNAT_EVENT     = 230 // natEvent: 1 = allocation, 2 = release
 	eUSERNAME      = 371 // username: the subscriber the BNG already knows
 )
@@ -355,6 +357,10 @@ func applyField(f *decoder.Flow, ie uint16, v []byte, _ time.Time) {
 		f.NatPublicIP = cloneIP(v)
 	case eNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
+	case eNAT_DST_IPV4:
+		f.NatDestIP = cloneIP(v)
+	case eNAT_DST_PORT:
+		f.NatDestPort = uint16(beUint(v))
 	case eNAT_EVENT:
 		f.NatEvent = uint8(beUint(v))
 	case eUSERNAME:

@@ -67,7 +67,9 @@ const (
 	fIPV6_SRC_ADDR  = 27
 	fIPV6_DST_ADDR  = 28
 	fNAT_SRC_IPV4   = 225 // postNATSourceIPv4Address
+	fNAT_DST_IPV4   = 226 // postNATDestinationIPv4Address
 	fNAT_SRC_PORT   = 227 // postNAPTSourceTransportPort
+	fNAT_DST_PORT   = 228 // postNAPTDestinationTransportPort
 	fNAT_EVENT      = 230 // natEvent: 1 = allocation, 2 = release
 	fUSERNAME       = 371 // username (IPFIX): the subscriber the BNG already knows
 	// Absolute-time IEs (not sysUptime-relative). iptables/conntrack NAT-event
@@ -279,6 +281,10 @@ func applyField(f *decoder.Flow, typ uint16, v []byte, bootMS int64) {
 		f.NatPublicIP = cloneIP(v)
 	case fNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
+	case fNAT_DST_IPV4:
+		f.NatDestIP = cloneIP(v)
+	case fNAT_DST_PORT:
+		f.NatDestPort = uint16(beUint(v))
 	case fNAT_EVENT:
 		f.NatEvent = uint8(beUint(v))
 	case fUSERNAME:

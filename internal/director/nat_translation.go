@@ -28,11 +28,11 @@ func (r *natRecord) setNATTranslation() {
 	r.NatIP, r.NatPort, r.Untranslated = "", 0, false
 	switch {
 	case srcChanged && dstChanged:
-		r.Translation = "both"
+		r.Translation, r.NatIP, r.NatPort = "both", r.PostSrcIP, r.PostSrcPort
 	case srcChanged:
 		r.Translation, r.NatIP, r.NatPort = "source", r.PostSrcIP, r.PostSrcPort
 	case dstChanged:
-		r.Translation, r.NatIP, r.NatPort = "destination", r.DstIP, r.DstPort
+		r.Translation = "destination"
 	case r.SourceKnown && r.DestinationKnown:
 		r.Translation, r.Untranslated = "none", true
 	default:
@@ -62,8 +62,8 @@ func hotDedupKey(hasDestination bool) string {
 	return legacyDedupKey
 }
 
-// Match the public tuple on the side whose translation is actually recorded.
-// IP and port predicates are kept in the same branch to avoid cross-side hits.
+// The requested translated/source-NAT columns describe the source tuple.
+// Raw source/destination predicates preserve the exporter direction.
 func addNATFilters(f SearchFilter, hot bool, conds *[]string, args *[]any) {
 	ipParam, zero := "?", "'0.0.0.0'"
 	if hot {
@@ -88,22 +88,11 @@ func addNATFilters(f SearchFilter, hot bool, conds *[]string, args *[]any) {
 			source = "nat_public_ip != '' AND " + source
 		}
 		match := branch("nat_public_ip", "nat_public_port", source)
-		if f.destinationNATAvailable {
-			destination := "nat_dest_ip != " + zero + " AND (nat_dest_ip != dst_ip OR nat_dest_port != dst_port)"
-			if !hot {
-				destination = "nat_dest_ip != '' AND " + destination
-			}
-			match = "(" + match + " OR " + branch("dst_ip", "dst_port", destination) + ")"
-		}
+
 		*conds = append(*conds, match)
 	}
 	if f.PrivateIP != "" {
-		if f.destinationNATAvailable {
-			*conds = append(*conds, "(src_ip = "+ipParam+" OR nat_dest_ip = "+ipParam+")")
-			*args = append(*args, f.PrivateIP, f.PrivateIP)
-		} else {
-			add("src_ip = "+ipParam, f.PrivateIP)
-		}
+		add("src_ip = "+ipParam, f.PrivateIP)
 	}
 	if f.DestIP != "" {
 		add("dst_ip = "+ipParam, f.DestIP)

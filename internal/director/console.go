@@ -46,6 +46,9 @@ type natRecord struct {
 	Date       string    `json:"date"`
 	Clock      string    `json:"clock"`
 	Time       string    `json:"time"`
+	StartTime  string    `json:"startTime"`
+	EndTime    string    `json:"endTime"`
+	EndAt      time.Time `json:"-"`
 	At         time.Time `json:"-"`
 	Sub        string    `json:"sub"`
 	DevID      uint32    `json:"devId"`
@@ -340,16 +343,16 @@ const dedupKey = legacyDedupKey + ", nat_dest_ip, nat_dest_port"
 
 // SearchCount returns the number of hot rows matching f, capped at countCap
 // (a returned value == countCap means "countCap or more").
-func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) uint64 {
+func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) (uint64, error) {
 	f.destinationNATAvailable = r.hasDestinationNAT(ctx)
 	where, args, ok := hotWhere(f)
 	if !ok {
-		return 0
+		return 0, fmt.Errorf("no filter")
 	}
 	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT 1 BY %s LIMIT %d)`, r.db, where, hotDedupKey(f.destinationNATAvailable), countCap)
 	var n uint64
-	_ = r.conn.QueryRow(ctx, q, args...).Scan(&n)
-	return n
+	err := r.conn.QueryRow(ctx, q, args...).Scan(&n)
+	return n, err
 }
 
 // Search returns one page of flow-log records matching the filter (tenant-scoped
@@ -365,9 +368,9 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 	if f.destinationNATAvailable {
 		postDest = "nat_dest_ip, nat_dest_port"
 	}
-	q := fmt.Sprintf(`SELECT flow_start, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
+	q := fmt.Sprintf(`SELECT flow_start, flow_end, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
 		dst_ip, dst_port, %s, protocol, flow_type, username, nat_event
-		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT 1 BY %s LIMIT %d OFFSET %d`, postDest, r.db, where, hotDedupKey(f.destinationNATAvailable), limit, offset)
+		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC, %s, exporter_ip, device_id LIMIT 1 BY %s LIMIT %d OFFSET %d`, postDest, r.db, where, hotDedupKey(f.destinationNATAvailable), hotDedupKey(f.destinationNATAvailable), limit, offset)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -375,17 +378,18 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 	defer rs.Close()
 	out := make([]natRecord, 0, 128)
 	for rs.Next() {
-		var ts time.Time
+		var ts, end time.Time
 		var rec natRecord
 		var sip, pip, dip, pdip, exporter net.IP
 		var sp, pp, dp, pdp uint16
 		var pr uint8
 		var ft string
-		if err := rs.Scan(&ts, &rec.ISPID, &rec.DevID, &exporter, &sip, &sp, &pip, &pp, &dip, &dp, &pdip, &pdp, &pr, &ft, &rec.Username, &rec.NatEvent); err != nil {
+		if err := rs.Scan(&ts, &end, &rec.ISPID, &rec.DevID, &exporter, &sip, &sp, &pip, &pp, &dip, &dp, &pdip, &pdp, &pr, &ft, &rec.Username, &rec.NatEvent); err != nil {
 			return out, err
 		}
-		rec.At = ts.UTC()
+		rec.At, rec.EndAt = ts.UTC(), end.UTC()
 		rec.Date, rec.Clock, rec.Time = ts.In(istLoc).Format("2006-01-02"), ts.In(istLoc).Format("15:04:05"), ts.In(istLoc).Format("2006-01-02 15:04:05")
+		rec.StartTime, rec.EndTime = rec.Time, end.In(istLoc).Format("2006-01-02 15:04:05")
 		rec.Sub, rec.ExporterIP = fmt.Sprintf("DEV-%d", rec.DevID), exporter.String()
 		rec.PrivIP, rec.PrivPort = sip.String(), int(sp)
 		rec.PubIP, rec.PubPort = pip.String(), int(pp)

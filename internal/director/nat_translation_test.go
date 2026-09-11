@@ -3,6 +3,7 @@ package director
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,11 +39,11 @@ func TestNATTranslationPreservesDirectionAndMissingEvidence(t *testing.T) {
 		port       int
 		unchanged  bool
 	}{
-		{"observed destination", func(*natRecord) {}, "destination", "203.0.113.176", 42286, false},
+		{"observed destination", func(*natRecord) {}, "destination", "", 0, false},
 		{"historical destination missing", func(r *natRecord) { r.PostDstIP = ""; r.PostDstPort = 0 }, "unknown", "", 0, false},
-		{"same IP changed destination port", func(r *natRecord) { r.PostDstIP = r.DstIP; r.PostDstPort = 1234 }, "destination", "203.0.113.176", 42286, false},
+		{"same IP changed destination port", func(r *natRecord) { r.PostDstIP = r.DstIP; r.PostDstPort = 1234 }, "destination", "", 0, false},
 		{"source port only", func(r *natRecord) { r.PubPort = 0; r.PostDstIP = r.DstIP; r.PostDstPort = r.DstPort }, "source", "192.0.2.44", 0, false},
-		{"both sides", func(r *natRecord) { r.PubIP = "203.0.113.1" }, "both", "", 0, false},
+		{"both sides", func(r *natRecord) { r.PubIP = "203.0.113.1" }, "both", "203.0.113.1", 443, false},
 		{"both unchanged", func(r *natRecord) { r.PostDstIP = r.DstIP; r.PostDstPort = r.DstPort }, "none", "", 0, true},
 		{"zero sentinel old schema", func(r *natRecord) { r.PostDstIP = "0.0.0.0"; r.PostDstPort = 0 }, "unknown", "", 0, false},
 	} {
@@ -64,30 +65,43 @@ func TestNATTranslationPreservesDirectionAndMissingEvidence(t *testing.T) {
 	}
 }
 
-func TestNATReportDoesNotLabelRemoteSourceAsMapping(t *testing.T) {
+func TestNATReportUsesExactEightFieldsAndDoesNotInventMappingOrEndTime(t *testing.T) {
 	r := observedDestinationRecord()
-	r.ExporterIP = "198.51.100.178"
+	r.Time, r.EndTime = "2026-09-11 12:00:01", "2026-09-11 12:01:22"
 	cells := rowCells(reportMeta{}, r)
-	if cells[0] != "192.0.2.44" || cells[2] != "203.0.113.176" || cells[4] != "203.0.113.176" || cells[8] != "192.0.2.44" || cells[10] != "10.0.0.12" || cells[12] != "destination" {
+	want := []string{"09:11:2026 & 12:00:01", "09:11:2026 & 12:01:22", "192.0.2.44", "443", "", "", "203.0.113.176", "42286"}
+	if !reflect.DeepEqual(cells, want) {
 		t.Fatalf("wrong raw/mapping report: %v", cells)
 	}
-	r.PostDstIP = ""
-	r.PostDstPort = 0
+	r.PubIP, r.PubPort = "203.0.113.10", 12345
 	cells = rowCells(reportMeta{}, r)
-	if cells[4] != "" || cells[5] != "" || cells[12] != "unknown" {
-		t.Fatalf("invented historical mapping: %v", cells)
+	if cells[4] != r.PubIP || cells[5] != "12345" {
+		t.Fatalf("confirmed source mapping lost: %v", cells)
 	}
-	r.PrivPort, r.PubPort = 0, 0
-	if rowCells(reportMeta{}, r)[1] != "0" {
-		t.Fatal("valid zero port lost")
+	r.PrivPort, r.EndTime = 0, ""
+	if cells := rowCells(reportMeta{}, r); cells[1] != "" || cells[3] != "0" {
+		t.Fatalf("invented end time or lost zero port: %v", cells)
 	}
 	for _, crm := range []bool{false, true} {
 		m := reportMeta{CRM: crmEnrichmentSummary{Enabled: crm}}
 		cols, _ := reportColumns(m)
-		if len(cols) != len(rowCells(m, r)) {
-			t.Fatal("report headers and values misaligned")
+		if len(cols) != 8 || len(rowCells(m, r)) != 8 {
+			t.Fatal("report shape changed with CRM")
 		}
 		var out bytes.Buffer
+		if err := writeCSV(&out, m, []natRecord{r}); err != nil {
+			t.Fatal(err)
+		}
+		reader := csv.NewReader(&out)
+		reader.FieldsPerRecord = -1
+		data, err := reader.ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) != 2 || !reflect.DeepEqual(data[0], baseReportCols) || len(data[1]) != 8 {
+			t.Fatalf("wrong CSV table: %v", data)
+		}
+		out.Reset()
 		if err := writePDF(&out, m, []natRecord{r}); err != nil {
 			t.Fatal(err)
 		}
@@ -118,24 +132,25 @@ func TestExporterIdentityDoesNotOverwriteSharedDeviceID(t *testing.T) {
 	}
 }
 
-func TestNATPublicFiltersPairIPAndPortOnEachSide(t *testing.T) {
+func TestSourceNATFiltersPreserveRawDirectionAndExporterScope(t *testing.T) {
 	f := SearchFilter{ISPID: 5, DeviceID: 8, ExporterIP: "198.51.100.178", PublicIP: "203.0.113.176", PublicPort: 42286, destinationNATAvailable: true}
 	where, args, ok := hotWhere(f)
-	if !ok || !strings.Contains(where, "nat_dest_ip != dst_ip OR nat_dest_port != dst_port") || !strings.Contains(where, "exporter_ip = toIPv4(?)") {
-		t.Fatalf("missing destination/exporter filter: %s", where)
+	if !ok || strings.Contains(where, "nat_dest") || !strings.Contains(where, "exporter_ip = toIPv4(?)") {
+		t.Fatalf("wrong source-NAT/exporter filter: %s", where)
 	}
-	want := []any{f.PublicIP, uint16(42286), f.PublicIP, uint16(42286), uint32(8), f.ExporterIP, uint32(5)}
+	want := []any{f.PublicIP, uint16(42286), uint32(8), f.ExporterIP, uint32(5)}
 	if !reflect.DeepEqual(args, want) {
-		t.Fatalf("cross-side or incorrect parameters: %#v", args)
+		t.Fatalf("wrong filter arguments: %#v", args)
 	}
 	conds, cargs, ok := coldWhere(f, "flow_start")
 	if !ok || !strings.Contains(strings.Join(conds, " "), "exporter_ip = ?") || !reflect.DeepEqual(cargs, want[:len(want)-1]) {
 		t.Fatalf("cold filter differs: %v %#v", conds, cargs)
 	}
-	f.destinationNATAvailable = false
+	// A device-only search must not filter out stored rows with absent NAT fields.
+	f.PublicIP, f.PublicPort = "", 0
 	where, _, _ = hotWhere(f)
-	if strings.Contains(where, "nat_dest") {
-		t.Fatal("old schema query names nonexistent columns")
+	if strings.Contains(where, "nat_public") || strings.Contains(where, "nat_dest") {
+		t.Fatalf("implicit NAT gate hides stored records: %s", where)
 	}
 }
 

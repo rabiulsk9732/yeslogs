@@ -15,11 +15,11 @@ async function main() {
       const errors = [], requests = [];
       let mode = 'rows';
       let delayMs = 0;
-      const base = { date: '2026-09-11', clock: '00:38:59', sub: 'Test edge', privIp: '100.64.1.10', privPort: 1234, pubIp: '203.0.113.10', pubPort: 4321, dstIp: '192.0.2.1', dstPort: 443, proto: 'TCP', dest: '192.0.2.1:443', action: 'IPFIX' };
+      const base = { date: '2026-09-11', clock: '00:38:59', endTime:'2026-09-11 00:39:01', sub: 'Test edge', privIp: '100.64.1.10', privPort: 1234, pubIp: '203.0.113.10', pubPort: 4321, dstIp: '192.0.2.1', dstPort: 443, proto: 'TCP', dest: '192.0.2.1:443', action: 'IPFIX' };
       const rows = [
         { ...base, username: '<subscriber>', crmUsername: 'crm-fallback', crmStatus: 'matched', crmName: '<Customer>' },
-        { ...base, crmUsername: '<crm-user>', crmStatus: 'matched' },
-        { ...base, privPort: 0, dstPort: 0, pubIp: '', crmStatus: 'not_found' },
+        { ...base, date:'2026-09-10',clock:'23:59:59',endTime:'2026-09-11 00:00:04',crmUsername: '<crm-user>', crmStatus: 'matched' },
+        { ...base, endTime:undefined,privPort: 0, dstPort: 0, pubIp: '', crmStatus: 'not_found' },
       ];
       page.on('pageerror', e => errors.push(e.message));
       await page.route('http://logs.test/**', async route => {
@@ -41,11 +41,11 @@ async function main() {
           if (mode === 'network') return route.abort('failed');
           if (mode === 'server') return reply(503, { error: 'Flow store unavailable' });
           const records = mode === 'empty' ? [] : mode === 'nat-directions' ? [
-            {...base,privIp:'198.51.100.9',privPort:443,dstIp:'203.0.113.20',dstPort:42286,pubIp:'198.51.100.9',pubPort:443,postDstIp:'10.0.102.12',postDstPort:42286,natIp:'203.0.113.20',natPort:42286,translation:'destination'},
+            {...base,privIp:'198.51.100.9',privPort:443,dstIp:'203.0.113.20',dstPort:42286,pubIp:'198.51.100.9',pubPort:443,postDstIp:'10.0.102.12',postDstPort:42286,natIp:'',natPort:0,translation:'destination'},
             {...base,pubIp:base.privIp,pubPort:base.privPort,untranslated:true},
             {...base,pubIp:base.privIp,pubPort:base.privPort,translation:'none',natIp:'',postDstIp:base.dstIp,postDstPort:base.dstPort},
             {...base,pubIp:base.privIp,pubPort:5678},
-            {...base,translation:'both',natIp:'',postDstIp:'10.0.1.20',postDstPort:8443}
+            {...base,translation:'both',natIp:base.pubIp,natPort:base.pubPort,postDstIp:'10.0.1.20',postDstPort:8443}
           ] : mode === 'large' ? Array.from({length:body.Limit},(_,i)=>({...rows[i%3],clock:'00:38:'+String(i%60).padStart(2,'0')})) : rows;
           if (mode === 'invalid') return reply(200, {records: 'invalid', total: 10});
           return reply(200, { records, total: records.length ? 72932 : 0, elapsedMs: 1399, cold: mode === 'cold', crm: { enabled: mode !== 'no-crm', matched: 2, rows: 3, status: 'partial' } });
@@ -70,6 +70,7 @@ async function main() {
       await shot('filters');
       if (director) await page.locator('#s-isp').selectOption('5');
       await page.locator('#s-dev').selectOption('8@203.0.113.250');
+      await page.locator('#s-pub').fill('203.0.113.10');
       assert(await page.locator('#s-from').inputValue(),'Recent 15 minutes is a visible default');
       await page.locator('#s-from').fill('2026-09-11 00:36');
       await page.locator('#s-to').fill('2026-09-11 00:39');
@@ -79,20 +80,22 @@ async function main() {
       await table();
       assert.equal(await page.locator('#logTable tbody tr').count(), 3);
       const cells = page.locator('#logTable tbody tr').first().locator('td');
-      assert.deepEqual(await page.locator('#logTable thead th').allTextContents(), ['Timestamp · IST','src_ip','src_port','dst_ip','dst_port','nat_ip','nat_port','post_dst_ip','post_dst_port','Translation','Protocol','Device','Subscriber','Export','Subscriber · CRM']);
-      assert.deepEqual((await cells.allInnerTexts()).slice(0,7), ['2026-09-11 00:38:59','100.64.1.10','1234','192.0.2.1','443','203.0.113.10','4321']);
-      assert.match(await cells.nth(12).innerText(), /<subscriber>\s+From exporter/);
-      assert.match(await page.locator('#logTable tbody tr').nth(1).locator('td').nth(12).innerText(), /<crm-user>\s+via CRM/);
+      assert.deepEqual(await page.locator('#logTable thead th').allTextContents(), ['Start Date(mm:dd:yyyy) & Time(hh:mm:ss)','End Date(mm:dd:yyyy) & Time(hh:mm:ss)','Source IP Address','Source Port','Translated IP address','Translated Port','Destination IP Address','Destination Port']);
+      assert.deepEqual(await cells.allInnerTexts(), ['09:11:2026 & 00:38:59','09:11:2026 & 00:39:01','100.64.1.10','1234','203.0.113.10','4321','192.0.2.1','443']);
+      assert(await page.locator('#logTable th').last().evaluate(n => n.getBoundingClientRect().right <= n.closest('.logs-table-scroll').getBoundingClientRect().right), 'All eight column headers fit the desktop result area');
+      assert.deepEqual((await page.locator('#logTable tbody tr').nth(1).locator('td').allInnerTexts()).slice(0,2), ['09:10:2026 & 23:59:59','09:11:2026 & 00:00:04'], 'Start/end dates crossing midnight retain their independent IST values');
       const missing = page.locator('#logTable tbody tr').nth(2).locator('td');
-      assert.equal(await missing.nth(12).innerText(), '—');
+      assert.equal(await missing.nth(1).innerText(), '—', 'An old API missing endTime must not copy startTime into the end column');
+      assert.equal(await missing.nth(4).innerText(), '—');
       assert.equal(await missing.nth(5).innerText(), '—');
-      assert.equal(await missing.nth(6).innerText(), '—');
-      assert.equal(await missing.nth(2).innerText(), '0');
-      assert.equal(await missing.nth(4).innerText(), '0');
+      assert.equal(await missing.nth(3).innerText(), '0');
+      assert.equal(await missing.nth(7).innerText(), '0');
       assert.equal(await page.locator('#logTable subscriber, #logTable crm-user, #logTable customer').count(), 0);
       assert.equal(await page.locator('#s-msg').innerText(), '');
+      assert.match(await page.locator('#logs-evidence-note').innerText(), /1 displayed record has no confirmed source translation/);
       assert.equal(await page.locator('.index-stats .v').first().innerText(), '72,932');
       assert.equal(await page.locator('#s-results a[href^="/api/v1/report"]').count(), 3);
+      assert.deepEqual(await page.locator('#logs-exports a').evaluateAll(nodes => nodes.map(n=>new URL(n.href).searchParams.get('format'))), ['csv','xlsx','pdf']);
       await shot('rows');
       const appliedChips = await page.locator('#logs-chips').innerText(), exportsBefore = await page.locator('#logs-exports').innerHTML();
       await page.locator('#logs-open-filters').click();
@@ -103,11 +106,13 @@ async function main() {
       assert.equal(await page.locator('#logs-exports').innerHTML(),exportsBefore);
       await page.locator('[data-filter-close]').last().click();
       assert.equal(requests.length,beforeEdit);
-      assert.equal(await page.locator('#s-pub').inputValue(),'');
+      assert.equal(await page.locator('#s-pub').inputValue(),'203.0.113.10');
       assert.equal(await page.locator('#s-dev').inputValue(),'8@203.0.113.250');
       await page.locator('[data-details="0"]').click();
       await page.getByRole('dialog').getByText('Flow record details').waitFor();
       assert.match(await page.getByRole('dialog').innerText(), /<subscriber>/);
+      assert.match(await page.getByRole('dialog').innerText(), /<Customer>/);
+      assert.equal(await page.getByRole('dialog').locator('subscriber, customer').count(),0,'Subscriber/CRM markup stays escaped inside details');
       assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has: page.locator('dt', {hasText: /^src_port$/})}).locator('dd').innerText(), '1234');
       await page.keyboard.press('Escape');
       assert.equal(await page.getByRole('dialog').count(),0);
@@ -132,24 +137,24 @@ async function main() {
       assert.equal(requests.at(-1).Offset, 0);
       mode = 'nat-directions'; await search(); await table();
       const natRows = page.locator('#logTable tbody tr');
-      assert.deepEqual((await natRows.nth(0).locator('td').allInnerTexts()).slice(1,10), ['198.51.100.9','443','203.0.113.20','42286','203.0.113.20','42286','10.0.102.12','42286','Destination NAT']);
-      assert.equal(await natRows.nth(1).locator('td').nth(5).innerText(), '—', 'An unchanged legacy source is not a public NAT mapping');
-      assert.equal(await natRows.nth(1).locator('td').nth(9).innerText(), 'Incomplete fields');
-      assert.equal(await natRows.nth(2).locator('td').nth(9).innerText(), 'Unchanged');
-      assert.equal(await natRows.nth(3).locator('td').nth(6).innerText(), '5678', 'Port-only translation remains visible');
-      assert.equal(await natRows.nth(4).locator('td').nth(5).innerText(), '—', 'Both-side translation never invents a single NAT endpoint');
+      assert.equal(await natRows.count(),5,'Incomplete and unchanged records remain searchable');
+      assert.deepEqual((await natRows.nth(0).locator('td').allInnerTexts()).slice(2), ['198.51.100.9','443','—','—','203.0.113.20','42286']);
+      assert.equal(await natRows.nth(1).locator('td').nth(4).innerText(), '—', 'An unchanged legacy source is not a public NAT mapping');
+      assert.equal(await natRows.nth(2).locator('td').nth(4).innerText(), '—', 'Unchanged records do not invent translated addresses');
+      assert.equal(await natRows.nth(3).locator('td').nth(5).innerText(), '5678', 'Port-only translation remains visible');
+      assert.equal(await natRows.nth(4).locator('td').nth(4).innerText(), base.pubIp, 'A verified source translation is preserved when both sides translate');
       await shot('nat-directions');
       await natRows.nth(0).locator('[data-details]').click();
-      assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has:page.locator('dt',{hasText:/^post_src_ip$/})}).locator('dd').innerText(),'198.51.100.9');
-      assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has:page.locator('dt',{hasText:/^post_dst_ip$/})}).locator('dd').innerText(),'10.0.102.12');
+      assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has:page.locator('dt',{hasText:/^nat_ip$/})}).locator('dd').innerText(),'—');
+      assert.equal(await page.getByRole('dialog').locator('dt').filter({hasText:/^post_(src|dst)_/}).count(),0,'Post-NAT raw destination/source duplicates are not exposed in the requested view');
       await page.keyboard.press('Escape');
       mode = 'cold'; await search(); await table();
       assert.equal(await page.locator('.index-stats .v').nth(3).innerText(), 'Hot + S3');
       mode = 'no-crm'; await search(); await table();
-      assert.equal(await page.locator('#logTable thead th').count(), 14);
+      assert.equal(await page.locator('#logTable thead th').count(), 8);
       mode = 'empty'; await search(); await table();
       assert.match(await page.locator('#logTable').innerText(), /No matching flow logs/);
-      assert.equal(await page.locator('.logs-state-row td').getAttribute('colspan'), '14');
+      assert.equal(await page.locator('.logs-state-row td').getAttribute('colspan'), '8');
       await shot('empty');
       for (mode of ['network', 'server']) {
         await search();

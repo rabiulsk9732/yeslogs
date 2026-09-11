@@ -233,8 +233,8 @@ func TestCRMSettingsAPIStoresEncryptedAndNeverEchoesKey(t *testing.T) {
 	}
 }
 
-func TestCRMReportColumnsAndFormulaSafety(t *testing.T) {
-	meta := reportMeta{CRM: crmEnrichmentSummary{Enabled: true, Matched: 1}}
+func TestCRMDoesNotChangeEightColumnReportAndMetadataRemainsSafe(t *testing.T) {
+	meta := reportMeta{CaseRef: "=DANGEROUS()", CRM: crmEnrichmentSummary{Enabled: true, Matched: 1}}
 	rows := []natRecord{{
 		PrivIP: "172.16.1.10", PubIP: "203.0.113.10", Time: "2026-07-17 13:46:19",
 		CRMReference: "YL-20260717-ABC123", CRMStatus: "matched", CRMUsername: "user1",
@@ -245,9 +245,14 @@ func TestCRMReportColumnsAndFormulaSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 	csv := out.String()
-	for _, want := range []string{"crm_reference", "subscriber_name", "phone", "address", "YL-20260717-ABC123", "'=DANGEROUS()"} {
+	for _, want := range []string{"Source IP Address", "Translated IP address"} {
 		if !strings.Contains(csv, want) {
-			t.Errorf("CRM CSV missing %q:\n%s", want, csv)
+			t.Errorf("CSV missing %q: %s", want, csv)
+		}
+	}
+	for _, forbidden := range []string{"crm_reference", "subscriber_name", "YL-20260717-ABC123", "CRM enrichment"} {
+		if strings.Contains(csv, forbidden) {
+			t.Errorf("CRM changed requested eight-column table or leaked metadata into CSV: %s", csv)
 		}
 	}
 	out.Reset()

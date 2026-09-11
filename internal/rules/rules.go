@@ -45,7 +45,7 @@ func (r *RuleSet) ShouldSkip(rec *normalizer.FlowRecord) (bool, string) {
 	// This drops 100% of NetFlow v5: that version carries no post-NAT fields at
 	// all. That is the correct outcome here, and the compliance audit reports it
 	// per device so it can never be mistaken for a silent exporter.
-	if isUnsetIP(rec.NatPublicIP) {
+	if isUnsetIP(rec.NatPublicIP) && isUnsetIP(rec.NatDestIP) {
 		return true, ReasonNoNAT
 	}
 	// A record carrying a translation is kept unconditionally. Nothing below may
@@ -91,24 +91,18 @@ func (r *RuleSet) ShouldSkip(rec *normalizer.FlowRecord) (bool, string) {
 	return false, ""
 }
 
-// isTranslation reports whether rec records an address translation rather than a
-// traffic flow that merely happens to carry a post-NAT address.
-//
-// Two forms count, because two kinds of device produce them:
-//
-//   - a post-NAT port is present. Under CGNAT one public IP is shared by many
-//     subscribers, so the port is what identifies one, and a record carrying it
-//     answers the question this store exists for whatever its byte counter says.
-//
-//   - the post-NAT address simply differs from the source. 1:1 NAT and
-//     deterministic NAT without PAT emit IE 225 with no IE 227 at all, and such a
-//     record still answers "who held public IP X at time T". Keying only on the
-//     port would discard every translation those devices produce — the same class
-//     of mistake as treating a NAT event as an empty husk.
-//
-// A record whose post-NAT address equals its source translated nothing, so it is
-// a traffic flow and the configurable rules may reduce it.
+// isTranslation exempts NAT evidence from traffic-volume reduction. The legacy
+// source-side policy conservatively preserves a populated post-source port or
+// a changed source address. Destination-side translations must also survive.
+// This retention exemption does not establish that the exporter sent natEvent.
 func isTranslation(rec *normalizer.FlowRecord) bool {
+	// Destination translation is independent of source translation. MikroTik
+	// return flows may leave post-source unchanged while mapping post-destination
+	// to the subscriber. A nonzero, changed port also captures destination PAT.
+	if !isUnsetIP(rec.NatDestIP) && (!rec.NatDestIP.Equal(rec.DstIP) ||
+		(rec.NatDestPort != 0 && rec.NatDestPort != rec.DstPort)) {
+		return true
+	}
 	if isUnsetIP(rec.NatPublicIP) {
 		return false
 	}

@@ -34,7 +34,7 @@ import (
 
 const insertStmt = `INSERT INTO %s.flow_logs
 	(isp_id, device_id, src_ip, src_port, dst_ip, dst_port,
-	 nat_public_ip, nat_public_port, nat_event, username, protocol, bytes, packets,
+	 nat_public_ip, nat_public_port, nat_dest_ip, nat_dest_port, nat_event, username, protocol, bytes, packets,
 	 flow_start, flow_end, flow_type, exporter_ip)`
 
 // schemaDDL brings an existing flow_logs up to the columns this build writes.
@@ -45,6 +45,8 @@ const insertStmt = `INSERT INTO %s.flow_logs
 var schemaDDL = []string{
 	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_event UInt8 DEFAULT 0`,
 	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS username String DEFAULT ''`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_ip IPv4 DEFAULT toIPv4('0.0.0.0')`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_port UInt16 DEFAULT 0`,
 }
 
 const (
@@ -667,7 +669,7 @@ func (s *shard) send(batch []normalizer.FlowRecord) error {
 		if err := b.Append(
 			r.ISPID, r.DeviceID,
 			ip4(r.SrcIP), r.SrcPort, ip4(r.DstIP), r.DstPort,
-			ip4(r.NatPublicIP), r.NatPublicPort, r.NatEvent, r.Username,
+			ip4(r.NatPublicIP), r.NatPublicPort, ip4(r.NatDestIP), r.NatDestPort, r.NatEvent, r.Username,
 			r.Protocol, r.Bytes, r.Packets,
 			r.FlowStart, r.FlowEnd, r.FlowType, ip4(r.ExporterIP),
 		); err != nil {

@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_logs
 
     nat_public_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
     nat_public_port UInt16 DEFAULT 0,
+    -- Raw post-NAT destination, IEs 226/228. Zero IP means not retained or not
+    -- exported; it must not be reconstructed from the original destination.
+    nat_dest_ip IPv4 DEFAULT toIPv4('0.0.0.0'),
+    nat_dest_port UInt16 DEFAULT 0,
 
     -- IE 230 natEvent: 1 = allocation, 2 = release, 0 = not reported. The
     -- allocation/release pair is what makes a mapping answerable AT a point in
@@ -54,6 +58,11 @@ PARTITION BY event_date
 ORDER BY (isp_id, device_id, flow_start, src_ip, src_port, dst_ip, dst_port)
 TTL event_date + INTERVAL 180 DAY
 SETTINGS index_granularity = 8192;
+
+-- Additive upgrade for existing collectors; old parts use these defaults and
+-- remain untouched. The writer also performs these metadata changes at startup.
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_ip IPv4 DEFAULT toIPv4('0.0.0.0');
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_port UInt16 DEFAULT 0;
 
 -- Dashboard rollups (also auto-created + maintained by natlog on startup). natlog
 -- runs a PERIODIC BATCH rollup (every ~2 min) into these summary tables — NOT a
