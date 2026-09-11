@@ -54,7 +54,9 @@ func coldParquetSchema() string {
 // existed alongside newer ones. Without this a single old object in the range
 // fails the whole query, which would make every pre-2026-08-26 day unreadable —
 // trading a new column for the loss of months of searchable evidence.
-const coldReadSettings = " SETTINGS input_format_parquet_allow_missing_columns = 1, " +
+// Use the stored isp_id instead of S3 Hive path inference. With Hive inference
+// enabled, ClickHouse drops isp_id from the block used by SELECT/LIMIT BY.
+const coldReadSettings = " SETTINGS use_hive_partitioning = 0, input_format_parquet_allow_missing_columns = 1, " +
 	"input_format_csv_allow_variable_number_of_columns = 1, " +
 	"input_format_with_names_use_header = 1, input_format_defaults_for_omitted_fields = 1, " +
 	"input_format_parquet_skip_columns_with_unsupported_types_in_schema_inference = 1"

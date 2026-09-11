@@ -20,6 +20,16 @@ func observedDestinationRecord() natRecord {
 		PubIP: "192.0.2.44", PubPort: 443, PostDstIP: "10.0.0.12", PostDstPort: 42286}
 }
 
+func TestColdNATSchemaPreservesStoredTenantAndUnknownDefaults(t *testing.T) {
+	// Real S3 paths contain isp_id=<tenant>; Hive inference steals the stored
+	// column from the SELECT/LIMIT BY block on ClickHouse 26.7.
+	for _, setting := range []string{"use_hive_partitioning = 0", "input_format_parquet_allow_missing_columns = 1", "input_format_with_names_use_header = 1"} {
+		if !strings.Contains(coldReadSettings, setting) {
+			t.Errorf("cold compatibility setting missing: %s", setting)
+		}
+	}
+}
+
 func TestNATTranslationPreservesDirectionAndMissingEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
