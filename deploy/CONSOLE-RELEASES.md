@@ -85,7 +85,10 @@ service units. Install reviewed operational changes explicitly.
 Go code is compiled into `natlog`; changing it is not a static UI release.
 The fetcher compares `cmd/`, `internal/` (excluding the console), `configs/`,
 `go.mod` and `go.sum` with the configured backend revision and blocks incompatible
-releases. After a separately planned backend deployment, update that baseline
+releases. Go `_test.go` files are excluded from this runtime comparison because
+they are not compiled into deployed binaries; CI still runs those tests.
+Install the reviewed fetcher update on each origin to use that distinction.
+After a separately planned backend deployment, update that baseline
 to the revision actually installed. Never advance it just to bypass the check.
 
 The current unified process closes UDP sockets before draining accepted writer

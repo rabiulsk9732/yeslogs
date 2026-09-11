@@ -121,6 +121,18 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "separately deployed backend"):
             release.check_backend(self.repo, self.baseline, candidate, candidate)
 
+    def test_go_test_changes_do_not_mask_runtime_changes(self):
+        test = self.repo / "internal/director/console_test.go"
+        test.parent.mkdir(parents=True, exist_ok=True)
+        test.write_text("package director\n// embedding contract\n")
+        candidate = self.commit()
+        release.check_backend(self.repo, self.baseline, candidate)
+        # The same commit must still reject runtime changes next to the test.
+        test.with_name("console.go").write_text("package director\n")
+        candidate = self.commit()
+        with self.assertRaisesRegex(ValueError, "separately deployed backend"):
+            release.check_backend(self.repo, self.baseline, candidate)
+
     def test_management_probe_requires_the_installed_revision(self):
         config = {"management_revision": self.baseline,
                   "management_probe_url": "http://127.0.0.1:8081/api/v1/management-version"}

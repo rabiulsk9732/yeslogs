@@ -70,21 +70,21 @@ func TestColdWhereRequireNATUsesTenantPathScope(t *testing.T) {
 	}
 }
 
-func TestLogsISPDeviceCascadeIsEmbedded(t *testing.T) {
+func TestLogsWorkspaceAssetsAreEmbedded(t *testing.T) {
 	b, err := consoleFS.ReadFile("web/console/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(b)
-	for _, want := range []string{
-		`Select an ISP first`,
-		`devs.filter(d => +d.ISPID === ispID)`,
-		`S.lq = null`,
-		`if (reqID !== S.logReq) return`,
-		`Shared local collector`,
-	} {
-		if !strings.Contains(html, want) {
-			t.Errorf("Logs ISP/device cascade missing %q", want)
+	// Browser contracts cover cascade, request cancellation and draft/applied
+	// state behavior. Here verify the standalone binary embeds its module assets.
+	for _, asset := range []string{"logs.js", "logs.css"} {
+		if !strings.Contains(html, `/assets/`+asset) {
+			t.Errorf("Logs workspace does not load %q", asset)
+		}
+		data, err := consoleFS.ReadFile("web/console/assets/" + asset)
+		if err != nil || len(data) == 0 {
+			t.Errorf("Logs workspace asset %q is missing or empty: %v", asset, err)
 		}
 	}
 }

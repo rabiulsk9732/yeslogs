@@ -140,6 +140,9 @@ def check_backend(repo, baseline, candidate, management_revision=None):
     changes = git(repo, "diff", "--name-only", baseline, candidate, "--",
                   "cmd", "internal", "configs", "go.mod", "go.sum",
                   ":(exclude)" + CONSOLE).decode().splitlines()
+    # Go excludes _test.go files from the deployed binaries. Updating a browser
+    # embedding contract does not require restarting the collector or gateway.
+    changes = [p for p in changes if not p.endswith("_test.go")]
     if management_revision:
         if not SHA.fullmatch(management_revision):
             raise ValueError("Management revision must be a full commit ID")
