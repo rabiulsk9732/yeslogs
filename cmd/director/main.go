@@ -39,8 +39,10 @@ type config struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"clickhouse"`
-	FlowDays int    `yaml:"flow_days"`
-	Upstream string `yaml:"upstream"`
+	FlowDays         int    `yaml:"flow_days"`
+	Upstream         string `yaml:"upstream"`
+	FlowReads        bool   `yaml:"flow_reads"`
+	FlowSettingsFile string `yaml:"flow_settings_file"`
 }
 
 func main() {
@@ -131,6 +133,9 @@ func run() error {
 	if cfg.ClickHouse.Addr != "" {
 		fr, err = director.NewFlowReader(cfg.ClickHouse.Addr, cfg.ClickHouse.Database, cfg.ClickHouse.Username, cfg.ClickHouse.Password)
 		if err != nil {
+			if cfg.FlowReads {
+				return fmt.Errorf("flow_reads ClickHouse connection: %w", err)
+			}
 			log.Warn("flow dashboard disabled: clickhouse unavailable", "error", err)
 			fr = nil
 		} else {
@@ -150,7 +155,16 @@ func run() error {
 
 	handler := srv.Handler()
 	if cfg.Upstream != "" {
-		handler, err = srv.ManagementHandler(cfg.Upstream)
+		if cfg.FlowReads {
+			defaults, e := loadFlowReadDefaults(cfg.FlowSettingsFile)
+			if e != nil {
+				return e
+			}
+			srv.InitSettings(ctx, defaults)
+			handler, err = srv.ManagementFlowHandler(cfg.Upstream)
+		} else {
+			handler, err = srv.ManagementHandler(cfg.Upstream)
+		}
 		if err != nil {
 			return err
 		}
@@ -194,6 +208,12 @@ func loadConfig(path string) (*config, error) {
 	}
 	if c.MySQLDSN == "" {
 		return nil, fmt.Errorf("mysql_dsn is required")
+	}
+	if c.FlowReads && (c.Upstream == "" || c.ClickHouse.Addr == "") {
+		return nil, fmt.Errorf("flow_reads requires upstream and clickhouse.addr")
+	}
+	if c.FlowSettingsFile != "" && !c.FlowReads {
+		return nil, fmt.Errorf("flow_settings_file requires flow_reads")
 	}
 	return &c, nil
 }

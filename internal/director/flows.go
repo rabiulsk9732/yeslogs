@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -14,8 +15,9 @@ import (
 // table. The isp filter is always supplied by the caller (the handler derives it
 // from the authenticated identity), so a tenant can never read another's flows.
 type FlowReader struct {
-	conn driver.Conn
-	db   string
+	conn           driver.Conn
+	db             string
+	destinationNAT atomic.Bool
 }
 
 // NewFlowReader connects to ClickHouse for read queries.

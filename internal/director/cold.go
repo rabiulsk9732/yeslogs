@@ -39,18 +39,16 @@ const coldSchema = "isp_id UInt32, device_id UInt32, src_ip String, src_port UIn
 	"dst_ip String, dst_port UInt16, nat_public_ip String, nat_public_port UInt16, " +
 	"nat_event UInt8, username String, " +
 	"protocol UInt8, bytes UInt64, packets UInt64, flow_start String, flow_end String, " +
-	"flow_type String, exporter_ip String"
+	"flow_type String, exporter_ip String, nat_dest_ip String, nat_dest_port UInt16"
 
-// dedupKeyCold is the same idea for the S3 path, narrowed twice over. An s3()
-// source only knows the columns in its SELECT, and Parquet infers that schema
-// from the file itself — so a key naming bytes/packets/flow_end (not selected)
-// or nat_event/username (absent from every archive written before 2026-08-26)
-// fails the whole query with "Unknown expression identifier". Reusing the hot
-// key here is exactly how cold search broke, and cold search is what answers a
-// months-old lawful request. These nine columns exist in every archive
-// generation; the copies this collapses are identical in all of them anyway.
-const dedupKeyCold = "flow_start, src_ip, src_port, dst_ip, dst_port, " +
-	"nat_public_ip, nat_public_port, protocol, flow_type"
+// The explicit schema below supplies defaults for columns absent from older
+// archives. Keep all available evidence in the key, including both NAT sides.
+const dedupKeyCold = "isp_id, flow_start, flow_end, src_ip, src_port, dst_ip, dst_port, " +
+	"nat_public_ip, nat_public_port, nat_dest_ip, nat_dest_port, protocol, flow_type, bytes, packets, nat_event, username"
+
+func coldParquetSchema() string {
+	return strings.ReplaceAll(strings.ReplaceAll(coldSchema, "flow_start String", "flow_start DateTime('Asia/Kolkata')"), "flow_end String", "flow_end DateTime('Asia/Kolkata')")
+}
 
 // coldReadSettings let a glob span archives written before nat_event/username
 // existed alongside newer ones. Without this a single old object in the range
@@ -58,6 +56,7 @@ const dedupKeyCold = "flow_start, src_ip, src_port, dst_ip, dst_port, " +
 // trading a new column for the loss of months of searchable evidence.
 const coldReadSettings = " SETTINGS input_format_parquet_allow_missing_columns = 1, " +
 	"input_format_csv_allow_variable_number_of_columns = 1, " +
+	"input_format_with_names_use_header = 1, input_format_defaults_for_omitted_fields = 1, " +
 	"input_format_parquet_skip_columns_with_unsupported_types_in_schema_inference = 1"
 
 // urlForDays builds an s3() path that reads ONLY the given archived days (date
@@ -102,6 +101,7 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 		tsExpr = "parseDateTimeBestEffortOrNull(flow_start)"
 	}
 
+	f.destinationNATAvailable = true // Explicit schema supplies unknown defaults for old archives.
 	conds, args, ok := coldWhere(f, tsExpr)
 	if !ok {
 		return nil, fmt.Errorf("no filter")
@@ -110,16 +110,13 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	url := c.urlForDays(f.ISPID, days)
 	var src string
 	if parquet {
-		src = fmt.Sprintf("s3(%s, %s, %s, 'Parquet')", quote(url), quote(c.AccessKey), quote(c.SecretKey))
+		src = fmt.Sprintf("s3(%s, %s, %s, 'Parquet', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldParquetSchema()))
 	} else {
 		src = fmt.Sprintf("s3(%s, %s, %s, 'CSVWithNames', %s)", quote(url), quote(c.AccessKey), quote(c.SecretKey), quote(coldSchema))
 	}
-	// Deliberately no nat_event/username here. Parquet infers its schema from the
-	// file, so naming a column that a given archive predates fails the whole query
-	// — archives written before 2026-08-26 have neither, and a lawful request over
-	// an old window must still return rows.
-	q := fmt.Sprintf(`SELECT %s AS ts, device_id, src_ip, src_port, nat_public_ip, nat_public_port,
-		dst_ip, dst_port, protocol, flow_type FROM %s WHERE %s ORDER BY ts DESC LIMIT 1 BY %s LIMIT %d%s`,
+	q := fmt.Sprintf(`SELECT %s AS ts, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
+		dst_ip, dst_port, nat_dest_ip, nat_dest_port, protocol, flow_type, username, nat_event FROM %s
+		WHERE %s ORDER BY ts DESC LIMIT 1 BY %s LIMIT %d%s`,
 		tsExpr, src, strings.Join(conds, " AND "), dedupKeyCold, limit, coldReadSettings)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
@@ -129,28 +126,22 @@ func (r *FlowReader) SearchCold(ctx context.Context, f SearchFilter, limit int, 
 	out := make([]natRecord, 0, 64)
 	for rs.Next() {
 		var ts time.Time
-		var sip, pip, dip, ft string
-		var dev uint32
-		var sp, pp, dp uint16
+		var rec natRecord
+		var sp, pp, dp, pdp uint16
 		var pr uint8
-		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft); err != nil {
+		var ft string
+		if err := rs.Scan(&ts, &rec.ISPID, &rec.DevID, &rec.ExporterIP, &rec.PrivIP, &sp, &rec.PubIP, &pp,
+			&rec.DstIP, &dp, &rec.PostDstIP, &pdp, &pr, &ft, &rec.Username, &rec.NatEvent); err != nil {
 			return out, err
 		}
-		ts = ts.In(istLoc)
-		pubIP := pip
-		pubPort := int(pp)
-		untranslated := pubIP != "" && pubIP == sip
-		if pubIP == "0.0.0.0" {
-			pubIP, pubPort = "", 0
-		}
-		out = append(out, natRecord{
-			Date: ts.Format("2006-01-02"), Clock: ts.Format("15:04:05"), Time: ts.Format("2006-01-02 15:04:05"), At: ts.UTC(),
-			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip, PrivPort: int(sp),
-			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
-			DstIP: dip, DstPort: int(dp),
-			Dest: fmt.Sprintf("%s:%d", dip, dp), Action: strings.ToUpper(ft),
-			Untranslated: untranslated,
-		})
+		rec.At = ts.UTC()
+		rec.Date, rec.Clock, rec.Time = ts.In(istLoc).Format("2006-01-02"), ts.In(istLoc).Format("15:04:05"), ts.In(istLoc).Format("2006-01-02 15:04:05")
+		rec.Sub = fmt.Sprintf("DEV-%d", rec.DevID)
+		rec.PrivPort, rec.PubPort, rec.DstPort, rec.PostDstPort = int(sp), int(pp), int(dp), int(pdp)
+		rec.Proto, rec.Action = protoName(pr), strings.ToUpper(ft)
+		rec.Dest = fmt.Sprintf("%s:%d", rec.DstIP, dp)
+		rec.setNATTranslation()
+		out = append(out, rec)
 	}
 	return out, rs.Err()
 }
@@ -163,23 +154,15 @@ func coldWhere(f SearchFilter, tsExpr string) ([]string, []any, bool) {
 	var conds []string
 	var args []any
 	add := func(cond string, a any) { conds = append(conds, cond); args = append(args, a) }
-	if f.PublicIP != "" {
-		add("nat_public_ip = ?", f.PublicIP)
-	}
-	if f.PrivateIP != "" {
-		add("src_ip = ?", f.PrivateIP)
-	}
-	if f.DestIP != "" {
-		add("dst_ip = ?", f.DestIP)
-	}
-	if f.PublicPort > 0 {
-		add("nat_public_port = ?", uint16(f.PublicPort))
-	}
+	addNATFilters(f, false, &conds, &args)
 	if pn := protoNum(f.Proto); pn > 0 {
 		add("protocol = ?", pn)
 	}
 	if f.DeviceID > 0 {
 		add("device_id = ?", f.DeviceID)
+	}
+	if f.ExporterIP != "" {
+		add("exporter_ip = ?", f.ExporterIP)
 	}
 	if f.Username != "" {
 		// Archives written before 2026-08-26 have no username column; the
@@ -188,9 +171,11 @@ func coldWhere(f SearchFilter, tsExpr string) ([]string, []any, bool) {
 		add("username = ?", f.Username)
 	}
 	if f.RequireNAT {
-		// Matches the hot path: has a post-NAT address, nothing more. Identity
-		// mappings are returned and flagged rather than hidden.
-		conds = append(conds, "nat_public_ip != '' AND nat_public_ip != '0.0.0.0'")
+		cond := "nat_public_ip != '' AND nat_public_ip != '0.0.0.0'"
+		if f.destinationNATAvailable {
+			cond = "((" + cond + ") OR (nat_dest_ip != '' AND nat_dest_ip != '0.0.0.0'))"
+		}
+		conds = append(conds, cond)
 	}
 	if !f.From.IsZero() {
 		add(tsExpr+" >= ?", f.From.UTC())

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -65,6 +66,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		PublicPort                  int
 		Proto, From, To, Reason     string
 		DeviceID                    uint32
+		ExporterIP                  string
 		ISPID                       uint32
 		Limit, Offset               int
 		Username                    string `json:"username"`
@@ -93,11 +95,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	f := SearchFilter{
 		ISPID: scope, PublicIP: strings.TrimSpace(body.PublicIP), PrivateIP: strings.TrimSpace(body.PrivateIP),
 		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, Proto: body.Proto,
-		DeviceID: body.DeviceID, From: parseTime(body.From), To: parseTime(body.To),
+		DeviceID: body.DeviceID, ExporterIP: strings.TrimSpace(body.ExporterIP), From: parseTime(body.From), To: parseTime(body.To),
 		Username: strings.TrimSpace(body.Username),
-		// The Logs table is an IPDR/NAT-mapping view. Keep it aligned with
-		// exports so reverse and identity flows never render with a blank NAT IP.
+		// Preserve records carrying either post-NAT tuple, including unchanged
+		// and historical incomplete tuples. The API states their evidence limits.
 		RequireNAT: true,
+	}
+	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP).To4() == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid exporter IP"})
+		return
 	}
 	if !f.HasSelector() {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specify at least a Public IP, Private IP, Destination IP, Subscriber username, or Device"})
@@ -159,9 +165,13 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	f := SearchFilter{
 		ISPID: scope, PublicIP: strings.TrimSpace(q.Get("ip")), PrivateIP: strings.TrimSpace(q.Get("priv")),
 		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), Proto: q.Get("proto"),
-		DeviceID: parseUint32(q.Get("device")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
+		DeviceID: parseUint32(q.Get("device")), ExporterIP: strings.TrimSpace(q.Get("exporter")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
 		Username:   strings.TrimSpace(q.Get("user")),
 		RequireNAT: true,
+	}
+	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP).To4() == nil {
+		http.Error(w, "invalid exporter IP", http.StatusBadRequest)
+		return
 	}
 	if !f.HasSelector() {
 		http.Error(w, "specify at least one IP or device filter", http.StatusBadRequest)

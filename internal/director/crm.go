@@ -184,10 +184,24 @@ func recordInstant(r natRecord) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// Resolve the internal endpoint only when translation direction is established.
+// Empty Translation is retained for internal legacy callers; all search readers
+// populate an explicit status, including unknown historical destination tuples.
+func crmLocalIP(r natRecord) string {
+	switch r.Translation {
+	case "destination":
+		return r.PostDstIP
+	case "source", "":
+		return r.PrivIP
+	default:
+		return ""
+	}
+}
+
 func crmLookupHash(ispID uint32, endpoint string, r natRecord, at time.Time) string {
 	raw := strings.Join([]string{
 		crmSchemaVersion, endpoint, strconv.FormatUint(uint64(ispID), 10),
-		strconv.FormatUint(uint64(r.DevID), 10), r.PrivIP, at.UTC().Format(time.RFC3339),
+		strconv.FormatUint(uint64(r.DevID), 10), r.ExporterIP, crmLocalIP(r), at.UTC().Format(time.RFC3339),
 	}, "|")
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
@@ -196,7 +210,7 @@ func crmLookupHash(ispID uint32, endpoint string, r natRecord, at time.Time) str
 func crmReference(ispID uint32, r natRecord, at time.Time) string {
 	raw := strings.Join([]string{
 		crmSchemaVersion, strconv.FormatUint(uint64(ispID), 10),
-		strconv.FormatUint(uint64(r.DevID), 10), r.PrivIP, at.UTC().Format(time.RFC3339),
+		strconv.FormatUint(uint64(r.DevID), 10), r.ExporterIP, crmLocalIP(r), at.UTC().Format(time.RFC3339),
 	}, "|")
 	sum := sha256.Sum256([]byte(raw))
 	// 96 hash bits keep the correlation code compact while avoiding birthday
@@ -334,15 +348,17 @@ func (s *Server) enrichCRMRows(ctx context.Context, ispID uint32, rows []natReco
 		sum.ElapsedMs = time.Since(started).Milliseconds()
 		return sum
 	}
-	devByID := make(map[uint32]crmDeviceIdentity, len(devs))
-	for _, d := range devs {
-		devByID[d.DeviceID] = crmDeviceIdentity{name: d.Name, exporterIP: d.ExporterIP}
-	}
 
 	pendingByKey := make(map[string]*crmPendingLookup)
 	for i := range rows {
 		at, ok := recordInstant(rows[i])
-		if !ok || net.ParseIP(rows[i].PrivIP) == nil {
+		localIP := crmLocalIP(rows[i])
+		if localIP == "" {
+			rows[i].CRMStatus = "insufficient_nat_data"
+			sum.Failed++
+			continue
+		}
+		if !ok || net.ParseIP(localIP) == nil {
 			rows[i].CRMStatus = "error"
 			sum.Failed++
 			continue
@@ -360,16 +376,21 @@ func (s *Server) enrichCRMRows(ctx context.Context, ispID uint32, rows []natReco
 			p.rowIdxs = append(p.rowIdxs, i)
 			continue
 		}
-		dev := devByID[rows[i].DevID]
+		dev, identified := resolveRecordDevice(devs, ispID, rows[i])
+		if !identified {
+			rows[i].CRMStatus = "ambiguous"
+			sum.Ambiguous++
+			continue
+		}
 		pendingByKey[key] = &crmPendingLookup{
 			key: key,
 			lookup: crmLookup{
 				ReferenceCode: ref,
-				LocalIP:       rows[i].PrivIP,
+				LocalIP:       localIP,
 				EventTime:     at.Format(time.RFC3339),
 				DeviceID:      rows[i].DevID,
-				NASIdentifier: dev.name,
-				NASIPAddress:  dev.exporterIP,
+				NASIdentifier: dev.Name,
+				NASIPAddress:  dev.ExporterIP,
 			},
 			rowIdxs: []int{i},
 		}

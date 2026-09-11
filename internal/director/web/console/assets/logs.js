@@ -6,9 +6,9 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => entities[ch]);
   const badge = (v, tone = 'mut') => `<span class="pill ${tone}">${esc(v)}</span>`;
   let c;
-  const emptyBody = () => ({ ISPID: 0, DeviceID: 0, PublicIP: '', PublicPort: 0, PrivateIP: '', DestIP: '', Username: '', Proto: 'Any', From: '', To: '', Reason: '' });
+  const emptyBody = () => ({ ISPID: 0, DeviceID: 0, ExporterIP: '', PublicIP: '', PublicPort: 0, PrivateIP: '', DestIP: '', Username: '', Proto: 'Any', From: '', To: '', Reason: '' });
   const fields = { ISPID: 's-isp', DeviceID: 's-dev', PublicIP: 's-pub', PublicPort: 's-port', PrivateIP: 's-priv', DestIP: 's-dst', Username: 's-user', Proto: 's-proto', From: 's-from', To: 's-to', Reason: 's-reason' };
-  const columns = ['Timestamp · IST', 'src_ip', 'src_port', 'dst_ip', 'dst_port', 'nat_ip', 'nat_port', 'Protocol', 'Device', 'Subscriber', 'Export'];
+  const columns = ['Timestamp · IST', 'src_ip', 'src_port', 'dst_ip', 'dst_port', 'nat_ip', 'nat_port', 'post_dst_ip', 'post_dst_port', 'Translation', 'Protocol', 'Device', 'Subscriber', 'Export'];
   const num = n => Number(n).toLocaleString();
   const alive = x => c === x && x.root.isConnected;
   function stats(d, count) {
@@ -23,18 +23,24 @@
   function read() {
     const b = emptyBody();
     for (const [key, id] of Object.entries(fields)) if ($('#' + id).length) b[key] = $('#' + id).val().trim();
+    b.DeviceID = b.DeviceID.split('@')[0];
+    b.ExporterIP = $('#s-dev option:selected').attr('data-exporter') || '';
     for (const key of ['ISPID', 'DeviceID', 'PublicPort']) b[key] = Number(b[key]) || 0;
     return b;
   }
+  function deviceKey(d) { return c.devs.filter(v => +v.ISPID === +d.ISPID && +v.DeviceID === +d.DeviceID).length > 1 ? d.DeviceID + '@' + d.ExporterIP : String(d.DeviceID); }
   function devices() {
     const isp = Number($('#s-isp').val());
     const list = c.devs.filter(d => !c.user.isDirector || +d.ISPID === isp);
-    $('#s-dev').html('<option value="0">' + (c.user.isDirector && !isp ? 'Select an ISP first' : 'Any device') + '</option>' + list.map(d => `<option value="${d.DeviceID}">${esc(d.Name)} (#${d.DeviceID})</option>`).join('')).prop('disabled', c.user.isDirector && !isp);
-    if (list.length === 1) $('#s-dev').val(String(list[0].DeviceID));
+    const shared = [...new Set(list.filter(d => deviceKey(d).includes('@')).map(d => d.DeviceID))];
+    $('#s-dev').html('<option value="0">' + (c.user.isDirector && !isp ? 'Select an ISP first' : 'Any device') + '</option>' + shared.map(id => `<option value="${id}">Device #${id} · all exporters</option>`).join('') + list.map(d => `<option value="${esc(deviceKey(d))}" data-exporter="${esc(d.ExporterIP || '')}">${esc(d.Name)} (#${d.DeviceID}${d.ExporterIP ? ' · ' + esc(d.ExporterIP) : ''})</option>`).join('')).prop('disabled', c.user.isDirector && !isp);
+    if (list.length === 1) $('#s-dev').val(deviceKey(list[0]));
   }
   function fill(b) {
     $('#s-isp').val(String(b.ISPID || 0)); devices();
     for (const [key, id] of Object.entries(fields)) if (key !== 'ISPID') $('#' + id).val(['DeviceID'].includes(key) ? String(b[key] || 0) : b[key] || (key === 'Proto' ? 'Any' : ''));
+    const matches = c.devs.filter(d => +d.DeviceID === b.DeviceID && (!b.ISPID || +d.ISPID === b.ISPID) && (!b.ExporterIP || d.ExporterIP === b.ExporterIP));
+    $('#s-dev').val(matches.length === 1 ? deviceKey(matches[0]) : matches.length > 1 && !b.ExporterIP ? String(b.DeviceID) : '0');
     $('#logs-form [aria-invalid]').removeAttr('aria-invalid'); $('#logs-form .isp-field-error').text(''); $('#s-modal-msg').text(''); $('.logs-presets button').removeClass('on').attr('aria-pressed','false');
   }
   function open() {
@@ -55,7 +61,8 @@
     if (!b) { $('#logs-chips').html('<span class="logs-muted">Choose filters to start an audited search.</span>'); return; }
     const parts = [];
     if (c.user.isDirector) parts.push(['ISP', b.ISPID ? c.isps.find(i => +i.ID === b.ISPID)?.Name || '#' + b.ISPID : 'All ISPs']);
-    if (b.DeviceID) parts.push(['Device', c.devs.find(d => +d.DeviceID === b.DeviceID && (!b.ISPID || +d.ISPID === b.ISPID))?.Name || '#' + b.DeviceID]);
+    if (b.DeviceID) parts.push(['Device', !b.ExporterIP && c.devs.filter(d => +d.DeviceID === b.DeviceID && (!b.ISPID || +d.ISPID === b.ISPID)).length > 1 ? '#' + b.DeviceID + ' · all exporters' : c.devs.find(d => +d.DeviceID === b.DeviceID && (!b.ISPID || +d.ISPID === b.ISPID) && (!b.ExporterIP || d.ExporterIP === b.ExporterIP))?.Name || '#' + b.DeviceID]);
+    if (b.ExporterIP) parts.push(['Exporter', b.ExporterIP]);
     for (const [key, label] of [['PublicIP','Public IP'],['PublicPort','Port'],['PrivateIP','Private IP'],['DestIP','Destination'],['Username','Subscriber']]) if (b[key]) parts.push([label,b[key]]);
     if (b.Proto !== 'Any') parts.push(['Protocol', b.Proto]);
     parts.push(['IST', b.From ? b.From + ' → ' + b.To : 'All indexed hot logs']);
@@ -87,9 +94,16 @@
   const timestamp = r => r.time || [r.date, r.clock].filter(Boolean).join(' ');
   const reported = v => v === undefined || v === null || v === '' ? '—' : v;
   const port = (ip, value) => ip ? reported(value) : '—';
+  const translationLabels = { source: 'Source NAT', destination: 'Destination NAT', both: 'Both sides', none: 'Unchanged', unknown: 'Incomplete fields' };
+  function translation(r) {
+    if (Object.hasOwn(translationLabels, r.translation)) return { kind: r.translation, ip: r.natIp || '', port: r.natPort };
+    // Older APIs preserve only post-source fields. An unchanged source cannot rule out destination NAT.
+    const changed = r.pubIp && r.pubIp !== '0.0.0.0' && (r.pubIp !== r.privIp || r.pubPort !== r.privPort);
+    return { kind: changed ? 'source' : 'unknown', ip: changed ? r.pubIp : '', port: changed ? r.pubPort : undefined };
+  }
   function queryString(b) {
     const p = new URLSearchParams({ csrf: c.csrf });
-    for (const [key, param] of [['PublicIP','ip'],['PrivateIP','priv'],['DestIP','dst'],['Username','user'],['PublicPort','port'],['DeviceID','device'],['ISPID','isp'],['From','from'],['To','to'],['Reason','reason']]) if (b[key]) p.set(param, b[key]);
+    for (const [key, param] of [['PublicIP','ip'],['PrivateIP','priv'],['DestIP','dst'],['Username','user'],['PublicPort','port'],['DeviceID','device'],['ExporterIP','exporter'],['ISPID','isp'],['From','from'],['To','to'],['Reason','reason']]) if (b[key]) p.set(param, b[key]);
     if (b.Proto !== 'Any') p.set('proto', b.Proto);
     return p.toString();
   }
@@ -101,9 +115,10 @@
     else {
       $('#logTable thead').html('<tr>' + [...columns, ...(crm ? ['Subscriber · CRM'] : [])].map(v => '<th>' + esc(v) + '</th>').join('') + '</tr>');
       const tableHTML = d.tableHTML || rows.map((r, i) => {
+        const nat = translation(r);
         let crmCell = '';
         if (crm) crmCell = r.crmStatus === 'matched' ? `<td><b>${esc(r.crmName || r.crmUsername || r.crmAccountId || 'Matched subscriber')}</b><span class="logs-secondary">${esc([r.crmUsername,r.crmPhone].filter(Boolean).join(' · '))}</span></td>` : '<td>' + badge(r.crmStatus === 'not_found' ? 'Not found' : r.crmStatus === 'ambiguous' ? 'Ambiguous' : 'Unavailable', r.crmStatus === 'not_found' ? 'mut' : 'warn') + '</td>';
-        return `<tr data-record="${i}"><td class="mono">${esc(timestamp(r))}</td><td class="mono">${esc(reported(r.privIp))}</td><td class="mono">${esc(port(r.privIp,r.privPort))}</td><td class="mono">${esc(reported(r.dstIp))}</td><td class="mono">${esc(port(r.dstIp,r.dstPort))}</td><td class="mono">${esc(reported(r.pubIp))}</td><td class="mono">${esc(port(r.pubIp,r.pubPort))}</td><td>${badge(r.proto,r.proto === 'TCP' ? 'info' : 'ok')}</td><td>${esc(r.sub)}</td><td>${subscriber(r)}</td><td><button type="button" class="logs-record-button" data-details="${i}" aria-label="View record ${i + 1} details">${esc(r.action || 'Details')}${icon('chevron_right')}</button></td>${crmCell}</tr>`;
+        return `<tr data-record="${i}"><td class="mono">${esc(timestamp(r))}</td><td class="mono">${esc(reported(r.privIp))}</td><td class="mono">${esc(port(r.privIp,r.privPort))}</td><td class="mono">${esc(reported(r.dstIp))}</td><td class="mono">${esc(port(r.dstIp,r.dstPort))}</td><td class="mono">${esc(reported(nat.ip))}</td><td class="mono">${esc(port(nat.ip,nat.port))}</td><td class="mono">${esc(reported(r.postDstIp))}</td><td class="mono">${esc(port(r.postDstIp,r.postDstPort))}</td><td>${badge(translationLabels[nat.kind],nat.kind === 'unknown' ? 'warn' : 'mut')}</td><td>${badge(r.proto,r.proto === 'TCP' ? 'info' : 'ok')}</td><td>${esc(r.sub)}</td><td>${subscriber(r)}</td><td><button type="button" class="logs-record-button" data-details="${i}" aria-label="View record ${i + 1} details">${esc(r.action || 'Details')}${icon('chevron_right')}</button></td>${crmCell}</tr>`;
       }).join('');
       d.tableHTML = tableHTML; $('#logTable tbody').html(tableHTML);
     }
@@ -167,7 +182,8 @@
   }
   function details(index) {
     const r = c.result?.records[index]; if (!r) return;
-    const values = [['Timestamp · IST',timestamp(r)],['src_ip',r.privIp],['src_port',port(r.privIp,r.privPort)],['dst_ip',r.dstIp],['dst_port',port(r.dstIp,r.dstPort)],['nat_ip',r.pubIp],['nat_port',port(r.pubIp,r.pubPort)],['Device',r.sub],['Protocol',r.proto],['Exporter subscriber',r.username || 'Not reported'],['Translation',r.untranslated ? 'Address unchanged' : r.pubIp ? 'Post-NAT address reported' : 'Not reported'],['Export type',r.action],['NAT event',r.natEvent === 1 ? 'Allocation' : r.natEvent === 2 ? 'Release' : 'Not reported'],['CRM status',r.crmStatus || 'Not enabled'],['CRM subscriber',r.crmName || r.crmUsername || 'Not resolved'],['CRM account',r.crmAccountId || '—'],['CRM phone',r.crmPhone || '—'],['CRM address',r.crmAddress || '—'],['CRM reference',r.crmReference || '—']];
+    const nat = translation(r);
+    const values = [['Timestamp · IST',timestamp(r)],['src_ip',r.privIp],['src_port',port(r.privIp,r.privPort)],['dst_ip',r.dstIp],['dst_port',port(r.dstIp,r.dstPort)],['nat_ip',nat.ip],['nat_port',port(nat.ip,nat.port)],['post_src_ip',r.postSrcIp ?? r.pubIp],['post_src_port',port(r.postSrcIp ?? r.pubIp,r.postSrcPort ?? r.pubPort)],['post_dst_ip',r.postDstIp],['post_dst_port',port(r.postDstIp,r.postDstPort)],['Exporter IP',r.exporterIp],['Device',r.sub],['Protocol',r.proto],['Exporter subscriber',r.username || 'Not reported'],['Translation',translationLabels[nat.kind]],['Export type',r.action],['NAT event',r.natEvent === 1 ? 'Allocation' : r.natEvent === 2 ? 'Release' : 'Not reported'],['CRM status',r.crmStatus || 'Not enabled'],['CRM subscriber',r.crmName || r.crmUsername || 'Not resolved'],['CRM account',r.crmAccountId || '—'],['CRM phone',r.crmPhone || '—'],['CRM address',r.crmAddress || '—'],['CRM reference',r.crmReference || '—']];
     c.kit.form({ title:'Flow record details', icon:'receipt_long', subtitle:'Reported fields for this record · times in IST', html:'<dl class="module-details">' + values.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd>${esc(reported(v))}</dd></div>`).join('') + '</dl>' });
   }
   const field = (id, label, symbol, input, hint = '') => `<div class="isp-field"><label class="lbl" for="${id}">${icon(symbol)}<span>${label}</span></label>${input}<div class="hint">${hint}</div><div class="isp-field-error" id="${id}-error"></div></div>`;

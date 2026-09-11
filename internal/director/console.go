@@ -43,26 +43,35 @@ type infoBox struct {
 	Color string `json:"color"`
 }
 type natRecord struct {
-	Date     string    `json:"date"`
-	Clock    string    `json:"clock"`
-	Time     string    `json:"time"`
-	At       time.Time `json:"-"`
-	Sub      string    `json:"sub"`
-	DevID    uint32    `json:"devId"`
-	PrivIP   string    `json:"privIp"`
-	PrivPort int       `json:"privPort"`
-	PubIP    string    `json:"pubIp"`
-	PubPort  int       `json:"pubPort"`
-	Proto    string    `json:"proto"`
-	Dest     string    `json:"dest"`
-	DstIP    string    `json:"dstIp"`
-	DstPort  int       `json:"dstPort"`
-	Action   string    `json:"action"`
-	// Untranslated marks a row whose post-NAT address equals the source: real
-	// traffic, really logged, but no translation happened. The row is shown —
-	// hiding it left whole exporters looking silent — and flagged, so an
-	// identity mapping is never read as evidence of who held a public address.
-	Untranslated bool `json:"untranslated,omitempty"`
+	Date       string    `json:"date"`
+	Clock      string    `json:"clock"`
+	Time       string    `json:"time"`
+	At         time.Time `json:"-"`
+	Sub        string    `json:"sub"`
+	DevID      uint32    `json:"devId"`
+	ISPID      uint32    `json:"ispId"`
+	ExporterIP string    `json:"exporterIp"`
+	PrivIP     string    `json:"privIp"`
+	PrivPort   int       `json:"privPort"`
+	PubIP      string    `json:"pubIp"`
+	PubPort    int       `json:"pubPort"`
+	Proto      string    `json:"proto"`
+	Dest       string    `json:"dest"`
+	DstIP      string    `json:"dstIp"`
+	DstPort    int       `json:"dstPort"`
+	Action     string    `json:"action"`
+	// PubIP/PubPort retain the raw post-NAT source for API compatibility.
+	// A mapping is inferred only from a changed tuple, never IP equality alone.
+	PostSrcIP        string `json:"postSrcIp"`
+	PostSrcPort      int    `json:"postSrcPort"`
+	PostDstIP        string `json:"postDstIp"`
+	PostDstPort      int    `json:"postDstPort"`
+	NatIP            string `json:"natIp"`
+	NatPort          int    `json:"natPort"`
+	Translation      string `json:"translation"`
+	SourceKnown      bool   `json:"sourceKnown"`
+	DestinationKnown bool   `json:"destinationKnown"`
+	Untranslated     bool   `json:"untranslated,omitempty"`
 	// Username is the subscriber identity the exporter itself reported (IE 371).
 	// When present it answers a lawful request outright — no CRM resolution and
 	// no inference from an address that may have been reallocated since.
@@ -187,45 +196,10 @@ func ispArgs(ispID uint32) []any {
 }
 
 func (r *FlowReader) records(ctx context.Context, ispID uint32, days, limit int) []natRecord {
-	where, args := scope(ispID, days)
-	// Skip only rows with no post-NAT address at all. Rows whose post-NAT
-	// address equals the source are real records of real traffic and belong in
-	// the feed; hiding them left the live view near-empty on exporters that log
-	// mostly inbound or transit flows.
-	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, protocol, flow_type
-		FROM %s.flow_logs WHERE %s AND nat_public_ip != toIPv4('0.0.0.0') ORDER BY flow_start DESC LIMIT %d`, r.db, where, limit)
-	rs, err := r.conn.Query(ctx, q, args...)
-	if err != nil {
-		return nil
-	}
-	defer rs.Close()
-	out := make([]natRecord, 0, limit)
-	for rs.Next() {
-		var ts time.Time
-		var dev uint32
-		var sp, pp uint16
-		var sip, pip, dip net.IP
-		var proto uint8
-		var ft string
-		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &proto, &ft); err != nil {
-			return out
-		}
-		pubIP := pip.String()
-		pubPort := int(pp)
-		untranslated := pubIP == sip.String()
-		if pubIP == "0.0.0.0" {
-			// No post-NAT address at all: there is nothing to show, and an
-			// address of 0.0.0.0 in a public-IP column would be a lie.
-			pubIP, pubPort = "", 0
-		}
-		out = append(out, natRecord{
-			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"), At: ts.UTC(),
-			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
-			PubIP: pubIP, PubPort: pubPort, Proto: protoName(proto), Dest: dip.String(),
-			Action: strings.ToUpper(ft), Untranslated: untranslated,
-		})
-	}
-	return out
+	now := time.Now().In(istLoc)
+	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, istLoc).AddDate(0, 0, -days)
+	rows, _ := r.Search(ctx, SearchFilter{ISPID: ispID, From: from, RequireNAT: true}, limit, 0)
+	return rows
 }
 
 func group(n uint64) string {
@@ -276,31 +250,21 @@ type SearchFilter struct {
 	PublicPort                  int
 	Proto                       string
 	DeviceID                    uint32
+	ExporterIP                  string
+	destinationNATAvailable     bool
 	// Username matches the subscriber identity the exporter reported (IE 371).
 	// It is the strongest selector this store has: it needs no resolution of an
 	// address that may have been reallocated since the time being asked about.
 	Username string
 	From, To time.Time
-	// RequireNAT keeps only rows that carry a post-NAT address at all. It does
-	// NOT drop rows whose post-NAT address equals the source.
-	//
-	// It used to drop those too, on the reasoning that an unchanged address is
-	// not a translation. True, but it made the Logs view useless: measured
-	// 2026-08-26, that clause was hiding 97.6% of one exporter's records
-	// (13.4M of 13.8M), and hundreds of millions fleet-wide. An operator asked
-	// to explain why the console showed nothing while the collector was plainly
-	// busy had no way to see it — the rows were there, the view just refused to
-	// render them.
-	//
-	// Show them, and let the row say what it is. Rows where the post-NAT address
-	// equals the source are flagged Untranslated in the response so nobody reads
-	// an identity mapping as evidence of a NAT translation.
+	// RequireNAT requires at least one recorded post-NAT address. It preserves
+	// unchanged tuples and missing historical destination evidence for inspection.
 	RequireNAT bool
 }
 
 // HasSelector reports whether the filter narrows the scan (an IP or device).
 func (f SearchFilter) HasSelector() bool {
-	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0 || f.Username != ""
+	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0 || f.ExporterIP != "" || f.Username != ""
 }
 
 // hotWhere builds the WHERE clause + bound args for the hot flow_logs table.
@@ -308,32 +272,25 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 	var conds []string
 	var args []any
 	add := func(c string, a any) { conds = append(conds, c); args = append(args, a) }
-	if f.PublicIP != "" {
-		add("nat_public_ip = toIPv4(?)", f.PublicIP)
-	}
-	if f.PrivateIP != "" {
-		add("src_ip = toIPv4(?)", f.PrivateIP)
-	}
-	if f.DestIP != "" {
-		add("dst_ip = toIPv4(?)", f.DestIP)
-	}
-	if f.PublicPort > 0 {
-		add("nat_public_port = ?", uint16(f.PublicPort))
-	}
+	addNATFilters(f, true, &conds, &args)
 	if pn := protoNum(f.Proto); pn > 0 {
 		add("protocol = ?", pn)
 	}
 	if f.DeviceID > 0 {
 		add("device_id = ?", f.DeviceID)
 	}
+	if f.ExporterIP != "" {
+		add("exporter_ip = toIPv4(?)", f.ExporterIP)
+	}
 	if f.Username != "" {
 		add("username = ?", f.Username)
 	}
 	if f.RequireNAT {
-		// Only "has a post-NAT address". Historic rows can still hold 0.0.0.0;
-		// the dataplane stopped storing those on 2026-08-26, but the retention
-		// window keeps months of records written before that.
-		conds = append(conds, "nat_public_ip != toIPv4('0.0.0.0')")
+		cond := "nat_public_ip != toIPv4('0.0.0.0')"
+		if f.destinationNATAvailable {
+			cond = "(" + cond + " OR nat_dest_ip != toIPv4('0.0.0.0'))"
+		}
+		conds = append(conds, cond)
 	}
 	if !f.From.IsZero() {
 		add("flow_start >= ?", f.From.UTC())
@@ -376,17 +333,20 @@ const countCap = 100000
 // this list leaves a duplicate visible rather than hiding a distinct record.
 // Never narrow it to "the 5-tuple": a NAT create and its matching delete can share
 // one, and collapsing those would erase the end of a subscriber's translation.
-const dedupKey = "flow_start, flow_end, src_ip, src_port, dst_ip, dst_port, " +
+const legacyDedupKey = "isp_id, flow_start, flow_end, src_ip, src_port, dst_ip, dst_port, " +
 	"nat_public_ip, nat_public_port, protocol, bytes, packets, flow_type, nat_event, username"
+
+const dedupKey = legacyDedupKey + ", nat_dest_ip, nat_dest_port"
 
 // SearchCount returns the number of hot rows matching f, capped at countCap
 // (a returned value == countCap means "countCap or more").
 func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) uint64 {
+	f.destinationNATAvailable = r.hasDestinationNAT(ctx)
 	where, args, ok := hotWhere(f)
 	if !ok {
 		return 0
 	}
-	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT 1 BY %s LIMIT %d)`, r.db, where, dedupKey, countCap)
+	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT 1 BY %s LIMIT %d)`, r.db, where, hotDedupKey(f.destinationNATAvailable), countCap)
 	var n uint64
 	_ = r.conn.QueryRow(ctx, q, args...).Scan(&n)
 	return n
@@ -396,12 +356,18 @@ func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) uint64 {
 // by ISPID), ordered newest-first, using LIMIT/OFFSET server-side pagination so
 // the client only ever holds a single page.
 func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset int) ([]natRecord, error) {
+	f.destinationNATAvailable = r.hasDestinationNAT(ctx)
 	where, args, ok := hotWhere(f)
 	if !ok {
 		return nil, fmt.Errorf("no filter")
 	}
-	q := fmt.Sprintf(`SELECT flow_start, device_id, src_ip, src_port, nat_public_ip, nat_public_port, dst_ip, dst_port, protocol, flow_type, username, nat_event
-		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT 1 BY %s LIMIT %d OFFSET %d`, r.db, where, dedupKey, limit, offset)
+	postDest := "toIPv4('0.0.0.0'), toUInt16(0)"
+	if f.destinationNATAvailable {
+		postDest = "nat_dest_ip, nat_dest_port"
+	}
+	q := fmt.Sprintf(`SELECT flow_start, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
+		dst_ip, dst_port, %s, protocol, flow_type, username, nat_event
+		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC LIMIT 1 BY %s LIMIT %d OFFSET %d`, postDest, r.db, where, hotDedupKey(f.destinationNATAvailable), limit, offset)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -410,29 +376,25 @@ func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset i
 	out := make([]natRecord, 0, 128)
 	for rs.Next() {
 		var ts time.Time
-		var dev uint32
-		var sp, pp, dp uint16
-		var sip, pip, dip net.IP
+		var rec natRecord
+		var sip, pip, dip, pdip, exporter net.IP
+		var sp, pp, dp, pdp uint16
 		var pr uint8
-		var ft, uname string
-		var nev uint8
-		if err := rs.Scan(&ts, &dev, &sip, &sp, &pip, &pp, &dip, &dp, &pr, &ft, &uname, &nev); err != nil {
+		var ft string
+		if err := rs.Scan(&ts, &rec.ISPID, &rec.DevID, &exporter, &sip, &sp, &pip, &pp, &dip, &dp, &pdip, &pdp, &pr, &ft, &rec.Username, &rec.NatEvent); err != nil {
 			return out, err
 		}
-		pubIP := pip.String()
-		pubPort := int(pp)
-		untranslated := pubIP == sip.String()
-		if pubIP == "0.0.0.0" {
-			pubIP, pubPort = "", 0
-		}
-		out = append(out, natRecord{
-			Date: ts.In(istLoc).Format("2006-01-02"), Clock: ts.In(istLoc).Format("15:04:05"), Time: ts.In(istLoc).Format("2006-01-02 15:04:05"), At: ts.UTC(),
-			Sub: fmt.Sprintf("DEV-%d", dev), DevID: dev, PrivIP: sip.String(), PrivPort: int(sp),
-			PubIP: pubIP, PubPort: pubPort, Proto: protoName(pr),
-			DstIP: dip.String(), DstPort: int(dp),
-			Dest: fmt.Sprintf("%s:%d", dip.String(), dp), Action: strings.ToUpper(ft),
-			Untranslated: untranslated, Username: uname, NatEvent: nev,
-		})
+		rec.At = ts.UTC()
+		rec.Date, rec.Clock, rec.Time = ts.In(istLoc).Format("2006-01-02"), ts.In(istLoc).Format("15:04:05"), ts.In(istLoc).Format("2006-01-02 15:04:05")
+		rec.Sub, rec.ExporterIP = fmt.Sprintf("DEV-%d", rec.DevID), exporter.String()
+		rec.PrivIP, rec.PrivPort = sip.String(), int(sp)
+		rec.PubIP, rec.PubPort = pip.String(), int(pp)
+		rec.DstIP, rec.DstPort = dip.String(), int(dp)
+		rec.PostDstIP, rec.PostDstPort = pdip.String(), int(pdp)
+		rec.Proto, rec.Action = protoName(pr), strings.ToUpper(ft)
+		rec.Dest = fmt.Sprintf("%s:%d", dip.String(), dp)
+		rec.setNATTranslation()
+		out = append(out, rec)
 	}
 	return out, rs.Err()
 }
@@ -741,9 +703,8 @@ func (s *Server) refreshConsoleAsync(k consoleKey) {
 	}()
 }
 
-// nameDevices resolves each row's numeric device_id to its friendly device name
-// (so flow tables show "wadhai-edge-01" instead of "DEV-1"). Falls back to the
-// DEV-<id> label when a device is not found.
+// nameDevices resolves the actual exporter within its tenant. Device IDs may
+// intentionally be shared by two router uplinks; they are not registry identities.
 func (s *Server) nameDevices(ctx context.Context, ispID uint32, rows []natRecord) {
 	if len(rows) == 0 {
 		return
@@ -752,15 +713,11 @@ func (s *Server) nameDevices(ctx context.Context, ispID uint32, rows []natRecord
 	if err != nil {
 		return
 	}
-	m := make(map[uint32]string, len(devs))
-	for _, d := range devs {
-		if d.Name != "" {
-			m[d.DeviceID] = d.Name
-		}
-	}
 	for i := range rows {
-		if n, ok := m[rows[i].DevID]; ok {
-			rows[i].Sub = n
+		if d, ok := resolveRecordDevice(devs, ispID, rows[i]); ok && d.Name != "" {
+			rows[i].Sub = d.Name
+		} else if rows[i].ExporterIP != "" {
+			rows[i].Sub = rows[i].ExporterIP
 		}
 	}
 }

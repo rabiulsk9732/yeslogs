@@ -15,6 +15,10 @@ import (
 // Public authenticated traffic is checked here against current account state
 // before forwarding, so disabled/deleted tenants cannot keep using old cookies.
 func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
+	return s.managementHandler(upstream, false)
+}
+
+func (s *Server) managementHandler(upstream string, flowReads bool) (http.Handler, error) {
 	u, e := url.Parse(upstream)
 	if e != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("upstream must be an explicit loopback HTTP origin")
@@ -23,6 +27,7 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 	proxy.ModifyResponse = s.decorateSettingsResponse
 	local := s.Handler()
 	var mutations sync.Mutex
+	var flowSettings sync.Mutex
 	revision := "unknown"
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, setting := range info.Settings {
@@ -41,10 +46,11 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		if p == "/api/v1/management-version" {
-			writeJSON(w, 200, map[string]string{"revision": revision})
+			writeJSON(w, 200, map[string]any{"revision": revision, "flowReads": flowReads})
 			return
 		}
 		owned := p == "/api/v1/users" || strings.HasPrefix(p, "/api/v1/users/") || p == "/api/v1/account/password" || p == "/api/v1/policies" || strings.HasPrefix(p, "/api/v1/policies/") || p == "/api/v1/isps" || strings.HasPrefix(p, "/api/v1/isps/") || p == "/api/v1/login" || p == "/api/v1/logout" || p == "/api/v1/me" || p == "/login"
+		flowOwned := flowReads && (p == "/api/v1/search" || p == "/api/v1/report" || p == "/flows")
 		public := p == "/healthz" || p == "/api/v1/agent/config" || p == "/" || strings.HasPrefix(p, "/assets/")
 		if !public && p != "/api/v1/login" && p != "/login" && p != "/api/v1/logout" {
 			if _, ok := s.currentIdentity(r); !ok {
@@ -68,7 +74,17 @@ func (s *Server) ManagementHandler(upstream string) (http.Handler, error) {
 		if r.Method == "PUT" && strings.HasPrefix(p, "/api/v1/settings/") && !s.checkRuntimeSettings(w, r, upstream) {
 			return
 		}
-		if owned {
+		if flowOwned {
+			flowSettings.Lock()
+			err := s.refreshFlowReadSettings(r.Context())
+			flowSettings.Unlock()
+			if err != nil {
+				s.log.Error("flow reader settings unavailable", "error", err)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "flow search settings unavailable; retry shortly"})
+				return
+			}
+		}
+		if owned || flowOwned {
 			local.ServeHTTP(w, r)
 		} else {
 			proxy.ServeHTTP(w, r)

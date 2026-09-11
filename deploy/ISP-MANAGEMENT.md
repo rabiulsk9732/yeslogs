@@ -121,3 +121,33 @@ preserve saved values. The gateway does not apply a second copy of runtime setti
 Use the same alternate-port deployment above (the v1.13 candidate uses 8083).
 Verify all eight refined modules and the existing four modules before draining
 the preceding gateway. No collector restart or database schema change is required.
+
+## Independent flow reader (explicit opt-in)
+
+`flow_reads: true` enables the reviewed gateway's `/api/v1/search`,
+`/api/v1/report` and legacy `/flows` handlers. It requires `upstream` and a
+ClickHouse connection. Every other runtime route, including settings writes,
+device operations, dashboard aggregates and archive jobs, retains its existing
+upstream. The gateway runs no UDP listener or background archive/rollup jobs.
+Existing session, CSRF, tenant scope and query-audit checks still apply.
+
+Set `flow_settings_file: /etc/natlog/natlog.yaml` to retain the collector's S3
+bootstrap defaults, and copy the local ClickHouse connection into the protected
+management config. Before each search/export the gateway reloads the persisted
+S3 and CRM settings from the shared control-plane database. The shared session
+key decrypts existing CRM credentials. A failed settings read returns 503 rather
+than silently returning hot-only results.
+
+Deploy on the next free loopback port, for example 8084, using the immutable
+committed binary and alternate-port procedure above. Check the direct candidate
+version reports `flowReads: true`, existing sessions work, cross-tenant and
+missing-CSRF requests fail, and hot/S3 searches plus reports match the expected
+field semantics. Then validate/reload Caddy to that port and atomically update
+only the management revision/probe in the UI fetcher config. Keep the collector
+baseline and its PID/start time unchanged. Reader corrections cannot restore
+destination-translation fields that older collectors did not store.
+
+Rollback points Caddy and the management revision/probe back to the retained
+gateway. Do not restart the collector or restore a database backup. Decoder and
+writer changes require a separate ingestion deployment with a proven packet
+continuity mechanism; a read-gateway rollout does not activate them.

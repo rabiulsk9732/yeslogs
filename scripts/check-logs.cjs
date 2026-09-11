@@ -32,7 +32,7 @@ async function main() {
           return route.fulfill({ contentType: mime[path.extname(file)] || 'application/octet-stream', body: fs.readFileSync(file) });
         }
         if (p === '/api/v1/me') return reply(200, { email: 'test@example.invalid', isDirector: director, ispId: director ? 0 : 5, csrf: 'test-csrf' });
-        if (p === '/api/v1/devices') return reply(200, { devices: [{ ISPID: 5, DeviceID: 8, Name: 'Test edge' }], ...(director ? { isps: [{ ID: 5, Name: 'Test ISP' }] } : {}) });
+        if (p === '/api/v1/devices') return reply(200, { devices: [{ ISPID: 5, DeviceID: 8, Name: 'Test edge', ExporterIP:'203.0.113.250' }, { ISPID:5, DeviceID:8, Name:'Second edge', ExporterIP:'203.0.113.251' }], ...(director ? { isps: [{ ID: 5, Name: 'Test ISP' }] } : {}) });
         if (p === '/api/v1/search') {
           const body = route.request().postDataJSON();
           requests.push(body);
@@ -40,7 +40,13 @@ async function main() {
           assert.equal(route.request().headers()['x-csrf-token'], 'test-csrf');
           if (mode === 'network') return route.abort('failed');
           if (mode === 'server') return reply(503, { error: 'Flow store unavailable' });
-          const records = mode === 'empty' ? [] : mode === 'large' ? Array.from({length:body.Limit},(_,i)=>({...rows[i%3],clock:'00:38:'+String(i%60).padStart(2,'0')})) : rows;
+          const records = mode === 'empty' ? [] : mode === 'nat-directions' ? [
+            {...base,privIp:'198.51.100.9',privPort:443,dstIp:'203.0.113.20',dstPort:42286,pubIp:'198.51.100.9',pubPort:443,postDstIp:'10.0.102.12',postDstPort:42286,natIp:'203.0.113.20',natPort:42286,translation:'destination'},
+            {...base,pubIp:base.privIp,pubPort:base.privPort,untranslated:true},
+            {...base,pubIp:base.privIp,pubPort:base.privPort,translation:'none',natIp:'',postDstIp:base.dstIp,postDstPort:base.dstPort},
+            {...base,pubIp:base.privIp,pubPort:5678},
+            {...base,translation:'both',natIp:'',postDstIp:'10.0.1.20',postDstPort:8443}
+          ] : mode === 'large' ? Array.from({length:body.Limit},(_,i)=>({...rows[i%3],clock:'00:38:'+String(i%60).padStart(2,'0')})) : rows;
           if (mode === 'invalid') return reply(200, {records: 'invalid', total: 10});
           return reply(200, { records, total: records.length ? 72932 : 0, elapsedMs: 1399, cold: mode === 'cold', crm: { enabled: mode !== 'no-crm', matched: 2, rows: 3, status: 'partial' } });
         }
@@ -63,7 +69,7 @@ async function main() {
       await page.locator('#s-dev').waitFor();
       await shot('filters');
       if (director) await page.locator('#s-isp').selectOption('5');
-      await page.locator('#s-dev').selectOption('8');
+      await page.locator('#s-dev').selectOption('8@203.0.113.250');
       assert(await page.locator('#s-from').inputValue(),'Recent 15 minutes is a visible default');
       await page.locator('#s-from').fill('2026-09-11 00:36');
       await page.locator('#s-to').fill('2026-09-11 00:39');
@@ -73,12 +79,12 @@ async function main() {
       await table();
       assert.equal(await page.locator('#logTable tbody tr').count(), 3);
       const cells = page.locator('#logTable tbody tr').first().locator('td');
-      assert.deepEqual(await page.locator('#logTable thead th').allTextContents(), ['Timestamp · IST','src_ip','src_port','dst_ip','dst_port','nat_ip','nat_port','Protocol','Device','Subscriber','Export','Subscriber · CRM']);
+      assert.deepEqual(await page.locator('#logTable thead th').allTextContents(), ['Timestamp · IST','src_ip','src_port','dst_ip','dst_port','nat_ip','nat_port','post_dst_ip','post_dst_port','Translation','Protocol','Device','Subscriber','Export','Subscriber · CRM']);
       assert.deepEqual((await cells.allInnerTexts()).slice(0,7), ['2026-09-11 00:38:59','100.64.1.10','1234','192.0.2.1','443','203.0.113.10','4321']);
-      assert.match(await cells.nth(9).innerText(), /<subscriber>\s+From exporter/);
-      assert.match(await page.locator('#logTable tbody tr').nth(1).locator('td').nth(9).innerText(), /<crm-user>\s+via CRM/);
+      assert.match(await cells.nth(12).innerText(), /<subscriber>\s+From exporter/);
+      assert.match(await page.locator('#logTable tbody tr').nth(1).locator('td').nth(12).innerText(), /<crm-user>\s+via CRM/);
       const missing = page.locator('#logTable tbody tr').nth(2).locator('td');
-      assert.equal(await missing.nth(9).innerText(), '—');
+      assert.equal(await missing.nth(12).innerText(), '—');
       assert.equal(await missing.nth(5).innerText(), '—');
       assert.equal(await missing.nth(6).innerText(), '—');
       assert.equal(await missing.nth(2).innerText(), '0');
@@ -98,7 +104,7 @@ async function main() {
       await page.locator('[data-filter-close]').last().click();
       assert.equal(requests.length,beforeEdit);
       assert.equal(await page.locator('#s-pub').inputValue(),'');
-      assert.equal(await page.locator('#s-dev').inputValue(),'8');
+      assert.equal(await page.locator('#s-dev').inputValue(),'8@203.0.113.250');
       await page.locator('[data-details="0"]').click();
       await page.getByRole('dialog').getByText('Flow record details').waitFor();
       assert.match(await page.getByRole('dialog').innerText(), /<subscriber>/);
@@ -109,6 +115,10 @@ async function main() {
       await table();
       assert.equal(requests.at(-1).Offset, 50);
       assert.equal(requests.at(-1).DeviceID, 8);
+      assert.equal(requests.at(-1).ExporterIP, '203.0.113.250');
+      assert.match(await page.locator('#logs-chips').innerText(), /Test edge/);
+      assert.doesNotMatch(await page.locator('#logs-chips').innerText(), /Second edge/);
+      assert.match(await page.locator('#logs-exports a').first().getAttribute('href'), /exporter=203.0.113.250/);
       assert.equal(requests.at(-1).ISPID, director ? 5 : 0);
       const beforeCached = requests.length;
       await page.locator('.pgb',{hasText:'Prev'}).click(); await table();
@@ -120,13 +130,26 @@ async function main() {
       await table();
       assert.equal(requests.at(-1).Limit, 25);
       assert.equal(requests.at(-1).Offset, 0);
+      mode = 'nat-directions'; await search(); await table();
+      const natRows = page.locator('#logTable tbody tr');
+      assert.deepEqual((await natRows.nth(0).locator('td').allInnerTexts()).slice(1,10), ['198.51.100.9','443','203.0.113.20','42286','203.0.113.20','42286','10.0.102.12','42286','Destination NAT']);
+      assert.equal(await natRows.nth(1).locator('td').nth(5).innerText(), '—', 'An unchanged legacy source is not a public NAT mapping');
+      assert.equal(await natRows.nth(1).locator('td').nth(9).innerText(), 'Incomplete fields');
+      assert.equal(await natRows.nth(2).locator('td').nth(9).innerText(), 'Unchanged');
+      assert.equal(await natRows.nth(3).locator('td').nth(6).innerText(), '5678', 'Port-only translation remains visible');
+      assert.equal(await natRows.nth(4).locator('td').nth(5).innerText(), '—', 'Both-side translation never invents a single NAT endpoint');
+      await shot('nat-directions');
+      await natRows.nth(0).locator('[data-details]').click();
+      assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has:page.locator('dt',{hasText:/^post_src_ip$/})}).locator('dd').innerText(),'198.51.100.9');
+      assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has:page.locator('dt',{hasText:/^post_dst_ip$/})}).locator('dd').innerText(),'10.0.102.12');
+      await page.keyboard.press('Escape');
       mode = 'cold'; await search(); await table();
       assert.equal(await page.locator('.index-stats .v').nth(3).innerText(), 'Hot + S3');
       mode = 'no-crm'; await search(); await table();
-      assert.equal(await page.locator('#logTable thead th').count(), 11);
+      assert.equal(await page.locator('#logTable thead th').count(), 14);
       mode = 'empty'; await search(); await table();
       assert.match(await page.locator('#logTable').innerText(), /No matching flow logs/);
-      assert.equal(await page.locator('.logs-state-row td').getAttribute('colspan'), '11');
+      assert.equal(await page.locator('.logs-state-row td').getAttribute('colspan'), '14');
       await shot('empty');
       for (mode of ['network', 'server']) {
         await search();

@@ -29,14 +29,14 @@ type reportMeta struct {
 // baseReportCols are the raw IPDR disclosure fields, in fixed order. CRM fields
 // are appended only when that ISP's connector is enabled, preserving the legacy
 // export shape for every unconfigured tenant.
-var baseReportCols = []string{"src_ip", "src_port", "dst_ip", "dst_port", "nat_ip", "nat_port", "timestamp", "proto"}
+var baseReportCols = []string{"src_ip", "src_port", "dst_ip", "dst_port", "nat_ip", "nat_port", "timestamp", "proto", "post_src_ip", "post_src_port", "post_dst_ip", "post_dst_port", "translation", "exporter_ip"}
 
-var baseReportHeads = []string{"Source IP", "Src Port", "Destination IP", "Dst Port", "NAT IP", "NAT Port", "Timestamp (IST)", "Proto"}
+var baseReportHeads = []string{"Source IP", "Src Port", "Destination IP", "Dst Port", "NAT IP", "NAT Port", "Timestamp (IST)", "Proto", "Post-src IP", "PS Port", "Post-dst IP", "PD Port", "Translation", "Exporter IP"}
 var crmReportCols = []string{"crm_reference", "crm_status", "username", "subscriber_name", "phone", "address"}
 var crmReportHeads = []string{"CRM Ref", "Status", "Username", "Subscriber", "Phone", "Address"}
 
 func port(n int) string {
-	if n <= 0 {
+	if n < 0 {
 		return ""
 	}
 	return fmt.Sprintf("%d", n)
@@ -53,8 +53,16 @@ func reportColumns(m reportMeta) (cols, heads []string) {
 }
 
 func rowCells(m reportMeta, r natRecord) []string {
+	r.setNATTranslation()
+	ipPort := func(ip string, n int) string {
+		if ip == "" {
+			return ""
+		}
+		return port(n)
+	}
 	out := []string{
-		r.PrivIP, port(r.PrivPort), r.DstIP, port(r.DstPort), r.PubIP, port(r.PubPort), r.Time, r.Proto,
+		r.PrivIP, ipPort(r.PrivIP, r.PrivPort), r.DstIP, ipPort(r.DstIP, r.DstPort), r.NatIP, ipPort(r.NatIP, r.NatPort), r.Time, r.Proto,
+		r.PostSrcIP, ipPort(r.PostSrcIP, r.PostSrcPort), r.PostDstIP, ipPort(r.PostDstIP, r.PostDstPort), r.Translation, r.ExporterIP,
 	}
 	if m.CRM.Enabled {
 		out = append(out, r.CRMReference, r.CRMStatus, r.CRMUsername, r.CRMName, r.CRMPhone, r.CRMAddress)
@@ -77,7 +85,7 @@ func metaLines(m reportMeta) [][2]string {
 	}
 	scope := "all matching flows"
 	if m.NATOnly {
-		scope = "translated NAT records only"
+		scope = "records with post-NAT fields; unknown means incomplete tuple evidence"
 	}
 	lines := [][2]string{
 		{"Queried IP", orDash(m.QueryIP)}, {"Port", port}, {"Protocol", proto},
@@ -143,14 +151,11 @@ func writeCSV(w io.Writer, m reportMeta, rows []natRecord) error {
 
 func writePDF(w io.Writer, m reportMeta, rows []natRecord) error {
 	const lm = 8 // left margin
-	widths := []float64{38, 20, 38, 20, 40, 20, 56, 22}
-	paper, pageW, rowFont := "A4", 297.0, 7.5
+	widths := []float64{30, 14, 30, 14, 30, 14, 39, 14, 30, 14, 30, 14, 35, 32}
+	paper, pageW, rowFont := "A3", 420.0, 7.5
 	if m.CRM.Enabled {
-		// Fourteen disclosure columns remain readable on landscape A3. Trying to
-		// squeeze subscriber identity/address into A4 produces an evidential
-		// report that is technically complete but operationally unusable.
-		paper, pageW, rowFont = "A3", 420, 6.5
-		widths = []float64{31, 13, 31, 13, 31, 13, 43, 15, 30, 17, 28, 36, 25, 62}
+		paper, pageW = "A2", 594
+		widths = append(widths, 24, 18, 28, 34, 25, 62)
 	}
 	_, heads := reportColumns(m)
 	tableW := 0.0
