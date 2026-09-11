@@ -1,0 +1,39 @@
+{
+  "timestamp_utc": "2026-09-11T08:07:54.682280+00:00",
+  "stored_rows": 7586392051,
+  "stored_bytes": 90373159857,
+  "scope": {
+    "isp": 5,
+    "device": 8
+  },
+  "limits": {
+    "max_threads_per_query": 2,
+    "max_memory_bytes": 2147483648,
+    "max_query_seconds": 30
+  },
+  "boundary": "Hot count + 50-row page, or S3 read capped at 5000 rows. Excludes API authentication, archive planning/merge, CRM, WAN and browser rendering. Existing caches retained; shared host with live ingestion.",
+  "results": [
+    {
+      "case": "s3_device_day",
+      "concurrency": 1,
+      "samples": 1,
+      "failures": 1,
+      "p50_ms": 9275.66,
+      "p95_ms": 9275.66,
+      "max_ms": 9275.66,
+      "max_read_rows": 0,
+      "returned_rows": [
+        0
+      ],
+      "errors": [
+        "bounded query failed: MEMORY_LIMIT_EXCEEDED"
+      ],
+      "searches_per_second": 0.11
+    }
+  ],
+  "archive_day": "2026-09-03",
+  "archive_scope": {
+    "isp": 2,
+    "device": 4
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "boundary": "Headless Chromium with synthetic API responses, 200 records per cached page, 20 alternating page switches and two animation frames per sample. Shared host; includes DOM rendering and paint scheduling, excludes network/database/CRM.",
+  "results": [
+    {
+      "case": "cached_200_row_page_paint",
+      "role": "director",
+      "samples": 20,
+      "p50_ms": 214.2,
+      "p95_ms": 425.3
+    },
+    {
+      "case": "cached_200_row_page_paint",
+      "role": "isp",
+      "samples": 20,
+      "p50_ms": 173.5,
+      "p95_ms": 316.2
+    }
+  ]
+}

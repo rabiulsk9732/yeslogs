@@ -4,8 +4,11 @@ const { login, nav, ADMIN_EMAIL, ADMIN_PW } = require('./helpers');
 test('logs search resolves a public endpoint to flow records', async ({ page }) => {
   await login(page, ADMIN_EMAIL, ADMIN_PW);
   await nav(page, 'Logs');
+  await page.locator('#logs-open-filters').click();
+  await page.locator('[data-minutes=0]').click();
   await expect(page.locator('#s-pub')).toBeVisible();
   await page.fill('#s-pub', '203.0.113.42');
+  await page.locator('#logs-advanced summary').click();
   await page.fill('#s-reason', 'E2E-CASE-1');
   await page.click('#s-run');
   await expect(page.locator('#s-results table tbody tr')).not.toHaveCount(0);
@@ -15,14 +18,19 @@ test('logs search resolves a public endpoint to flow records', async ({ page }) 
 test('logs search by private IP works (NAT mapping filter)', async ({ page }) => {
   await login(page, ADMIN_EMAIL, ADMIN_PW);
   await nav(page, 'Logs');
+  await page.locator('#logs-open-filters').click();
+  await page.locator('[data-minutes=0]').click();
+  await page.locator('#logs-advanced summary').click();
   await page.fill('#s-priv', '100.64.2.37');
   await page.click('#s-run');
-  await expect(page.locator('#s-results table')).toBeVisible();
+  await expect(page.locator('#logs-pagination:not(:empty)')).toBeVisible();
 });
 
 test('logs search offers CSV / Excel / PDF exports', async ({ page }) => {
   await login(page, ADMIN_EMAIL, ADMIN_PW);
   await nav(page, 'Logs');
+  await page.locator('#logs-open-filters').click();
+  await page.locator('[data-minutes=0]').click();
   await expect(page.locator('#s-pub')).toBeVisible();
   await page.fill('#s-pub', '203.0.113.42');
   await page.click('#s-run');
@@ -37,10 +45,13 @@ test('logs search offers CSV / Excel / PDF exports', async ({ page }) => {
 test('a search is recorded in the access audit', async ({ page }) => {
   await login(page, ADMIN_EMAIL, ADMIN_PW);
   await nav(page, 'Logs');
+  await page.locator('#logs-open-filters').click();
+  await page.locator('[data-minutes=0]').click();
   await page.fill('#s-pub', '203.0.113.41');
+  await page.locator('#logs-advanced summary').click();
   await page.fill('#s-reason', 'E2E-AUDIT');
   await page.click('#s-run');
-  await expect(page.locator('#s-results table')).toBeVisible();
+  await expect(page.locator('#logs-pagination:not(:empty)')).toBeVisible();
   await nav(page, 'Audit');
   await expect(page.locator('table tbody')).toContainText('203.0.113.41');
   await expect(page.locator('table tbody')).toContainText('E2E-AUDIT');

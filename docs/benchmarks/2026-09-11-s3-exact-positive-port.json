@@ -1,0 +1,56 @@
+{
+  "timestamp_utc": "2026-09-11T08:14:08.940948+00:00",
+  "stored_rows": 7593009967,
+  "stored_bytes": 90448453867,
+  "scope": {
+    "isp": 5,
+    "device": 8
+  },
+  "limits": {
+    "max_threads_per_query": 2,
+    "max_memory_bytes": 2147483648,
+    "max_query_seconds": 30
+  },
+  "boundary": "Hot count + 50-row page, or S3 read capped at 5000 rows. Excludes HTTP authentication, archive planning, CRM and browser rendering. Existing caches are retained; not a cold-cache test.",
+  "results": [
+    {
+      "case": "s3_exact_ip_port_15m",
+      "concurrency": 1,
+      "samples": 4,
+      "failures": 0,
+      "p50_ms": 768.53,
+      "p95_ms": 836.99,
+      "max_ms": 836.99,
+      "searches_per_second": 1.29,
+      "max_read_rows": 8786,
+      "returned_rows": [
+        5000
+      ],
+      "errors": []
+    },
+    {
+      "case": "s3_exact_ip_port_15m",
+      "concurrency": 2,
+      "samples": 4,
+      "failures": 0,
+      "p50_ms": 623.75,
+      "p95_ms": 850.18,
+      "max_ms": 850.18,
+      "searches_per_second": 2.79,
+      "max_read_rows": 8786,
+      "returned_rows": [
+        5000
+      ],
+      "errors": []
+    }
+  ],
+  "archive_day": "2026-09-03",
+  "archive_scope": {
+    "isp": 2,
+    "device": 4
+  },
+  "archive_window": {
+    "from": "2026-09-03 23:45:00",
+    "to": "2026-09-03 23:59:59"
+  }
+}

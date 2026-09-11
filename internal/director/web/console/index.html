@@ -1653,7 +1653,9 @@
   <link rel="stylesheet" href="/assets/policies.css">
   <script src="/assets/policies.js"></script>
   <link rel="stylesheet" href="/assets/console-pages.css">
+  <link rel="stylesheet" href="/assets/logs.css">
   <script src="/assets/console-kit.js"></script>
+  <script src="/assets/logs.js"></script>
   <script src="/assets/console-settings.js"></script>
   <script src="/assets/console-pages.js"></script>
 </head>
@@ -1933,7 +1935,7 @@
     }
 
     // ---- auth ----
-    function showLogin() { YesLogsPages.dispose(); S.logReq = (S.logReq || 0) + 1; S.logXHR?.abort(); YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
+    function showLogin() { YesLogsLogs.dispose(); YesLogsPages.dispose(); YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose(); YesLogsDashboard.dispose(); $('#login').css('display', 'block'); $('#app').css('display', 'none'); }
     function showApp() { $('#login').css('display', 'none'); $('#app').css('display', 'grid'); }
     function initials(email) { const n = (email || '?').split('@')[0].split(/[.\-_]/); const a = (n[0] || '?')[0] || '?', b = (n[1] || '')[0] || ''; return (a + b).toUpperCase(); }
 
@@ -2083,14 +2085,12 @@
       $('#breadcrumbCurrent').text(S.view === 'Overview' ? 'Dashboard' : S.view);
     }
     function renderPage() {
-      YesLogsDashboard.dispose(); YesLogsPages.dispose();
-      S.logReq = (S.logReq || 0) + 1; S.lq = null; S.logXHR?.abort();
-      $('#s-from, #s-to').each(function(){ if ($(this).data('xdsoft_datetimepicker')) $(this).datetimepicker('destroy'); });
+      YesLogsDashboard.dispose(); YesLogsPages.dispose(); YesLogsLogs.dispose();
       YesLogsISPs.dispose(); YesLogsDevices.dispose(); YesLogsPolicies.dispose();
       setHead();
       $('#globalSearchWrap').hide();
       $('#pageTools').prop('hidden', true);
-      $('#footBuild').text('v1.13.0-console');
+      $('#footBuild').text('v1.14.0-console');
       const b = $('<div class="module-page">').appendTo($('#pageBody').empty());
       return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
@@ -2110,9 +2110,11 @@
           $('#s-port').val(filters.port || ''); $('#s-proto').val(filters.proto || 'Any');
           $('#s-from').val(historicalTime(filters.from)); $('#s-to').val(historicalTime(filters.to));
           $('#s-reason').val(filters.reason || '');
-          $('#s-msg').text('Review all filters before searching. Historical IP metadata does not distinguish public, private and destination IP; device and subscriber filters were not recorded.');
+          $('#logs-advanced').prop('open', true);
+          $('#s-modal-msg').text('Review all filters before searching. Historical IP metadata does not distinguish public, private and destination IP; device and subscriber filters were not recorded.');
         }
       }
+      if (view === 'Logs' && Object.keys(filters).length) YesLogsLogs.open();
       if (view === 'ISPs' && filters.add) $('#isp-create').trigger('click');
       if (view === 'Devices' && filters.policy) {
         if (filters.isp && S.me.isDirector) $('#device-isp-filter').val(String(filters.isp)).trigger('change');
@@ -2129,231 +2131,7 @@
     const typePill = t => t ? `<span class="pill info">${esc(t)}</span>` : '<span style="color:var(--mut)">—</span>';
 
     // ==================== LOGS SEARCH ====================
-    async function pgLogs(b) {
-      b.html('<div class="index-stats" aria-label="Logs statistics"></div>'); logStats();
-      let isps = [], devs = [];
-      try { const dr = await api('/api/v1/devices'); if (dr.status === 401) { showLogin(); return; } if (!dr.ok) throw new Error('Cannot load ISP and device filters. Refresh to retry.'); const d = await dr.json(); devs = d.devices || []; isps = d.isps || []; }
-      catch(e) { if(b[0].isConnected) b.append('<div class="card module-note" role="alert">'+esc(e.message || 'Cannot load filters. Refresh to retry.')+'</div>'); return; }
-      if (!b[0].isConnected) return;
-      const dir = S.me && S.me.isDirector;
-      const ispOpts = dir ? `<div>
-      <label class="lbl"><span class="ms">apartment</span>ISP</label>
-      <div class="sel"><select id="s-isp" class="inp"><option value="0">All ISPs</option>${isps.map(i =>
-        `<option value="${i.ID}">${esc(i.Name)} (#${i.ID})</option>`).join('')}</select><span class="ms">expand_more</span></div>
-    </div>` : '';
-      const initialDevOpts = dir
-        ? '<option value="0">Select an ISP first</option>'
-        : `<option value="0">Any device</option>${devs.map(d => `<option value="${d.DeviceID}">${esc(d.Name)} (#${d.DeviceID})</option>`).join('')}`;
-      b.html(`<div class="index-stats" aria-label="Logs statistics"></div><form id="logs-form" novalidate><div class="card" style="margin-bottom:18px">
-    <div class="ch">
-      <span class="ms">search</span><h2>Logs Search</h2>
-      <span class="ch-tag">NAT mapping → subscriber</span>
-      <span class="pill warn" style="margin-left:auto"><span class="ms">receipt_long</span>every search is audited</span>
-    </div>
-    <div style="padding:16px 16px 0">${note("Resolve a NAT mapping by <b>Public IP + port</b> at a moment in time, or filter by private/destination IP, subscriber or device. Leaving both timestamps empty searches indexed hot storage. Set <b>both</b> From and To to reach archived days in S3 — long ranges are walked newest-first and stop once the result window is full.", 'fa-circle-info')}</div>
-    <div class="fgrid" style="padding:16px">
-      ${ispOpts}
-      <div>
-        <label class="lbl"><span class="ms">lan</span>Dataplane</label>
-        <div class="sel"><select id="s-dp" class="inp" disabled title="All ISPs currently use the shared in-process collector"><option>Shared local collector</option></select><span class="ms">expand_more</span></div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">router</span>Device</label>
-        <div class="sel"><select id="s-dev" class="inp" ${dir ? 'disabled' : ''}>${initialDevOpts}</select><span class="ms">expand_more</span></div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">dns</span>Public IP</label>
-        <input id="s-pub" class="inp mono" placeholder="203.0.113.10">
-        <div class="hint">The CGNAT address seen by the outside world.</div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">tag</span>Public port</label>
-        <input id="s-port" type="number" class="inp mono" placeholder="any">
-        <div class="hint">One public IP serves many subscribers — the port is what identifies one.</div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">dns</span>Private IP</label>
-        <input id="s-priv" class="inp mono" placeholder="100.64.1.10">
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">send</span>Destination IP</label>
-        <input id="s-dst" class="inp mono" placeholder="any">
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">person</span>Subscriber</label>
-        <input id="s-user" class="inp mono" placeholder="username">
-        <div class="hint">Only for exporters that report IE&nbsp;371, stored after 2026-08-26.</div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">swap_calls</span>Protocol</label>
-        <div class="sel"><select id="s-proto" class="inp"><option>Any</option><option>TCP</option><option>UDP</option><option>ICMP</option></select><span class="ms">expand_more</span></div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">event</span>From (IST)</label>
-        <input id="s-from" type="text" class="inp mono" autocomplete="off" placeholder="YYYY-MM-DD HH:MM">
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">event</span>To (IST)</label>
-        <input id="s-to" type="text" class="inp mono" autocomplete="off" placeholder="YYYY-MM-DD HH:MM">
-        <div class="hint">Set both to include archived days from S3.</div>
-      </div>
-      <div>
-        <label class="lbl"><span class="ms">sticky_note_2</span>Audit reason</label>
-        <input id="s-reason" class="inp" placeholder="case reference or reason">
-        <div class="hint">Recorded against your name in the audit trail.</div>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <span class="hint" style="margin:0">Provide at least one of: public IP, private IP, destination IP, subscriber or device.</span>
-      <span id="s-msg" class="hint" style="margin:0;color:var(--bad);font-weight:600"></span>
-      <button type="button" id="s-clear" class="btn out">Clear filters</button><button type="submit" id="s-run" class="btn" style="margin-left:auto"><span class="ms">search</span>Search</button>
-    </div>
-  </div>
-  </form><div id="s-results"><div class="card"><div class="empty"><div class="ei"><span class="ms">search</span></div><div class="et">Run a search to see flow logs</div><div class="ed">Enter a public IP, private IP, destination IP or pick a device, optionally narrow by time, then hit Search. Hot and archived results are merged here.</div></div></div></div>`);
-      logStats();
-      b.find('.fgrid .inp').each(function(){ $(this).closest('.fgrid > div').find('label').attr('for',this.id); $(this).attr('aria-describedby',this.id+'-error').closest('.fgrid > div').append('<div class="isp-field-error" id="'+this.id+'-error"></div>'); });
-      if (dir) $('#s-isp').on('change', function () {
-        const ispID = +this.value;
-        const matches = ispID ? devs.filter(d => +d.ISPID === ispID) : [];
-        const sd = $('#s-dev');
-        if (!ispID) {
-          sd.html('<option value="0">Select an ISP first</option>').prop('disabled', true);
-        } else if (!matches.length) {
-          sd.html('<option value="0">No devices for this ISP</option>').prop('disabled', true);
-        } else {
-          sd.html(`<option value="0">Any device</option>${matches.map(d => `<option value="${d.DeviceID}">${esc(d.Name)} (#${d.DeviceID})</option>`).join('')}`).prop('disabled', false);
-          if (matches.length === 1) sd.val(String(matches[0].DeviceID));
-        }
-        S.logReq = (S.logReq || 0) + 1; // discard an in-flight response for the previous ISP
-        S.lq = null; logStats();
-        $('#s-msg').text('');
-        $('#s-results').html('<div class="card"><div class="empty"><div class="ei"><i class="fas fa-filter"></i></div><div class="et">ISP filter changed</div><div class="ed">The Device list now contains only devices belonging to this ISP. Review the filters and click Search.</div></div></div>');
-      });
-      $('#logs-form').on('submit', e => { e.preventDefault(); runLogs(true); });
-      $('#s-clear').on('click', () => { S.logReq = (S.logReq || 0)+1; S.logXHR?.abort(); S.lq=null; $('#logs-form')[0].reset(); if(dir) $('#s-isp').trigger('change'); b.find('[aria-invalid]').removeAttr('aria-invalid'); b.find('.isp-field-error').text(''); $('#s-msg').text(''); $('#s-results').html('<div class="card module-note">Filters cleared. Run a search to see results.</div>'); logStats(); });
-      $('#s-from, #s-to').datetimepicker({ format: 'Y-m-d H:i', step: 15 });
-    }
-    function logBody() { return { PublicIP: $('#s-pub').val().trim(), PrivateIP: $('#s-priv').val().trim(), DestIP: $('#s-dst').val().trim(), Username: $('#s-user').val().trim(), PublicPort: +($('#s-port').val() || 0), Proto: $('#s-proto').val(), DeviceID: +($('#s-dev').val() || 0), ISPID: +($('#s-isp').length ? $('#s-isp').val() : 0), From: $('#s-from').val(), To: $('#s-to').val(), Reason: $('#s-reason').val() }; }
-    // runLogs(true)=new search (reset to page 1); runLogs(false)=page/size change (keep filter).
-    function logStats(rows) {
-      const q=S.lq;
-      YesLogsKit.stats(document.querySelector('#pageBody'), [
-        ['Matching records',q?.total==null?'—':Number(q.total).toLocaleString()+(q.capped?'+':''),'Current result window','table_rows'],
-        ['Rows on page',rows==null?'—':rows,'Current response','list'],
-        ['Search duration',q?.elapsedMs==null?'—':q.elapsedMs+' ms','Server search time','timer'],
-        ['Storage searched',q?.total==null?'—':q.cold?'Hot + S3':'Hot','Set both timestamps to include S3','storage'],
-        ['CRM matches',q?.total==null?'—':q.crm?.enabled?Number(q.crm.matched||0).toLocaleString():'Off','Current response enrichment','person_search']
-      ]);
-    }
-    async function runLogs(reset) {
-      if (!S.lq) S.lq = { pageSize: 50, offset: 0 };
-      const b = reset !== false ? logBody() : S.lq.body, errors = {};
-      const ip = v => /^(\d{1,3}\.){3}\d{1,3}$/.test(v) && v.split('.').every(x=>+x<=255);
-      for(const [key,id] of [['PublicIP','s-pub'],['PrivateIP','s-priv'],['DestIP','s-dst']]) if(b[key]&&!ip(b[key])) errors[id]='Enter a complete IPv4 address.';
-      if($('#s-port').val()&&(!Number.isInteger(b.PublicPort)||b.PublicPort<1||b.PublicPort>65535)) errors['s-port']='Enter a port from 1 to 65535.';
-      if(!!b.From!==!!b.To) errors[b.From?'s-to':'s-from']='Set both From and To, or leave both blank.';
-      for(const [key,id] of [['From','s-from'],['To','s-to']]) if(b[key]&&(!/^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(b[key])||!Number.isFinite(Date.parse(b[key].replace(' ','T')+':00+05:30'))||new Date(Date.parse(b[key].replace(' ','T')+':00+05:30')+330*60000).toISOString().slice(0,16).replace('T',' ')!==b[key]))errors[id]='Use YYYY-MM-DD HH:MM in IST.';
-      if(b.From&&b.To&&b.From>b.To)errors['s-to']='To must be on or after From.';
-      $('#logs-form [aria-invalid]').removeAttr('aria-invalid');$('#logs-form .isp-field-error').text('');
-      for(const [id,message]of Object.entries(errors)){$('#'+id).attr('aria-invalid','true');$('#'+id+'-error').text(message)}
-      if(Object.keys(errors).length){$('#s-msg').text('Check the highlighted fields.');$('#logs-form [aria-invalid=true]').first().trigger('focus');return}
-      if (!b.PublicIP && !b.PrivateIP && !b.DestIP && !b.DeviceID && !b.Username) { $('#s-msg').text('Provide a Public IP, Private IP, Destination IP, Subscriber, or Device'); return; }
-      if (reset !== false) { S.lq.offset = 0; S.lq.body = b; }
-      S.lq.total = null; S.lq.elapsedMs = null; logStats();
-      $('#s-msg').text('');
-      $('#s-results').html('<div class="card module-note" role="status">Searching…</div>');
-      S.logXHR?.abort();
-      const reqID = S.logReq = (S.logReq || 0) + 1;
-      const req = {...b, Limit:S.lq.pageSize, Offset:S.lq.offset};
-      try {
-        const d = await (S.logXHR=$.ajax({url:'/api/v1/search',method:'POST',contentType:'application/json',dataType:'json',headers:{'X-CSRF-Token':S.csrf},data:JSON.stringify(req),timeout:120000}));
-        if (reqID !== S.logReq) return;
-        S.lq.total = d.total || 0; S.lq.capped = !!d.capped; S.lq.cold = !!d.cold; S.lq.crm = d.crm || {enabled:false}; S.lq.elapsedMs = Number(d.elapsedMs || 0);
-        logStats((d.records||[]).length); renderLogResults(d.records || [], b);
-      } catch(e) {
-        if (reqID !== S.logReq) return;
-        if(e.status===401){showLogin();return}
-        S.lq.total = null; S.lq.elapsedMs = null; logStats();
-        $('#s-results').html('<div class="card module-note">No new results loaded. Review the error and retry.</div>');
-        if (e instanceof Error) {
-          console.error('Flow log rendering failed', e);
-          $('#s-msg').text('Search returned data, but the log table could not be displayed. Refresh and retry.');
-        } else {
-          $('#s-msg').text(e.responseJSON?.error || 'Search connection failed or timed out.');
-        }
-      }
-    }
-    function subCell(r) {
-      if (r.username) return '<b>' + esc(r.username) + '</b>';
-      if (r.crmUsername) return esc(r.crmUsername) + ' <span style="font-size:10.5px;color:var(--mut)">via CRM</span>';
-      return '<span style="color:var(--mut)">—</span>';
-    }
-    function natCell(r) {
-      if (!r.pubIp) return '<span style="color:var(--mut)" title="The exporter sent no post-NAT address for this flow">—</span>';
-      return esc(r.pubIp) + ':' + esc(r.pubPort);
-    }
-    function logQstr(body) { const p = new URLSearchParams(); if (body.PublicIP) p.set('ip', body.PublicIP); if (body.PrivateIP) p.set('priv', body.PrivateIP); if (body.DestIP) p.set('dst', body.DestIP); if (body.Username) p.set('user', body.Username); if (body.PublicPort) p.set('port', body.PublicPort); if (body.Proto && body.Proto !== 'Any') p.set('proto', body.Proto); if (body.DeviceID) p.set('device', body.DeviceID); if (body.ISPID) p.set('isp', body.ISPID); if (body.From) p.set('from', body.From); if (body.To) p.set('to', body.To); if (body.Reason) p.set('reason', body.Reason); p.set('csrf', S.csrf); return p.toString(); }
-    function renderLogResults(rows, body) {
-      const qs = logQstr(body), lq = S.lq;
-      const total = lq.total, ps = lq.pageSize, off = lq.offset;
-      const totDisp = (lq.capped ? total.toLocaleString() + '+' : total.toLocaleString());
-      const a = total ? off + 1 : 0, b2 = off + rows.length, pages = Math.max(1, Math.ceil(total / ps)), cur = Math.floor(off / ps) + 1;
-      const coldPill = lq.cold ? pill('hot + S3 cold', 'info') : pill((body.From && body.To) ? 'hot' : 'hot · set time for S3', 'mut');
-      const latencyPill = pill(`${lq.elapsedMs.toLocaleString()} ms`, lq.elapsedMs < 1000 ? 'ok' : (lq.elapsedMs < 5000 ? 'warn' : 'bad'));
-      const crm = lq.crm || { enabled: false }, crmOn = !!crm.enabled, ncols = crmOn ? 9 : 8; // +1 for the Subscriber column
-      const crmPill = crmOn ? pill(`CRM ${Number(crm.matched || 0).toLocaleString()}/${Number(crm.rows || 0).toLocaleString()} matched`, crm.status === 'complete' ? 'ok' : (crm.status === 'partial' ? 'warn' : 'bad')) : '';
-      let h = `<div class="card">
-    <div class="ch">
-      <span class="ms">table_rows</span><h2>${totDisp} record${total === 1 ? '' : 's'}</h2>
-      ${coldPill}${latencyPill}${crmPill}
-      <div class="ch-ctl">
-        <a class="btn out sm" href="/api/v1/report?format=csv&${qs}"><span class="ms">table_view</span>CSV</a>
-        <a class="btn out sm" href="/api/v1/report?format=xlsx&${qs}"><span class="ms">grid_on</span>Excel</a>
-        <a class="btn out sm" href="/api/v1/report?format=pdf&${qs}"><span class="ms">picture_as_pdf</span>PDF</a>
-      </div>
-    </div>
-    <div class="dt-scroll"><table id="logTable"><thead><tr><th>Timestamp</th><th>Device</th><th style="text-align:right">Private (NAT)</th><th>Subscriber</th><th style="text-align:right">Public (NAT)</th><th>Proto</th><th>Destination</th><th>Export</th>${crmOn ? '<th>Subscriber (CRM)</th>' : ''}</tr></thead><tbody>`;
-      if (!rows.length) h += emptyRow(ncols, 'fa-magnifying-glass', 'No matching flow logs', 'Nothing matched these filters and time window. Widen the time range, or check the IP/device — months-old searches also include the S3 cold archive.');
-      rows.forEach(r => {
-        let crmCell = '';
-        if (crmOn) {
-          if (r.crmStatus === 'matched') {
-            const who = r.crmName || r.crmUsername || r.crmAccountId || 'Matched subscriber';
-            const detail = [r.crmUsername && r.crmUsername !== who ? r.crmUsername : '', r.crmPhone].filter(Boolean).join(' · ');
-            crmCell = `<td style="min-width:230px;max-width:320px" title="${esc(r.crmAddress || '')}"><div style="font-weight:700;color:var(--ink)">${esc(who)}</div>${detail ? `<div class="mono" style="font-size:11px;color:var(--pri);margin-top:2px">${esc(detail)}</div>` : ''}${r.crmAddress ? `<div style="font-size:11px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px">${esc(r.crmAddress)}</div>` : ''}<div class="mono" style="font-size:10px;color:var(--mut);margin-top:2px">${esc(r.crmReference || '')}</div></td>`;
-          } else {
-            const st = r.crmStatus === 'not_found' ? 'not found' : (r.crmStatus === 'ambiguous' ? 'ambiguous' : 'unavailable');
-            const tone = r.crmStatus === 'not_found' ? 'mut' : (r.crmStatus === 'ambiguous' ? 'warn' : 'bad');
-            crmCell = `<td style="min-width:150px">${pill(st, tone)}<div class="mono" style="font-size:10px;color:var(--mut);margin-top:4px">${esc(r.crmReference || '')}</div></td>`;
-          }
-        }
-        h += `<tr>
-    <td class="mono ts"><span class="d">${esc(r.date)}</span> <span class="t">${esc(r.clock)}</span></td>
-    <td class="mono dev">${esc(r.sub)}</td>
-    <td class="num-col pub">${esc(r.privIp)}:${r.privPort}</td>
-    <td>${subCell(r)}</td>
-    <td class="num-col">${natCell(r)}</td>
-    <td>${protoPill(r.proto)}</td>
-    <td class="mono dest">${esc(r.dest)}</td><td>${typePill(r.action)}</td>${crmCell}</tr>`;
-      });
-      h += '</tbody></table></div>';
-      // server-side pagination footer
-      const pbtn = (off2, lbl, dis, title) => `<button class="pgb" data-off="${off2}" title="${title || ''}" ${dis ? 'disabled' : ''}>${lbl}</button>`;
-      h += `<div class="srv-foot">
-    <div class="srv-count">
-      <label class="ctl-len"><select id="lq-size" aria-label="Rows per page">${[25, 50, 100, 200].map(n => `<option ${n === ps ? 'selected' : ''}>${n}</option>`).join('')}</select><span class="ms">expand_more</span></label>
-      <span>Showing <b>${a.toLocaleString()}–${b2.toLocaleString()}</b> of <b>${totDisp}</b></span>
-    </div>
-    <div class="srv-pager">
-      ${pbtn(off - ps, 'Prev', off === 0)}
-      <span class="pg-of">Page <b>${cur.toLocaleString()}</b> of ${pages.toLocaleString()}${lq.capped ? '+' : ''}</span>
-      ${pbtn(off + ps, 'Next', off + ps >= total)}
-    </div>
-  </div></div>`;
-      $('#s-results').html(h);
-      $('.pgb').on('click', function () { if ($(this).prop('disabled')) return; S.lq.offset = Math.max(0, +$(this).data('off')); runLogs(false); });
-      $('#lq-size').on('change', function () { S.lq.pageSize = +this.value; S.lq.offset = 0; runLogs(false); });
-    }
+    function pgLogs(b) { return YesLogsLogs.mount(b[0], { user: S.me, csrf: S.csrf, expired: showLogin, toast }); }
 
     // ==================== REPORTS ====================
     function pgReports(b) { return pgModule(b, "Reports"); }

@@ -1,0 +1,82 @@
+{
+  "timestamp_utc": "2026-09-11T08:09:25.803589+00:00",
+  "stored_rows": 7587888191,
+  "stored_bytes": 90391969187,
+  "scope": {
+    "isp": 5,
+    "device": 8
+  },
+  "limits": {
+    "max_threads_per_query": 2,
+    "max_memory_bytes": 2147483648,
+    "max_query_seconds": 30
+  },
+  "boundary": "Hot count + 50-row page, or S3 read capped at 5000 rows. Excludes API authentication, archive planning/merge, CRM, WAN and browser rendering. Existing caches retained; shared host with live ingestion.",
+  "results": [
+    {
+      "case": "s3_device_15m",
+      "concurrency": 1,
+      "samples": 4,
+      "failures": 0,
+      "p50_ms": 1158.12,
+      "p95_ms": 1491.7,
+      "max_ms": 1491.7,
+      "max_read_rows": 164055,
+      "returned_rows": [
+        5000
+      ],
+      "errors": [],
+      "searches_per_second": 0.85
+    },
+    {
+      "case": "s3_device_15m",
+      "concurrency": 2,
+      "samples": 4,
+      "failures": 0,
+      "p50_ms": 1133.14,
+      "p95_ms": 2273.5,
+      "max_ms": 2273.5,
+      "max_read_rows": 164055,
+      "returned_rows": [
+        5000
+      ],
+      "errors": [],
+      "searches_per_second": 1.37
+    },
+    {
+      "case": "s3_exact_ip_port_15m",
+      "concurrency": 1,
+      "samples": 4,
+      "failures": 0,
+      "p50_ms": 661.48,
+      "p95_ms": 1082.33,
+      "max_ms": 1082.33,
+      "max_read_rows": 8786,
+      "returned_rows": [
+        5000
+      ],
+      "errors": [],
+      "searches_per_second": 1.34
+    },
+    {
+      "case": "s3_exact_ip_port_15m",
+      "concurrency": 2,
+      "samples": 4,
+      "failures": 0,
+      "p50_ms": 937.84,
+      "p95_ms": 1224.22,
+      "max_ms": 1224.22,
+      "max_read_rows": 8786,
+      "returned_rows": [
+        5000
+      ],
+      "errors": [],
+      "searches_per_second": 2.03
+    }
+  ],
+  "archive_day": "2026-09-03",
+  "archive_scope": {
+    "isp": 2,
+    "device": 4
+  }
+}
