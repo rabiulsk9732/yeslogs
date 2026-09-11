@@ -15,11 +15,11 @@ async function main() {
       const errors = [], requests = [];
       let mode = 'rows';
       let delayMs = 0;
-      const base = { date: '2026-09-11', clock: '00:38:59', sub: 'Test edge', privIp: '100.64.1.10', privPort: 1234, pubIp: '203.0.113.10', pubPort: 4321, proto: 'TCP', dest: '192.0.2.1:443', action: 'IPFIX' };
+      const base = { date: '2026-09-11', clock: '00:38:59', sub: 'Test edge', privIp: '100.64.1.10', privPort: 1234, pubIp: '203.0.113.10', pubPort: 4321, dstIp: '192.0.2.1', dstPort: 443, proto: 'TCP', dest: '192.0.2.1:443', action: 'IPFIX' };
       const rows = [
         { ...base, username: '<subscriber>', crmUsername: 'crm-fallback', crmStatus: 'matched', crmName: '<Customer>' },
         { ...base, crmUsername: '<crm-user>', crmStatus: 'matched' },
-        { ...base, pubIp: '', crmStatus: 'not_found' },
+        { ...base, privPort: 0, dstPort: 0, pubIp: '', crmStatus: 'not_found' },
       ];
       page.on('pageerror', e => errors.push(e.message));
       await page.route('http://logs.test/**', async route => {
@@ -73,11 +73,16 @@ async function main() {
       await table();
       assert.equal(await page.locator('#logTable tbody tr').count(), 3);
       const cells = page.locator('#logTable tbody tr').first().locator('td');
-      assert.match(await cells.nth(3).innerText(), /<subscriber>\s+From exporter/);
-      assert.equal(await cells.nth(4).innerText(), '203.0.113.10:4321');
-      assert.match(await page.locator('#logTable tbody tr').nth(1).locator('td').nth(3).innerText(), /<crm-user>\s+via CRM/);
-      assert.equal(await page.locator('#logTable tbody tr').nth(2).locator('td').nth(3).innerText(), '—');
-      assert.equal(await page.locator('#logTable tbody tr').nth(2).locator('td').nth(4).innerText(), '—');
+      assert.deepEqual(await page.locator('#logTable thead th').allTextContents(), ['Timestamp · IST','src_ip','src_port','dst_ip','dst_port','nat_ip','nat_port','Protocol','Device','Subscriber','Export','Subscriber · CRM']);
+      assert.deepEqual((await cells.allInnerTexts()).slice(0,7), ['2026-09-11 00:38:59','100.64.1.10','1234','192.0.2.1','443','203.0.113.10','4321']);
+      assert.match(await cells.nth(9).innerText(), /<subscriber>\s+From exporter/);
+      assert.match(await page.locator('#logTable tbody tr').nth(1).locator('td').nth(9).innerText(), /<crm-user>\s+via CRM/);
+      const missing = page.locator('#logTable tbody tr').nth(2).locator('td');
+      assert.equal(await missing.nth(9).innerText(), '—');
+      assert.equal(await missing.nth(5).innerText(), '—');
+      assert.equal(await missing.nth(6).innerText(), '—');
+      assert.equal(await missing.nth(2).innerText(), '0');
+      assert.equal(await missing.nth(4).innerText(), '0');
       assert.equal(await page.locator('#logTable subscriber, #logTable crm-user, #logTable customer').count(), 0);
       assert.equal(await page.locator('#s-msg').innerText(), '');
       assert.equal(await page.locator('.index-stats .v').first().innerText(), '72,932');
@@ -97,6 +102,7 @@ async function main() {
       await page.locator('[data-details="0"]').click();
       await page.getByRole('dialog').getByText('Flow record details').waitFor();
       assert.match(await page.getByRole('dialog').innerText(), /<subscriber>/);
+      assert.equal(await page.getByRole('dialog').locator('.module-details > div').filter({has: page.locator('dt', {hasText: /^src_port$/})}).locator('dd').innerText(), '1234');
       await page.keyboard.press('Escape');
       assert.equal(await page.getByRole('dialog').count(),0);
       await page.locator('.pgb', { hasText: 'Next' }).click();
@@ -117,9 +123,10 @@ async function main() {
       mode = 'cold'; await search(); await table();
       assert.equal(await page.locator('.index-stats .v').nth(3).innerText(), 'Hot + S3');
       mode = 'no-crm'; await search(); await table();
-      assert.equal(await page.locator('#logTable thead th').count(), 8);
+      assert.equal(await page.locator('#logTable thead th').count(), 11);
       mode = 'empty'; await search(); await table();
       assert.match(await page.locator('#logTable').innerText(), /No matching flow logs/);
+      assert.equal(await page.locator('.logs-state-row td').getAttribute('colspan'), '11');
       await shot('empty');
       for (mode of ['network', 'server']) {
         await search();

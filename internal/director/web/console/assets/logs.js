@@ -8,7 +8,7 @@
   let c;
   const emptyBody = () => ({ ISPID: 0, DeviceID: 0, PublicIP: '', PublicPort: 0, PrivateIP: '', DestIP: '', Username: '', Proto: 'Any', From: '', To: '', Reason: '' });
   const fields = { ISPID: 's-isp', DeviceID: 's-dev', PublicIP: 's-pub', PublicPort: 's-port', PrivateIP: 's-priv', DestIP: 's-dst', Username: 's-user', Proto: 's-proto', From: 's-from', To: 's-to', Reason: 's-reason' };
-  const columns = ['Timestamp · IST', 'Device', 'Private endpoint', 'Subscriber', 'Public endpoint', 'Protocol', 'Destination', 'Export'];
+  const columns = ['Timestamp · IST', 'src_ip', 'src_port', 'dst_ip', 'dst_port', 'nat_ip', 'nat_port', 'Protocol', 'Device', 'Subscriber', 'Export'];
   const num = n => Number(n).toLocaleString();
   const alive = x => c === x && x.root.isConnected;
   function stats(d, count) {
@@ -74,7 +74,7 @@
     $('#logs-result-count').text(kind === 'loading' ? 'Searching…' : kind === 'empty' ? '0 records' : 'Flow records');
     $('#logs-exports,#logs-pagination').empty(); $('#logs-timing').text('');
     $('#logTable thead').html('<tr>' + columns.map(v => '<th>' + esc(v) + '</th>').join('') + '</tr>');
-    $('#logTable tbody').html(`<tr class="logs-state-row"><td colspan="8"><div class="logs-state logs-state-${kind}" role="${kind === 'error' ? 'alert' : 'status'}"><div class="logs-state-icon">${icon(data[0])}</div><span class="logs-eyebrow">${kind === 'idle' ? 'NAT MAPPING SEARCH' : kind === 'empty' ? 'SEARCH COMPLETE' : 'SEARCH STATUS'}</span><h3>${data[1]}</h3><p id="logs-state-description">${esc(data[2])}</p><div class="logs-state-actions"><button type="button" class="btn" data-log-action="${kind === 'loading' ? 'cancel' : ['error','cancelled'].includes(kind) ? 'retry' : 'filters'}">${icon(kind === 'loading' ? 'close' : 'search')}${data[3]}</button>${kind === 'error' || kind === 'cancelled' ? '<button type="button" class="btn out" data-log-action="filters">Edit filters</button>' : ''}</div>${kind === 'idle' ? '<div class="logs-state-tips"><span>1. Select a scope</span><span>2. Add an endpoint or device</span><span>3. Search & inspect</span></div>' : ''}</div></td></tr>`);
+    $('#logTable tbody').html(`<tr class="logs-state-row"><td colspan="${columns.length}"><div class="logs-state logs-state-${kind}" role="${kind === 'error' ? 'alert' : 'status'}"><div class="logs-state-icon">${icon(data[0])}</div><span class="logs-eyebrow">${kind === 'idle' ? 'NAT MAPPING SEARCH' : kind === 'empty' ? 'SEARCH COMPLETE' : 'SEARCH STATUS'}</span><h3>${data[1]}</h3><p id="logs-state-description">${esc(data[2])}</p><div class="logs-state-actions"><button type="button" class="btn" data-log-action="${kind === 'loading' ? 'cancel' : ['error','cancelled'].includes(kind) ? 'retry' : 'filters'}">${icon(kind === 'loading' ? 'close' : 'search')}${data[3]}</button>${kind === 'error' || kind === 'cancelled' ? '<button type="button" class="btn out" data-log-action="filters">Edit filters</button>' : ''}</div>${kind === 'idle' ? '<div class="logs-state-tips"><span>1. Select a scope</span><span>2. Add an endpoint or device</span><span>3. Search & inspect</span></div>' : ''}</div></td></tr>`);
     $('#s-results').attr('aria-busy', String(kind === 'loading'));
     $('#logs-refresh').prop('disabled', !c.applied || kind === 'loading');
     $('#s-msg').text(kind === 'error' ? data[2] : '');
@@ -84,7 +84,9 @@
     if (r.crmUsername) return esc(r.crmUsername) + '<span class="logs-secondary">via CRM</span>';
     return '<span class="logs-muted">—</span>';
   }
-  function endpoint(ip, port) { return ip ? esc(ip) + '<span class="logs-port">:' + esc(port) + '</span>' : '<span class="logs-muted" title="Exporter did not report this endpoint">—</span>'; }
+  const timestamp = r => r.time || [r.date, r.clock].filter(Boolean).join(' ');
+  const reported = v => v === undefined || v === null || v === '' ? '—' : v;
+  const port = (ip, value) => ip ? reported(value) : '—';
   function queryString(b) {
     const p = new URLSearchParams({ csrf: c.csrf });
     for (const [key, param] of [['PublicIP','ip'],['PrivateIP','priv'],['DestIP','dst'],['Username','user'],['PublicPort','port'],['DeviceID','device'],['ISPID','isp'],['From','from'],['To','to'],['Reason','reason']]) if (b[key]) p.set(param, b[key]);
@@ -101,7 +103,7 @@
       const tableHTML = d.tableHTML || rows.map((r, i) => {
         let crmCell = '';
         if (crm) crmCell = r.crmStatus === 'matched' ? `<td><b>${esc(r.crmName || r.crmUsername || r.crmAccountId || 'Matched subscriber')}</b><span class="logs-secondary">${esc([r.crmUsername,r.crmPhone].filter(Boolean).join(' · '))}</span></td>` : '<td>' + badge(r.crmStatus === 'not_found' ? 'Not found' : r.crmStatus === 'ambiguous' ? 'Ambiguous' : 'Unavailable', r.crmStatus === 'not_found' ? 'mut' : 'warn') + '</td>';
-        return `<tr data-record="${i}"><td class="mono"><span>${esc(r.date)}</span><b class="logs-secondary logs-clock">${esc(r.clock)}</b></td><td>${esc(r.sub)}</td><td class="mono">${endpoint(r.privIp,r.privPort)}</td><td>${subscriber(r)}</td><td class="mono">${endpoint(r.pubIp,r.pubPort)}${r.untranslated ? '<span class="logs-secondary">Unchanged address</span>' : ''}</td><td>${badge(r.proto,r.proto === 'TCP' ? 'info' : 'ok')}</td><td class="mono">${esc(r.dest)}</td><td><button type="button" class="logs-record-button" data-details="${i}" aria-label="View record ${i + 1} details">${esc(r.action || 'Details')}${icon('chevron_right')}</button></td>${crmCell}</tr>`;
+        return `<tr data-record="${i}"><td class="mono">${esc(timestamp(r))}</td><td class="mono">${esc(reported(r.privIp))}</td><td class="mono">${esc(port(r.privIp,r.privPort))}</td><td class="mono">${esc(reported(r.dstIp))}</td><td class="mono">${esc(port(r.dstIp,r.dstPort))}</td><td class="mono">${esc(reported(r.pubIp))}</td><td class="mono">${esc(port(r.pubIp,r.pubPort))}</td><td>${badge(r.proto,r.proto === 'TCP' ? 'info' : 'ok')}</td><td>${esc(r.sub)}</td><td>${subscriber(r)}</td><td><button type="button" class="logs-record-button" data-details="${i}" aria-label="View record ${i + 1} details">${esc(r.action || 'Details')}${icon('chevron_right')}</button></td>${crmCell}</tr>`;
       }).join('');
       d.tableHTML = tableHTML; $('#logTable tbody').html(tableHTML);
     }
@@ -165,8 +167,8 @@
   }
   function details(index) {
     const r = c.result?.records[index]; if (!r) return;
-    const values = [['Timestamp · IST',[r.date,r.clock].join(' ')],['Device',r.sub],['Private endpoint',r.privIp ? r.privIp + ':' + r.privPort : 'Not reported'],['Public endpoint',r.pubIp ? r.pubIp + ':' + r.pubPort : 'Not reported'],['Destination',r.dest],['Protocol',r.proto],['Exporter subscriber',r.username || 'Not reported'],['Translation',r.untranslated ? 'Address unchanged' : r.pubIp ? 'Post-NAT address reported' : 'Not reported'],['Export type',r.action],['NAT event',r.natEvent === 1 ? 'Allocation' : r.natEvent === 2 ? 'Release' : 'Not reported'],['CRM status',r.crmStatus || 'Not enabled'],['CRM subscriber',r.crmName || r.crmUsername || 'Not resolved'],['CRM account',r.crmAccountId || '—'],['CRM phone',r.crmPhone || '—'],['CRM address',r.crmAddress || '—'],['CRM reference',r.crmReference || '—']];
-    c.kit.form({ title:'Flow record details', icon:'receipt_long', subtitle:'Reported fields for this record · times in IST', html:'<dl class="module-details">' + values.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v || '—')}</dd></div>`).join('') + '</dl>' });
+    const values = [['Timestamp · IST',timestamp(r)],['src_ip',r.privIp],['src_port',port(r.privIp,r.privPort)],['dst_ip',r.dstIp],['dst_port',port(r.dstIp,r.dstPort)],['nat_ip',r.pubIp],['nat_port',port(r.pubIp,r.pubPort)],['Device',r.sub],['Protocol',r.proto],['Exporter subscriber',r.username || 'Not reported'],['Translation',r.untranslated ? 'Address unchanged' : r.pubIp ? 'Post-NAT address reported' : 'Not reported'],['Export type',r.action],['NAT event',r.natEvent === 1 ? 'Allocation' : r.natEvent === 2 ? 'Release' : 'Not reported'],['CRM status',r.crmStatus || 'Not enabled'],['CRM subscriber',r.crmName || r.crmUsername || 'Not resolved'],['CRM account',r.crmAccountId || '—'],['CRM phone',r.crmPhone || '—'],['CRM address',r.crmAddress || '—'],['CRM reference',r.crmReference || '—']];
+    c.kit.form({ title:'Flow record details', icon:'receipt_long', subtitle:'Reported fields for this record · times in IST', html:'<dl class="module-details">' + values.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd>${esc(reported(v))}</dd></div>`).join('') + '</dl>' });
   }
   const field = (id, label, symbol, input, hint = '') => `<div class="isp-field"><label class="lbl" for="${id}">${icon(symbol)}<span>${label}</span></label>${input}<div class="hint">${hint}</div><div class="isp-field-error" id="${id}-error"></div></div>`;
   const input = (id, placeholder, type = 'text') => `<input id="${id}" class="inp ${type === 'text' ? 'mono' : ''}" type="${type}" placeholder="${placeholder}" autocomplete="off" aria-describedby="${id}-error">`;
