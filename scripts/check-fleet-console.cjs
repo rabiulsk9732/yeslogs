@@ -19,7 +19,7 @@ const {chromium}=require('../tests/e2e/node_modules/@playwright/test');
    await page.goto(origin+'/#/'+name);await page.locator('#app').waitFor({state:'visible'});
    if(name==='dashboard'){await page.locator('.dash-kpis .tile').first().waitFor();assert.equal(await page.locator('.dash-kpis .tile').count(),10)}
    else {await page.locator('.index-stats .tile').first().waitFor();await page.waitForFunction(()=>document.querySelector('.index-stats .l')?.textContent!=='Loading…');assert.equal(await page.locator('.index-stats .tile').count(),5)}
-   if(name==='logs')await page.locator('#logs-form').waitFor();
+   if(name==='logs')await page.locator('#logs-open-filters:enabled').waitFor();
    if(name==='users'){await page.locator('[data-action=create]:enabled').waitFor();await page.locator('[data-action=create]').click();await page.getByRole('dialog').waitFor();await page.getByRole('dialog').locator('[type=submit]').click();assert(await page.getByRole('dialog').locator('[aria-invalid=true]').count()>0);await page.keyboard.press('Escape')}
    if(name==='settings'){await page.locator('[data-section=dataplane]').waitFor();for(const section of ['dataplane','s3','notifications']){await page.locator('[data-section='+section+']').click();await page.getByRole('dialog').waitFor();if(section==='s3')assert.equal(await page.locator('[name=secretKey]').inputValue(),'');await page.keyboard.press('Escape')}}
    console.log(session.role+': '+name+' rendered');

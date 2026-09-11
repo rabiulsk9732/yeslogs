@@ -32,10 +32,10 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
   assert.equal(new URL(page.url()).hash,'#/isps');
   await page.reload();await page.waitForFunction(()=>document.querySelector('.index-stats .v')?.textContent==='12');
   assert.equal(await page.locator('#pageTitle').innerText(),'ISPs');
-  await page.locator('#menu .menua').filter({hasText:'Logs'}).click();await page.locator('#s-pub').waitFor();
-  await page.reload();await page.locator('#s-pub').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'Logs');
+  await page.locator('#menu .menua').filter({hasText:'Logs'}).click();await page.locator('#logs-open-filters:enabled').waitFor();
+  await page.reload();await page.locator('#logs-open-filters:enabled').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'Logs');
   await page.goBack();await page.locator('#isp-create').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'ISPs');
-  await page.goForward();await page.locator('#s-pub').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'Logs');
+  await page.goForward();await page.locator('#logs-open-filters:enabled').waitFor();assert.equal(await page.locator('#pageTitle').innerText(),'Logs');
   await page.locator('#menu .menua').filter({hasText:'ISPs'}).click();await page.waitForFunction(()=>document.querySelector('.index-stats .v')?.textContent==='12');
   assert.equal(await page.locator('.index-stats .tile').count(),5);
   for(const width of [1280,1440,1920]){await page.setViewportSize({width,height:1100});const rows=await page.locator('.index-stats .tile').evaluateAll(ns=>new Set(ns.map(n=>n.offsetTop)).size);assert.equal(rows,1,'Five cards occupy one desktop row')}

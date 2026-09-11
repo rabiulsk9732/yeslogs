@@ -9,6 +9,7 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
   for(const director of [true,false]){
    const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[],writes=[];
    let failDevices=false,failPolicies=false,healthMissing=false,failWrite=0,delayWrite=false,next=50;
+  let finishWrite;const pendingWrite=new Promise(resolve=>{finishWrite=resolve});
    const isps=[{ID:1,Name:'Alpha ISP with a long company name'},{ID:2,Name:'Beta ISP'}];
    const policies=[{ID:1,ISPID:0,Name:'Global keep',SkipDNS:false,SkipPrivate:false,SkipZero:false},{ID:2,ISPID:1,Name:'Alpha DNS',SkipDNS:true,SkipPrivate:false,SkipZero:false},{ID:3,ISPID:2,Name:'Beta zero',SkipDNS:false,SkipPrivate:false,SkipZero:true}];
    const items=Array.from({length:12},(_,n)=>({ID:n+1,ISPID:n<8?1:2,Name:`Router ${String(n+1).padStart(2,'0')}`,ExporterIP:`192.0.2.${n+1}`,DeviceID:n<8?n+1:n-7,Protocol:n%2?'auto':'ipfix',Profile:'generic',CapturePolicy:'',Enabled:n!==7,SkipDNS:false,SkipPrivate:false,SkipZero:false,UpdatedAt:'2026-09-08T08:00:00Z'}));
@@ -24,7 +25,7 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
     if(url.pathname.startsWith('/api/v1/devices')){
      if(method==='GET')return failDevices?reply(503,{error:'Devices temporarily unavailable'}):reply(200,{devices:items.filter(i=>director||i.ISPID===1),isDirector:director,...(director?{isps}:{}),...(healthMissing?{}:{health})});
      const b=r.request().postData()?r.request().postDataJSON():undefined,id=Number(url.pathname.split('/')[4]);writes.push({method,url:url.pathname,body:b,csrf:r.request().headers()['x-csrf-token']});
-     if(delayWrite)await new Promise(resolve=>setTimeout(resolve,150));
+     if(delayWrite)await pendingWrite;
      if(failWrite)return reply(failWrite,{error:failWrite===409?'Exporter IP already exists.':'Save result unavailable.'});
      if(method==='POST'&&!id){const i={...b,ID:next++,DeviceID:99,Enabled:true,UpdatedAt:new Date().toISOString()};items.push(i);health[i.ID]={status:'nodata'};return reply(200,i)}
      const at=items.findIndex(i=>i.ID===id);if(!director&&items[at]?.ISPID!==1)return reply(404,{error:'not found'});
@@ -65,7 +66,7 @@ const mime={'.js':'application/javascript','.css':'text/css','.html':'text/html'
    await page.locator('[name=CapturePolicy]').selectOption('');assert(await page.locator('[name=SkipPrivate]').isChecked());
    if(director){await page.locator('[name=CapturePolicy]').selectOption('Alpha DNS');await page.locator('[name=ISPID]').selectOption('2');options=await page.locator('[name=CapturePolicy] option').allTextContents();assert(!options.some(s=>s.includes('Alpha DNS')));assert(options.some(s=>s.includes('Beta zero')));assert.equal(await page.locator('[name=CapturePolicy]').inputValue(),'');await page.locator('[name=ISPID]').selectOption('1')}
    await page.locator('[name=ExporterIP]').fill('2001:0db8:0:0:0:0:0:50');failWrite=409;await submit();await page.getByText('Exporter IP already exists.',{exact:true}).waitFor();assert.equal(await page.locator('[name=Name]').inputValue(),'New exporter');assert(await page.locator('[name=Enabled]').isDisabled());
-   failWrite=0;delayWrite=true;await submit();await page.waitForFunction(()=>document.querySelector('.device-modal [type=submit]').disabled);await page.keyboard.press('Escape');assert(await page.locator('.device-modal').isVisible());await closed();await loaded();delayWrite=false;
+   failWrite=0;delayWrite=true;await submit();await page.locator('.device-modal [type=submit]:disabled').waitFor();await page.keyboard.press('Escape');assert(await page.locator('.device-modal').isVisible());finishWrite();await closed();await loaded();delayWrite=false;
    assert.equal(writes.at(-1).body.ExporterIP,'2001:db8::50');assert.equal(writes.at(-1).body.DeviceID,0);assert.equal(writes.at(-1).body.Enabled,true);assert(writes.every(w=>w.csrf==='test-csrf'));
    await page.locator('#device-search').fill('New exporter');await open(50,'view');await page.getByRole('dialog').getByText('2001:db8::50',{exact:true}).waitFor();await page.locator('#device-logs').click();await page.locator('#s-pub').waitFor();assert.equal(new URL(page.url()).hash,'#/logs');assert.equal(await page.locator('#s-dev').inputValue(),'99');if(director)assert.equal(await page.locator('#s-isp').inputValue(),'1');await page.goBack();await loaded();assert.equal(new URL(page.url()).hash,'#/devices');
    await page.locator('#device-search').fill('New exporter');await open(50,'toggle');const beforeToggle=writes.length;await page.keyboard.press('Escape');assert.equal(writes.length,beforeToggle);await open(50,'toggle');await submit();await closed();await loaded();assert.equal(items.find(i=>i.ID===50).Enabled,false);
