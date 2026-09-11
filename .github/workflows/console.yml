@@ -40,6 +40,8 @@ jobs:
         run: node scripts/check-policies.cjs "$RUNNER_TEMP/console"
       - name: Check remaining console modules
         run: node scripts/check-pages.cjs "$RUNNER_TEMP/console"
+      - name: Check populated log searches and error recovery
+        run: node scripts/check-logs.cjs "$RUNNER_TEMP/console"
       - name: Check Director and ISP dashboards
         run: node scripts/check-dashboard.cjs "$RUNNER_TEMP/console"
 

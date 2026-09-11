@@ -2273,9 +2273,24 @@
       } catch(e) {
         if (reqID !== S.logReq) return;
         if(e.status===401){showLogin();return}
+        S.lq.total = null; S.lq.elapsedMs = null; logStats();
         $('#s-results').html('<div class="card module-note">No new results loaded. Review the error and retry.</div>');
-        $('#s-msg').text(e.responseJSON?.error || 'Search connection failed or timed out.');
+        if (e instanceof Error) {
+          console.error('Flow log rendering failed', e);
+          $('#s-msg').text('Search returned data, but the log table could not be displayed. Refresh and retry.');
+        } else {
+          $('#s-msg').text(e.responseJSON?.error || 'Search connection failed or timed out.');
+        }
       }
+    }
+    function subCell(r) {
+      if (r.username) return '<b>' + esc(r.username) + '</b>';
+      if (r.crmUsername) return esc(r.crmUsername) + ' <span style="font-size:10.5px;color:var(--mut)">via CRM</span>';
+      return '<span style="color:var(--mut)">—</span>';
+    }
+    function natCell(r) {
+      if (!r.pubIp) return '<span style="color:var(--mut)" title="The exporter sent no post-NAT address for this flow">—</span>';
+      return esc(r.pubIp) + ':' + esc(r.pubPort);
     }
     function logQstr(body) { const p = new URLSearchParams(); if (body.PublicIP) p.set('ip', body.PublicIP); if (body.PrivateIP) p.set('priv', body.PrivateIP); if (body.DestIP) p.set('dst', body.DestIP); if (body.Username) p.set('user', body.Username); if (body.PublicPort) p.set('port', body.PublicPort); if (body.Proto && body.Proto !== 'Any') p.set('proto', body.Proto); if (body.DeviceID) p.set('device', body.DeviceID); if (body.ISPID) p.set('isp', body.ISPID); if (body.From) p.set('from', body.From); if (body.To) p.set('to', body.To); if (body.Reason) p.set('reason', body.Reason); p.set('csrf', S.csrf); return p.toString(); }
     function renderLogResults(rows, body) {
