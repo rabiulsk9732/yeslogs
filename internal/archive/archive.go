@@ -80,6 +80,26 @@ func (e *Exporter) exportDay(ctx context.Context, ispID uint32, day time.Time, f
 	rel := s3.ArchiveRel(ispID, day, ext)
 	url := e.s3.ObjectURL(rel)
 
+	// A previous upload may have completed before the DB marker was saved (for
+	// example, the process restarted between those two operations). ClickHouse's
+	// s3() sink correctly refuses to overwrite that object. Treat it as complete
+	// only after reading it back and proving its row count matches the current
+	// hot tenant/day; otherwise fail closed and retain the hot partition.
+	if size, statErr := e.s3.Stat(ctx, rel); statErr == nil {
+		var archived uint64
+		verify := fmt.Sprintf(`SELECT count() FROM s3('%s','%s','%s','%s')`,
+			chLit(url), chLit(e.s3.AccessKey()), chLit(e.s3.SecretKey()), chFormat)
+		if err := e.conn.QueryRow(ctx, verify).Scan(&archived); err != nil {
+			return Result{}, fmt.Errorf("verify existing s3 object: %w", err)
+		}
+		if archived != cu {
+			return Result{}, fmt.Errorf("existing s3 object row mismatch: hot=%d archived=%d (refusing overwrite/drop)", cu, archived)
+		}
+		key := e.s3.Key(rel)
+		e.log.Info("archive object already complete", "date", dateStr, "isp_id", ispID, "rows", count, "bytes", size, "key", key)
+		return Result{Rows: count, Bytes: size, Key: key}, nil
+	}
+
 	// ClickHouse streams the partition straight to S3 (no Go-side buffering /
 	// temp file) — scales to very large days. IPs as dotted strings, times as
 	// native DateTime. event_date/isp_id stay bound params; only server config

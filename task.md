@@ -23,7 +23,7 @@ This document is the single source of truth for the comprehensive YesLogs platfo
 | **2026-09-12 22:19** | **RADIUS / CRM** | Added authenticated native RADIUS Accounting listener/session cache and MikroTik RouterOS v7 User Manager connector. | ✅ **COMPLETED** |
 | **2026-09-12 22:20** | **Security** | Added TOTP authentication, Director/ISP SuperAdmin/Analyst/Auditor RBAC, and SHA-256 chained query audit evidence. | ✅ **COMPLETED** |
 | **2026-09-12 22:21** | **SRE / HA** | Validated remote managed collectors and enhanced the provisionable Grafana NOC dashboard with kernel-drop, clock, and disk panels. | ✅ **COMPLETED** |
-| **2026-09-12 22:45** | **Vikas requests** | Added second-granularity export windows, ClickHouse crash/stall alerts, previous-day email summaries, ISPmate console branding, and S3 log-copy controls. | ✅ **COMPLETED** |
+| **2026-09-12 22:45** | **Vikas requests** | Added second-granularity export windows, ClickHouse crash/stall alerts, previous-day email summaries, ISPmate console branding, and idempotent verified S3 log-copy controls. | ✅ **COMPLETED** |
 
 ---
 
