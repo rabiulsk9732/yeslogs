@@ -29,11 +29,10 @@ clickhouse:
   writer_workers: 2
   max_queue_rows: 200000
 
-  # Durability. A batch ClickHouse will not accept is written here and replayed
-  # when it recovers, instead of being dropped. Leaving this empty restores the
-  # old behaviour, which cost this fleet eight days of records on 2026-08-01
-  # (broken parts blocked flow_logs from loading; every batch was discarded for
-  # eight days) and about 28.6M records on 2026-08-26.
+  # Batch write-ahead log. Every flushed batch is fsynced here before its first
+  # ClickHouse attempt, removed only after a durable database acknowledgement,
+  # and replayed after an outage or process restart. Leaving this empty disables
+  # crash protection for in-flight/failed batches.
   spool_dir: "/var/lib/natlog/spool"
   spool_max_gb: 20
 

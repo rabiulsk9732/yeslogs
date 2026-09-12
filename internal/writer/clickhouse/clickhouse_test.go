@@ -101,19 +101,23 @@ func TestBackpressureDropOld(t *testing.T) {
 // Reload-style pool swaps (pool.Store) so `go test -race` validates the atomic
 // pool pointer. Pools are not started (no ClickHouse connection needed).
 func TestInsertSettings(t *testing.T) {
-	if s := insertSettings(&config.Live{AsyncInsert: false}); s != nil {
+	if s := insertSettings(&config.Live{AsyncInsert: false}, ""); s != nil {
 		t.Errorf("async off should yield nil settings, got %v", s)
 	}
-	s := insertSettings(&config.Live{AsyncInsert: true, WaitForAsyncInsert: true})
+	s := insertSettings(&config.Live{AsyncInsert: true, WaitForAsyncInsert: true}, "")
 	if s["async_insert"] != 1 || s["wait_for_async_insert"] != 1 {
 		t.Errorf("async+wait settings wrong: %v", s)
 	}
-	s = insertSettings(&config.Live{AsyncInsert: true, WaitForAsyncInsert: false, AsyncInsertBusyTimeoutMS: 200})
+	s = insertSettings(&config.Live{AsyncInsert: true, WaitForAsyncInsert: false, AsyncInsertBusyTimeoutMS: 200}, "")
 	if s["wait_for_async_insert"] != 0 {
 		t.Errorf("fire-and-forget should set wait=0, got %v", s["wait_for_async_insert"])
 	}
 	if s["async_insert_busy_timeout_ms"] != 200 {
 		t.Errorf("busy timeout not set: %v", s["async_insert_busy_timeout_ms"])
+	}
+	s = insertSettings(&config.Live{}, "00000000000000000042.spool")
+	if got := s["insert_deduplication_token"]; got != "00000000000000000042.spool" {
+		t.Errorf("WAL deduplication token = %v", got)
 	}
 }
 
@@ -126,6 +130,66 @@ func TestCompressionMethod(t *testing.T) {
 	}
 	if compressionMethod("") != clickhouse.CompressionLZ4 {
 		t.Error("default lz4")
+	}
+}
+
+func TestManagerStartsWALFirstWhenClickHouseIsDown(t *testing.T) {
+	ch := config.ClickHouseConfig{
+		Addr:          "127.0.0.1:1", // closed local port: deterministic refusal
+		Database:      "natlogs",
+		WriterWorkers: 1,
+		BatchSize:     1,
+		MaxQueueRows:  10,
+		SpoolDir:      t.TempDir(),
+		SpoolMaxGB:    1,
+	}
+	live := config.NewStore(config.Live{
+		BatchSize:          1,
+		FlushInterval:      10 * time.Millisecond,
+		RetryMaxAttempts:   1,
+		RetryBackoff:       time.Millisecond,
+		Backpressure:       config.Block,
+		WaitForAsyncInsert: true,
+	})
+	mgr, err := NewManager(ch, live, metrics.New(), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("WAL-enabled manager refused to start during ClickHouse outage: %v", err)
+	}
+	if !mgr.Enqueue(rec("192.0.2.10", 7)) {
+		t.Fatal("flow was not accepted in WAL-first mode")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, got, ok, replayErr := mgr.spool.Oldest()
+		if replayErr != nil {
+			t.Fatal(replayErr)
+		}
+		if ok {
+			if len(got) != 1 || got[0].DeviceID != 7 {
+				t.Fatalf("WAL-first batch changed: %+v", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("flow was not released to WAL replay after ClickHouse refusal")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mgr.Stop()
+}
+
+func TestManagerStillFailsClosedWithoutWALWhenClickHouseIsDown(t *testing.T) {
+	ch := config.ClickHouseConfig{
+		Addr:          "127.0.0.1:1",
+		Database:      "natlogs",
+		WriterWorkers: 1,
+		BatchSize:     1,
+		MaxQueueRows:  10,
+	}
+	live := config.NewStore(config.Live{BatchSize: 1, Backpressure: config.Block, WaitForAsyncInsert: true})
+	if mgr, err := NewManager(ch, live, metrics.New(), slog.New(slog.NewJSONHandler(io.Discard, nil))); err == nil {
+		mgr.Stop()
+		t.Fatal("manager started without either ClickHouse or a WAL")
 	}
 }
 

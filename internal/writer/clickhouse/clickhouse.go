@@ -77,6 +77,9 @@ func (e *appendError) Unwrap() error { return e.err }
 // stable Enqueue across pool rebuilds.
 type Manager struct {
 	conn            driver.Conn
+	connMu          sync.RWMutex
+	connectMu       sync.Mutex
+	ch              config.ClickHouseConfig
 	live            *config.Store
 	metrics         *metrics.Metrics
 	log             *slog.Logger
@@ -94,8 +97,8 @@ type Manager struct {
 	aggStop  chan struct{}
 	aggWG    sync.WaitGroup
 
-	// spool holds batches ClickHouse would not accept, so an outage costs time
-	// rather than evidence. nil restores the old drop-on-failure behaviour.
+	// spool is the pre-insert batch WAL. nil restores the old unprotected
+	// send/retry/drop behaviour.
 	spool     *spool.Spool
 	replayWG  sync.WaitGroup
 	replayEnd chan struct{}
@@ -159,16 +162,12 @@ func Connect(ch config.ClickHouseConfig) (driver.Conn, error) {
 	return conn, nil
 }
 
-// NewManager connects to ClickHouse (verifying with a ping) and starts the
-// initial writer pool with the configured worker count and queue capacity.
+// NewManager prepares the WAL and starts the writer pool. It connects to
+// ClickHouse eagerly when possible; with a configured WAL it can start in
+// WAL-first mode and reconnect lazily instead of refusing UDP traffic.
 func NewManager(ch config.ClickHouseConfig, live *config.Store, m *metrics.Metrics, log *slog.Logger) (*Manager, error) {
-	conn, err := Connect(ch)
-	if err != nil {
-		return nil, err
-	}
-
 	mgr := &Manager{
-		conn:            conn,
+		ch:              ch,
 		live:            live,
 		metrics:         m,
 		log:             log.With("component", "clickhouse"),
@@ -176,24 +175,12 @@ func NewManager(ch config.ClickHouseConfig, live *config.Store, m *metrics.Metri
 		shutdownTimeout: ch.ShutdownDrain(),
 		aggStop:         make(chan struct{}),
 	}
-	// Schema first: the insert statement below names columns that an older table
-	// does not have yet, and every insert would fail until it does.
-	for _, stmt := range schemaDDL {
-		sctx, scancel := context.WithTimeout(context.Background(), 60*time.Second)
-		derr := conn.Exec(sctx, fmt.Sprintf(stmt, ch.Database))
-		scancel()
-		if derr != nil {
-			conn.Close()
-			return nil, fmt.Errorf("flow_logs schema: %w", derr)
-		}
-	}
 	if dir, maxBytes := ch.Spool(); dir != "" {
 		sp, serr := spool.New(dir, maxBytes)
 		if serr != nil {
 			// Refuse to start rather than run without the durability the operator
 			// configured. A collector that silently falls back to dropping batches
 			// is how eight days went missing in the first place.
-			conn.Close()
 			return nil, fmt.Errorf("spool: %w", serr)
 		}
 		mgr.spool = sp
@@ -201,7 +188,16 @@ func NewManager(ch config.ClickHouseConfig, live *config.Store, m *metrics.Metri
 			mgr.log.Warn("spool holds batches from a previous run; replaying", "files", files, "bytes", bytes, "dir", dir)
 		}
 	} else {
-		mgr.log.Warn("clickhouse.spool_dir is not set: a batch ClickHouse cannot accept will be DROPPED and the records lost permanently")
+		mgr.log.Warn("clickhouse.spool_dir is not set: batches are not write-ahead protected and failed inserts will be lost permanently")
+	}
+	if _, err := mgr.connection(); err != nil {
+		if mgr.spool == nil {
+			return nil, err
+		}
+		// WAL-first startup matters when ClickHouse itself is the reason natlog
+		// was restarted. Writer attempts and replay will reconnect automatically;
+		// refusing to bind UDP here would discard every packet in the meantime.
+		mgr.log.Error("ClickHouse unavailable at startup; collector continuing in WAL-first mode", "error", err)
 	}
 	p := newPool(mgr, ch.WriterWorkers, ch.MaxQueueRows)
 	p.start()
@@ -214,6 +210,48 @@ func NewManager(ch config.ClickHouseConfig, live *config.Store, m *metrics.Metri
 		go mgr.replay()
 	}
 	return mgr, nil
+}
+
+// connection returns a schema-ready ClickHouse connection, creating it on
+// demand when startup happened in WAL-first mode. connectMu prevents every
+// writer shard from opening its own replacement during an outage.
+func (m *Manager) connection() (driver.Conn, error) {
+	m.connMu.RLock()
+	conn := m.conn
+	m.connMu.RUnlock()
+	if conn != nil {
+		return conn, nil
+	}
+
+	m.connectMu.Lock()
+	defer m.connectMu.Unlock()
+	m.connMu.RLock()
+	conn = m.conn
+	m.connMu.RUnlock()
+	if conn != nil {
+		return conn, nil
+	}
+
+	conn, err := Connect(m.ch)
+	if err != nil {
+		return nil, err
+	}
+	// Schema first: the insert statement names columns that an older table does
+	// not have yet, and every insert would fail until it does.
+	for _, stmt := range schemaDDL {
+		sctx, scancel := context.WithTimeout(context.Background(), 60*time.Second)
+		derr := conn.Exec(sctx, fmt.Sprintf(stmt, m.ch.Database))
+		scancel()
+		if derr != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("flow_logs schema: %w", derr)
+		}
+	}
+	m.connMu.Lock()
+	m.conn = conn
+	m.connMu.Unlock()
+	m.log.Info("ClickHouse connection ready", "addr", m.ch.Addr)
+	return conn, nil
 }
 
 // replayEvery paces spool drains. Short enough that a brief outage clears almost
@@ -251,19 +289,45 @@ func (mgr *Manager) replay() {
 				// Undecodable: quarantine so it cannot block everything behind it.
 				if name != "" {
 					mgr.log.Error("spool batch unreadable; quarantining", "file", name, "error", err)
-					_ = mgr.spool.Quarantine(name)
+					if qerr := mgr.spool.Quarantine(name); qerr != nil {
+						mgr.log.Error("unreadable spool batch could not be quarantined", "file", name, "error", qerr)
+					}
 				}
 				break
 			}
 			if !ok {
 				break
 			}
-			if ierr := mgr.insertBatch(batch); ierr != nil {
+			dedupToken := mgr.spool.DedupToken(name)
+			if ierr := mgr.insertBatch(batch, dedupToken); ierr != nil {
+				var ae *appendError
+				if errors.As(ierr, &ae) {
+					result := mgr.pool.Load().shards[0].salvage(batch, dedupToken)
+					if result.dropped == 0 {
+						delete(fails, name)
+						mgr.metrics.SpoolReplayed.Add(float64(result.kept))
+						if result.rejected > 0 {
+							mgr.log.Error("spool batch contains rows ClickHouse cannot encode; quarantining after salvage",
+								"file", name, "kept", result.kept, "rejected", result.rejected)
+							if qerr := mgr.spool.Quarantine(name); qerr != nil {
+								mgr.log.Error("could not quarantine rejected spool batch", "file", name, "error", qerr)
+								break
+							}
+						} else if derr := mgr.spool.Done(name); derr != nil {
+							mgr.log.Error("salvaged spool file inserted but not removed; it may be replayed again", "file", name, "error", derr)
+							break
+						}
+						continue
+					}
+				}
 				fails[name]++
 				if fails[name] >= replayMaxAttempts {
 					mgr.log.Error("spool batch refused repeatedly; quarantining so replay can continue",
 						"file", name, "rows", len(batch), "attempts", fails[name], "error", ierr)
-					_ = mgr.spool.Quarantine(name)
+					if qerr := mgr.spool.Quarantine(name); qerr != nil {
+						mgr.log.Error("spool batch could not be quarantined", "file", name, "error", qerr)
+						break
+					}
 					delete(fails, name)
 					continue
 				}
@@ -277,6 +341,7 @@ func (mgr *Manager) replay() {
 				// Left on disk after a successful insert: replaying it again would
 				// duplicate rows. Delivery is at-least-once by design, but say so.
 				mgr.log.Error("spool file inserted but not removed; it may be replayed again", "file", name, "error", derr)
+				break
 			}
 			select {
 			case <-mgr.replayEnd:
@@ -289,7 +354,7 @@ func (mgr *Manager) replay() {
 
 // insertBatch writes one batch directly, bypassing the shard queues. Used by
 // replay so recovered records do not compete with live ingest for queue space.
-func (mgr *Manager) insertBatch(batch []normalizer.FlowRecord) error {
+func (mgr *Manager) insertBatch(batch []normalizer.FlowRecord, token string) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -297,7 +362,7 @@ func (mgr *Manager) insertBatch(batch []normalizer.FlowRecord) error {
 	if p == nil || len(p.shards) == 0 {
 		return fmt.Errorf("no writer pool")
 	}
-	return p.shards[0].send(batch)
+	return p.shards[0].send(batch, token)
 }
 
 // Enqueue submits rec to its shard, returning false if it was dropped.
@@ -357,7 +422,13 @@ func (mgr *Manager) Stop() {
 				"files", files, "bytes", bytes, "dir", mgr.spool.Dir())
 		}
 	}
-	_ = mgr.conn.Close()
+	mgr.connMu.Lock()
+	conn := mgr.conn
+	mgr.conn = nil
+	mgr.connMu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 // aggregate periodically publishes the aggregate queue depth.
@@ -568,18 +639,50 @@ func (s *shard) flush(batch []normalizer.FlowRecord) {
 		attempts = 1
 	}
 	start := time.Now()
+	walName := ""
+	walToken := ""
+	if s.mgr.spool != nil {
+		var werr error
+		walName, werr = s.mgr.spool.Begin(batch)
+		if werr == nil {
+			s.mgr.metrics.SpoolSaved.Add(float64(len(batch)))
+			walToken = s.mgr.spool.DedupToken(walName)
+		} else if werr == spool.ErrFull {
+			if s.mgr.spool.MarkFull() {
+				files, bytes, _ := s.mgr.spool.Stats()
+				s.mgr.log.Error("WRITE-AHEAD LOG FULL — attempting ClickHouse without crash protection",
+					"dir", s.mgr.spool.Dir(), "files", files, "bytes", bytes)
+			}
+		} else {
+			s.mgr.log.Error("write-ahead log failed; attempting ClickHouse without crash protection",
+				"worker", s.id, "rows", len(batch), "error", werr)
+		}
+	}
 	var err error
 	for a := 1; a <= attempts; a++ {
-		if err = s.send(batch); err == nil {
+		if err = s.send(batch, walToken); err == nil {
 			s.mgr.metrics.WriterInsertLatency.Observe(float64(time.Since(start).Milliseconds()))
 			s.mgr.metrics.WriterBatches.Inc()
 			s.mgr.metrics.WriterBatchRows.Add(float64(len(batch)))
 			s.mgr.metrics.FlowsInserted.Add(float64(len(batch)))
+			if walName != "" {
+				if derr := s.mgr.spool.Done(walName); derr != nil {
+					// The active WAL is deliberately retained. A restart may replay
+					// it, but deleting evidence without a durable unlink would be worse.
+					s.mgr.log.Error("insert succeeded but active WAL could not be removed; restart may replay it",
+						"worker", s.id, "file", walName, "error", derr)
+				}
+			}
 			return
 		}
 		var ae *appendError
 		if errors.As(err, &ae) {
-			s.salvage(batch)
+			result := s.salvage(batch, walToken)
+			if walName != "" {
+				s.finishSalvageWAL(walName, result)
+			} else if result.dropped > 0 {
+				s.mgr.metrics.FlowsDropped.Add(float64(result.dropped))
+			}
 			return
 		}
 		s.mgr.metrics.WriterRetries.Inc()
@@ -590,12 +693,26 @@ func (s *shard) flush(batch []normalizer.FlowRecord) {
 		}
 	}
 	s.mgr.metrics.InsertErrors.Inc()
-	// Retries are exhausted, but the records are still here and still valid. They
-	// go to disk; losing them is the last resort, not the first.
+	// Retries are exhausted. A normal write-ahead batch is already durable and
+	// only needs to be released to replay; Save remains as a fallback when the
+	// pre-insert WAL write itself failed.
 	if s.mgr.spool != nil {
+		if walName != "" {
+			if rerr := s.mgr.spool.Ready(walName); rerr == nil {
+				s.mgr.log.Warn("clickhouse refused the write-ahead batch; released it for replay",
+					"worker", s.id, "file", walName, "rows", len(batch), "error", err)
+				return
+			} else {
+				// It remains as .active and New will adopt it after a restart. It is
+				// not counted as lost, but live replay cannot see it yet.
+				s.mgr.log.Error("write-ahead batch is durable but could not be released for live replay",
+					"worker", s.id, "file", walName, "rows", len(batch), "error", rerr)
+				return
+			}
+		}
 		if serr := s.mgr.spool.Save(batch); serr == nil {
 			s.mgr.metrics.SpoolSaved.Add(float64(len(batch)))
-			s.mgr.log.Warn("clickhouse refused the batch; spooled to disk for replay",
+			s.mgr.log.Warn("clickhouse refused the batch; fallback spool write succeeded",
 				"worker", s.id, "rows", len(batch), "error", err)
 			return
 		} else if serr == spool.ErrFull {
@@ -614,62 +731,102 @@ func (s *shard) flush(batch []normalizer.FlowRecord) {
 		"worker", s.id, "rows", len(batch), "error", err)
 }
 
+type salvageResult struct {
+	kept     int
+	rejected int
+	dropped  int
+}
+
 // salvage re-inserts a rejected batch one row at a time, keeping the good rows.
-func (s *shard) salvage(batch []normalizer.FlowRecord) {
-	kept, rejected, dropped := 0, 0, 0
+func (s *shard) salvage(batch []normalizer.FlowRecord, tokenBase string) salvageResult {
+	result := salvageResult{}
 	for i := range batch {
-		err := s.send(batch[i : i+1])
+		token := ""
+		if tokenBase != "" {
+			token = tokenBase + ":" + strconv.Itoa(i)
+		}
+		err := s.send(batch[i:i+1], token)
 		if err == nil {
-			kept++
+			result.kept++
 			continue
 		}
 		var ae *appendError
 		if errors.As(err, &ae) {
-			rejected++ // genuine per-row rejection (bad/incompatible data)
+			result.rejected++ // genuine per-row rejection (bad/incompatible data)
 		} else {
-			dropped++ // transient prepare/send failure, not a rejection
+			result.dropped++ // transient prepare/send failure, not a rejection
 		}
 	}
-	if kept > 0 {
-		s.mgr.metrics.FlowsInserted.Add(float64(kept))
-		s.mgr.metrics.WriterBatchRows.Add(float64(kept))
+	if result.kept > 0 {
+		s.mgr.metrics.FlowsInserted.Add(float64(result.kept))
+		s.mgr.metrics.WriterBatchRows.Add(float64(result.kept))
 	}
-	if rejected > 0 {
-		s.mgr.metrics.FlowsRejected.Add(float64(rejected))
+	if result.rejected > 0 {
+		s.mgr.metrics.FlowsRejected.Add(float64(result.rejected))
 	}
-	if dropped > 0 {
-		s.mgr.metrics.FlowsDropped.Add(float64(dropped))
+	if result.rejected+result.dropped > 0 {
+		s.mgr.log.Error("salvage incomplete", "worker", s.id, "kept", result.kept, "rejected", result.rejected, "transient", result.dropped)
 	}
-	if rejected+dropped > 0 {
-		s.mgr.log.Error("salvage incomplete", "worker", s.id, "kept", kept, "rejected", rejected, "dropped", dropped)
+	return result
+}
+
+func (s *shard) finishSalvageWAL(name string, result salvageResult) {
+	switch {
+	case result.dropped > 0:
+		// Some rows hit a transient send failure. Release the original batch;
+		// stable per-row tokens make subsequent salvage retries idempotent on a
+		// ReplicatedMergeTree within ClickHouse's deduplication window.
+		if err := s.mgr.spool.Ready(name); err != nil {
+			s.mgr.log.Error("salvage WAL could not be released for replay", "file", name, "error", err)
+		}
+	case result.rejected > 0:
+		// Good rows landed, while permanently invalid rows remain available as
+		// evidence without blocking every later WAL batch.
+		if err := s.mgr.spool.Quarantine(name); err != nil {
+			s.mgr.log.Error("salvage WAL could not be quarantined", "file", name, "error", err)
+		}
+	default:
+		if err := s.mgr.spool.Done(name); err != nil {
+			s.mgr.log.Error("salvaged WAL could not be removed", "file", name, "error", err)
+		}
 	}
 }
 
 // insertSettings returns the per-INSERT ClickHouse settings for async inserts,
 // or nil when async inserts are disabled.
-func insertSettings(live *config.Live) clickhouse.Settings {
-	if !live.AsyncInsert {
-		return nil
+func insertSettings(live *config.Live, dedupToken string) clickhouse.Settings {
+	var settings clickhouse.Settings
+	if live.AsyncInsert {
+		settings = clickhouse.Settings{"async_insert": 1}
+		if live.WaitForAsyncInsert {
+			settings["wait_for_async_insert"] = 1
+		} else {
+			settings["wait_for_async_insert"] = 0
+		}
+		if live.AsyncInsertBusyTimeoutMS > 0 {
+			settings["async_insert_busy_timeout_ms"] = live.AsyncInsertBusyTimeoutMS
+		}
 	}
-	s := clickhouse.Settings{"async_insert": 1}
-	if live.WaitForAsyncInsert {
-		s["wait_for_async_insert"] = 1
-	} else {
-		s["wait_for_async_insert"] = 0
+	if dedupToken != "" {
+		if settings == nil {
+			settings = clickhouse.Settings{}
+		}
+		settings["insert_deduplication_token"] = dedupToken
 	}
-	if live.AsyncInsertBusyTimeoutMS > 0 {
-		s["async_insert_busy_timeout_ms"] = live.AsyncInsertBusyTimeoutMS
-	}
-	return s
+	return settings
 }
 
-func (s *shard) send(batch []normalizer.FlowRecord) error {
+func (s *shard) send(batch []normalizer.FlowRecord, dedupToken string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 	defer cancel()
-	if set := insertSettings(s.mgr.live.Load()); set != nil {
+	if set := insertSettings(s.mgr.live.Load(), dedupToken); set != nil {
 		ctx = clickhouse.Context(ctx, clickhouse.WithSettings(set))
 	}
-	b, err := s.mgr.conn.PrepareBatch(ctx, s.mgr.insert)
+	conn, err := s.mgr.connection()
+	if err != nil {
+		return fmt.Errorf("connect clickhouse: %w", err)
+	}
+	b, err := conn.PrepareBatch(ctx, s.mgr.insert)
 	if err != nil {
 		return fmt.Errorf("prepare batch: %w", err)
 	}

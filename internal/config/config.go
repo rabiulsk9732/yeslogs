@@ -110,10 +110,10 @@ type ClickHouseConfig struct {
 	WaitForAsyncInsert       *bool  `yaml:"wait_for_async_insert"` // nil => true (durable); false => fire-and-forget
 	AsyncInsertBusyTimeoutMS int    `yaml:"async_insert_busy_timeout_ms"`
 
-	// Durability. A batch ClickHouse cannot accept is written here instead of
-	// being dropped, and replayed when it recovers. Empty disables spooling and
-	// restores the old behaviour of losing the batch — which cost this fleet
-	// eight days of records on 2026-08-01 and three hours on 2026-08-26.
+	// Durability. Every flushed batch is fsynced here before its first ClickHouse
+	// attempt, removed only after a durable acknowledgement, and replayed after a
+	// failure or process restart. Empty disables the write-ahead log and restores
+	// the old behaviour of losing failed/in-flight batches.
 	SpoolDir   string `yaml:"spool_dir"`    // "" = disabled; recommended /var/lib/natlog/spool
 	SpoolMaxGB int    `yaml:"spool_max_gb"` // 0 = default 20 GB
 }
@@ -464,6 +464,9 @@ func (c *Config) validate() error {
 	default:
 		// gzip is HTTP-only; the native protocol supports lz4/lz4hc/zstd/none.
 		return fmt.Errorf("clickhouse.compression %q must be lz4|lz4hc|zstd|none", c.ClickHouse.Compression)
+	}
+	if c.ClickHouse.SpoolDir != "" && c.ClickHouse.AsyncInsert && c.ClickHouse.WaitForAsyncInsert != nil && !*c.ClickHouse.WaitForAsyncInsert {
+		return fmt.Errorf("clickhouse.wait_for_async_insert must be true when spool_dir enables the write-ahead log")
 	}
 	if _, err := ParseBackpressure(c.Pipeline.BackpressureMode); err != nil {
 		return err

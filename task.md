@@ -24,6 +24,7 @@ This document is the single source of truth for the comprehensive YesLogs platfo
 | **2026-09-12 22:20** | **Security** | Added TOTP authentication, Director/ISP SuperAdmin/Analyst/Auditor RBAC, and SHA-256 chained query audit evidence. | ✅ **COMPLETED** |
 | **2026-09-12 22:21** | **SRE / HA** | Validated remote managed collectors and enhanced the provisionable Grafana NOC dashboard with kernel-drop, clock, and disk panels. | ✅ **COMPLETED** |
 | **2026-09-12 22:45** | **Vikas requests** | Added second-granularity export windows, ClickHouse crash/stall alerts, previous-day email summaries, ISPmate console branding, and idempotent verified S3 log-copy controls. | ✅ **COMPLETED** |
+| **2026-09-12 23:38** | **Dataplane Durability** | Promoted the failure-only spool into a pre-insert batch WAL with payload checksums, file/directory fsync, atomic crash adoption, fleet-unique ClickHouse deduplication tokens, WAL-first startup, and a non-fatal ClickHouse systemd dependency. | ✅ **COMPLETED** |
 
 ---
 
@@ -36,6 +37,7 @@ This document is the single source of truth for the comprehensive YesLogs platfo
 - [x] **1.3** Syslog NAT Parser (UDP/TCP 514) for Fortinet FortiGate, Sophos, and Cisco ASA firewalls.
 - [x] **1.4** IPv6 & Dual-Stack support in ClickHouse schema and decoders (NAT64 / DS-Lite).
 - [x] **1.5** NetFlow v5 misconfiguration detector (alerts if router sends v5 without NAT fields).
+- [x] **1.6** Crash-safe pre-insert batch WAL with checksummed recovery and stable replay deduplication tokens.
 
 ### 2. Time Keeping & Legal Evidence Integrity
 - [x] **2.1** Collector NTP Drift Guard: automated startup and periodic clock sync verification (alert if skew > 500ms).

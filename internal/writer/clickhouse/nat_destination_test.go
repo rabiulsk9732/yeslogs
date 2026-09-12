@@ -44,7 +44,7 @@ func TestWriterPersistsPostNATDestinationAndLegacyDefaults(t *testing.T) {
 		NatPublicIP: net.ParseIP("57.144.140.3"), NatPublicPort: 443,
 		NatDestIP: net.ParseIP("10.0.102.12"), NatDestPort: 42286,
 	}, {NatPublicIP: net.ParseIP("203.0.113.1"), NatPublicPort: 1234}}
-	if err := (&shard{mgr: mgr}).send(rows); err != nil {
+	if err := (&shard{mgr: mgr}).send(rows, ""); err != nil {
 		t.Fatal(err)
 	}
 	columns := strings.Split(strings.TrimSuffix(strings.SplitN(conn.query, "(", 2)[1], ")"), ",")

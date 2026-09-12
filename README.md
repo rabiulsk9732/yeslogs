@@ -218,7 +218,7 @@ ClickHouse insert is the bottleneck — add ClickHouse resources or raise
 | `clickhouse.compression` | restart | `lz4` (default) / `lz4hc` / `zstd` / `none`. `none` trades network for CPU (use on loopback/LAN). |
 | `clickhouse.max_open_conns` | restart | Cap concurrent ClickHouse connections (0 = auto). |
 | `clickhouse.async_insert` | hot | Use ClickHouse server-side async inserts (per-INSERT setting). |
-| `clickhouse.wait_for_async_insert` | hot | `true` durable ack; `false` fire-and-forget (fastest, weaker durability). |
+| `clickhouse.wait_for_async_insert` | hot | `true` durable ack; `false` fire-and-forget (not allowed when the WAL is enabled). |
 
 Throughput is dominated by ClickHouse merge/CPU, not client batching — the
 native batch path already sends large blocks, so the biggest wins are dedicated
@@ -580,14 +580,32 @@ captures.
 Inserts are **at-least-once**. The writer batches flows and retries transient
 ClickHouse failures; if a batch's acknowledgement is lost *after* the server
 already committed it (e.g. a timeout while reading the response), the retry can
-create duplicate rows. The default `MergeTree` does not deduplicate, so exact
-byte/packet/flow counts are not guaranteed under failure.
+create duplicate rows. With `clickhouse.spool_dir` configured, each flushed
+batch is a compact binary write-ahead file: payload checksum, file `fsync`,
+atomic rename and directory `fsync` all complete **before** the first database
+attempt. A successful durable ClickHouse acknowledgement removes it; exhausted
+retries release it to the background replay loop. If natlog dies between send
+and acknowledgement, the next process adopts the active file and replays it.
+
+The WAL filename, namespaced by a persistent per-collector random identity, is
+also sent as `insert_deduplication_token`. A `Replicated*MergeTree` can therefore
+suppress the common commit-then-crash replay within its deduplication window
+without colliding with the same sequence number from another collector. Plain
+`MergeTree` does not deduplicate, so exact byte/packet/flow counts are still not
+guaranteed under failure. WAL plus async inserts requires
+`wait_for_async_insert: true`; fire-and-forget acknowledgements cannot safely
+decide when a WAL file may be removed.
+
+The queue and the not-yet-flushed partial writer batches remain in memory. The
+batch WAL closes the ClickHouse send/ack crash window; a durable ingress broker
+or a future per-packet journal is still required to claim zero loss across an
+arbitrary kill at every point in the UDP pipeline.
 
 To get idempotent inserts, run a `Replicated*MergeTree` (native insert-block
 deduplication) or use `ReplacingMergeTree` keyed on a stable row identity and
 query with `FINAL`. See `migrations/clickhouse.sql`.
 
-On shutdown the writer drains the queue into ClickHouse for up to
+On shutdown the writer drains the queue into ClickHouse/WAL for up to
 `clickhouse.shutdown_drain_ms` (default 15s); anything still buffered after that
 is dropped and counted under `flows_dropped_total` so the process always exits
 promptly (the systemd unit sets `TimeoutStopSec=30` to match). A single row that

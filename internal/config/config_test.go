@@ -49,6 +49,14 @@ func TestTuningDefaultsAndValidation(t *testing.T) {
 	if err := bad.validate(); err == nil {
 		t.Error("want error for invalid compression")
 	}
+
+	unsafeWAL := base()
+	unsafeWAL.ClickHouse.SpoolDir = "/var/lib/natlog/spool"
+	unsafeWAL.ClickHouse.AsyncInsert = true
+	unsafeWAL.ClickHouse.WaitForAsyncInsert = &f
+	if err := unsafeWAL.validate(); err == nil {
+		t.Error("want error for fire-and-forget async inserts with WAL enabled")
+	}
 }
 
 func TestQueueCapacityLegacyAlias(t *testing.T) {

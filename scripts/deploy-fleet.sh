@@ -16,6 +16,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 GO="${GO:-/usr/local/go/bin/go}"
 CONF="${FLEET_CONF:-/etc/natlog/fleet.conf}"
+UNIT="$REPO/deploy/systemd/natlog.service"
 
 if [[ -z "${BIN:-}" ]]; then
     echo "==> building natlog from $(git -C "$REPO" rev-parse --short HEAD)"
@@ -23,10 +24,13 @@ if [[ -z "${BIN:-}" ]]; then
     BIN="$REPO/bin/natlog"
 fi
 HASH=$(sha256sum "$BIN" | cut -c1-12)
-echo "==> deploying $BIN ($HASH)"
+UNIT_HASH=$(sha256sum "$UNIT" | cut -c1-12)
+echo "==> deploying $BIN ($HASH), natlog.service ($UNIT_HASH)"
 
 deploy_local() {
     install -m0755 "$BIN" /usr/local/bin/natlog
+    install -m0644 "$UNIT" /etc/systemd/system/natlog.service
+    systemctl daemon-reload
     systemctl restart natlog
 }
 
@@ -36,10 +40,11 @@ deploy_remote() {
     local target="${pre[-1]}"
     local -a opts=("${pre[@]:1:${#pre[@]}-2}")   # drop leading "ssh" + trailing target
     scp "${opts[@]/#-p/-P}" "$BIN" "$target:/tmp/natlog.new"
+    scp "${opts[@]/#-p/-P}" "$UNIT" "$target:/tmp/natlog.service.new"
     # No sudo: fleet.conf targets are root. A sudo here would silently prompt and
     # hang a non-interactive deploy.
     ssh "${opts[@]}" "$target" \
-        "install -m0755 /tmp/natlog.new /usr/local/bin/natlog && systemctl restart natlog && rm -f /tmp/natlog.new" </dev/null
+        "install -m0755 /tmp/natlog.new /usr/local/bin/natlog && install -m0644 /tmp/natlog.service.new /etc/systemd/system/natlog.service && systemctl daemon-reload && systemctl restart natlog && rm -f /tmp/natlog.new /tmp/natlog.service.new" </dev/null
 }
 
 verify() {
@@ -47,14 +52,14 @@ verify() {
     local -a pre=("$@")
     local got
     if [[ ${#pre[@]} -eq 0 ]]; then
-        got=$( { systemctl is-active natlog; sha256sum /usr/local/bin/natlog | cut -c1-12; } | paste -sd' ')
+        got=$( { systemctl is-active natlog; sha256sum /usr/local/bin/natlog | cut -c1-12; sha256sum /etc/systemd/system/natlog.service | cut -c1-12; } | paste -sd' ')
     else
-        got=$("${pre[@]}" 'systemctl is-active natlog; sha256sum /usr/local/bin/natlog | cut -c1-12' </dev/null | paste -sd' ')
+        got=$("${pre[@]}" 'systemctl is-active natlog; sha256sum /usr/local/bin/natlog | cut -c1-12; sha256sum /etc/systemd/system/natlog.service | cut -c1-12' </dev/null | paste -sd' ')
     fi
-    if [[ "$got" == "active $HASH" ]]; then
-        echo "    $name OK: active, $HASH"
+    if [[ "$got" == "active $HASH $UNIT_HASH" ]]; then
+        echo "    $name OK: active, binary=$HASH unit=$UNIT_HASH"
     else
-        echo "    $name MISMATCH: $got (wanted: active $HASH)"
+        echo "    $name MISMATCH: $got (wanted: active $HASH $UNIT_HASH)"
         return 1
     fi
 }

@@ -37,7 +37,10 @@ For >single-node ingest or >hot-storage capacity:
 - This is the **"multi-dataplane per capec"** path: many stateless collectors + a CH cluster, all driven by the one Director registry.
 
 ### 3. Durable ingest buffer (Kafka / Redis Streams / RabbitMQ / NATS)
-The in-process queue is fast but **in-memory** (lost on restart, no replay). At ISP scale add a **durable** buffer between collector and ClickHouse:
+The local batch WAL protects flushed batches across ClickHouse outages and
+process restarts, but the not-yet-flushed in-process queue is still **in-memory**.
+At ISP scale, when that final crash window must also be closed, add a **durable**
+buffer between collector and ClickHouse:
 - **Why:** decouple ingest from insert, absorb multi-minute bursts, **zero-drop**, **replay** after a ClickHouse outage, multiple independent consumers (store + real-time alerting).
 - **Kafka** is the standard for NetFlow-at-scale (goflow2 → Kafka → ClickHouse). ClickHouse has a **native Kafka table engine** that consumes straight into MergeTree — collectors just produce, no custom consumer.
 - **Redis Streams / NATS JetStream** are lighter-weight alternatives for mid-scale; **RabbitMQ** if you already run it.
