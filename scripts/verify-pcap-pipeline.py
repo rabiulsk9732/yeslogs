@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Prove end-to-end DoT IPDR compliance:
+"""Prove end-to-end data pipeline invariants and 8-column export semantics:
 1. Outbound SNAT maps correctly into 8 DoT columns.
-2. Inbound DNAT is recognized correctly.
+2. Inbound DNAT is recognized correctly without remote server IP leakage.
 3. No remote server IP is ever emitted as subscriber Translated IP.
-4. Historical data is not mutated.
+4. Historical data is not mutated or faked.
 5. The final CSV contains exactly the required 8 columns, no UI metadata lines, and no truncation.
 """
 import csv
 import io
 import json
+import os
 import subprocess
 import sys
 import urllib.parse
@@ -28,6 +29,12 @@ EXPECTED_HEADERS = [
 def log(msg):
     print(f"[VERIFY] {msg}")
 
+def required_env(name):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"set {name} explicitly before running production verification")
+    return value
+
 def test_decoder_and_director_unit_tests():
     log("Step 1: Running unit tests for IPFIX/NetFlow9 decoders and direction classification...")
     cmd = ["go", "test", "-v", 
@@ -40,7 +47,7 @@ def test_decoder_and_director_unit_tests():
         print(res.stdout)
         print(res.stderr)
         raise RuntimeError("Decoder / Director unit tests failed!")
-    log("✓ Decoder & direction classification tests passed 100%.")
+    log("✓ Decoder & direction classification tests passed.")
 
 def test_clickhouse_schema_and_history():
     log("Step 2: Checking ClickHouse schema and verifying historical data integrity...")
@@ -64,9 +71,15 @@ def test_clickhouse_schema_and_history():
 
 def test_csv_report_export():
     log("Step 3: Authenticating and exporting DoT CSV report from director API...")
+    email = required_env("YESLOGS_VERIFY_EMAIL")
+    password = required_env("YESLOGS_VERIFY_PASSWORD")
+    public_ip = required_env("YESLOGS_VERIFY_PUBLIC_IP")
+    from_time = required_env("YESLOGS_VERIFY_FROM")
+    to_time = required_env("YESLOGS_VERIFY_TO")
+    director_url = os.environ.get("YESLOGS_VERIFY_URL", "http://127.0.0.1:8084").rstrip("/")
     # Login to get session cookie & CSRF
-    login_data = json.dumps({"email": "xcessnetisp@gmail.com", "password": "Ipdr@123$"}).encode()
-    req = urllib.request.Request("http://127.0.0.1:8084/api/v1/login", data=login_data, headers={"Content-Type": "application/json"})
+    login_data = json.dumps({"email": email, "password": password}).encode()
+    req = urllib.request.Request(director_url + "/api/v1/login", data=login_data, headers={"Content-Type": "application/json"})
     cookie = None
     csrf = None
     with urllib.request.urlopen(req) as resp:
@@ -76,17 +89,17 @@ def test_csv_report_export():
         csrf = data.get("csrf")
 
     assert cookie and csrf, "Login failed: missing session cookie or CSRF token"
-    log("✓ Authenticated as ISP (xcessnetisp@gmail.com)")
+    log(f"✓ Authenticated verification account ({email})")
 
     # Request CSV report for public NAT IP 151.158.226.167
     params = {
         "format": "csv",
-        "ip": "151.158.226.167",
-        "from": "2026-09-11 12:00",
-        "to": "2026-09-11 14:00",
+        "ip": public_ip,
+        "from": from_time,
+        "to": to_time,
         "csrf": csrf
     }
-    report_url = "http://127.0.0.1:8084/api/v1/report?" + urllib.parse.urlencode(params)
+    report_url = director_url + "/api/v1/report?" + urllib.parse.urlencode(params)
     rep_req = urllib.request.Request(report_url, headers={"Cookie": cookie})
     with urllib.request.urlopen(rep_req) as resp:
         csv_bytes = resp.read()
@@ -111,7 +124,7 @@ def test_csv_report_export():
         start_ts, end_ts, src_ip, src_port, trans_ip, trans_port, dst_ip, dst_port = row
 
         # Check that Translated IP matches the queried Public NAT IP
-        assert trans_ip == "151.158.226.167", f"Row {idx}: Translated IP mismatch (got {trans_ip}, expected 151.158.226.167)"
+        assert trans_ip == public_ip, f"Row {idx}: Translated IP mismatch (got {trans_ip}, expected {public_ip})"
 
         # Check that Remote Server IP is NEVER emitted as Translated IP
         assert trans_ip != dst_ip, f"Row {idx}: CRITICAL ERROR - Translated IP equals Destination IP ({dst_ip})!"
@@ -129,11 +142,15 @@ def test_csv_report_export():
     log("  - All private IPs and ports cleanly mapped.")
 
 def main():
+    # Require all query/account inputs before any live ClickHouse or Director
+    # request, so invoking the script accidentally is side-effect free.
+    for name in ("YESLOGS_VERIFY_EMAIL", "YESLOGS_VERIFY_PASSWORD", "YESLOGS_VERIFY_PUBLIC_IP", "YESLOGS_VERIFY_FROM", "YESLOGS_VERIFY_TO"):
+        required_env(name)
     log("=== STARTING END-TO-END PIPELINE PROOF ===")
     test_decoder_and_director_unit_tests()
     test_clickhouse_schema_and_history()
     test_csv_report_export()
-    log("=== ALL PROOFS PASSED: 100% COMPLIANT ===")
+    log("=== ALL PROOFS PASSED: INVARIANTS & SEMANTICS VERIFIED ===")
 
 if __name__ == "__main__":
     main()

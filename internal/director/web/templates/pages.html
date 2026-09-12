@@ -4,6 +4,7 @@
 <form method="post" action="/login">
  <div><input name="email" type="email" placeholder="email" required style="width:100%"></div>
  <div><input name="password" type="password" placeholder="password" required style="width:100%"></div>
+ <div><input name="totp" inputmode="numeric" autocomplete="one-time-code" placeholder="Authenticator code (if enabled)" pattern="[0-9]{6}" style="width:100%"></div>
  <button type="submit">Sign in</button>
 </form>
 </div>

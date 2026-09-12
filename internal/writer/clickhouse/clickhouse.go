@@ -35,7 +35,8 @@ import (
 const insertStmt = `INSERT INTO %s.flow_logs
 	(isp_id, device_id, src_ip, src_port, dst_ip, dst_port,
 	 nat_public_ip, nat_public_port, nat_dest_ip, nat_dest_port, nat_event, username, protocol, bytes, packets,
-	 flow_start, flow_end, flow_type, exporter_ip)`
+	 flow_start, flow_end, exporter_flow_start, exporter_flow_end, collector_received, flow_type, exporter_ip,
+	 src_ip_v6, dst_ip_v6, nat_public_ip_v6, nat_dest_ip_v6, exporter_ip_v6)`
 
 // schemaDDL brings an existing flow_logs up to the columns this build writes.
 // Idempotent and metadata-only in ClickHouse — ADD COLUMN with a DEFAULT does
@@ -47,6 +48,14 @@ var schemaDDL = []string{
 	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS username String DEFAULT ''`,
 	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_ip IPv4 DEFAULT toIPv4('0.0.0.0')`,
 	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_port UInt16 DEFAULT 0`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS exporter_flow_start Nullable(DateTime64(3))`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS exporter_flow_end Nullable(DateTime64(3))`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS collector_received DateTime64(3) DEFAULT now64(3)`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS src_ip_v6 IPv6 DEFAULT toIPv6('::')`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS dst_ip_v6 IPv6 DEFAULT toIPv6('::')`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_public_ip_v6 IPv6 DEFAULT toIPv6('::')`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_ip_v6 IPv6 DEFAULT toIPv6('::')`,
+	`ALTER TABLE %s.flow_logs ADD COLUMN IF NOT EXISTS exporter_ip_v6 IPv6 DEFAULT toIPv6('::')`,
 }
 
 const (
@@ -671,7 +680,8 @@ func (s *shard) send(batch []normalizer.FlowRecord) error {
 			ip4(r.SrcIP), r.SrcPort, ip4(r.DstIP), r.DstPort,
 			ip4(r.NatPublicIP), r.NatPublicPort, ip4(r.NatDestIP), r.NatDestPort, r.NatEvent, r.Username,
 			r.Protocol, r.Bytes, r.Packets,
-			r.FlowStart, r.FlowEnd, r.FlowType, ip4(r.ExporterIP),
+			r.FlowStart, r.FlowEnd, nullableTime(r.ExporterFlowStart), nullableTime(r.ExporterFlowEnd), r.CollectorReceived,
+			r.FlowType, ip4(r.ExporterIP), ip6(r.SrcIP), ip6(r.DstIP), ip6(r.NatPublicIP), ip6(r.NatDestIP), ip6(r.ExporterIP),
 		); err != nil {
 			_ = b.Abort()
 			return &appendError{fmt.Errorf("append row %d: %w", i, err)}
@@ -681,6 +691,22 @@ func (s *shard) send(batch []normalizer.FlowRecord) error {
 		return fmt.Errorf("send batch: %w", err)
 	}
 	return nil
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+func ip6(ip net.IP) net.IP {
+	if ip == nil || ip.To4() != nil {
+		return net.IPv6zero
+	}
+	if v := ip.To16(); v != nil {
+		return v
+	}
+	return net.IPv6zero
 }
 
 // shardIndex routes a record to a shard by hashing (exporter_ip, device_id) so a

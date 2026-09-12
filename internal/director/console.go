@@ -90,6 +90,7 @@ type natRecord struct {
 	CRMPhone     string `json:"crmPhone,omitempty"`
 	CRMAccountID string `json:"crmAccountId,omitempty"`
 	CRMSessionID string `json:"crmSessionId,omitempty"`
+	CRMMAC       string `json:"crmMac,omitempty"`
 }
 type protoSlice struct {
 	Name  string  `json:"name"`
@@ -251,10 +252,12 @@ type SearchFilter struct {
 	ISPID                       uint32
 	PublicIP, PrivateIP, DestIP string
 	PublicPort                  int
+	PortRange                   string // e.g. "20000-25000"
 	Proto                       string
 	DeviceID                    uint32
 	ExporterIP                  string
 	destinationNATAvailable     bool
+	ipv6Available               bool
 	// Username matches the subscriber identity the exporter reported (IE 371).
 	// It is the strongest selector this store has: it needs no resolution of an
 	// address that may have been reallocated since the time being asked about.
@@ -267,7 +270,7 @@ type SearchFilter struct {
 
 // HasSelector reports whether the filter narrows the scan (an IP or device).
 func (f SearchFilter) HasSelector() bool {
-	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0 || f.ExporterIP != "" || f.Username != ""
+	return f.PublicIP != "" || f.PrivateIP != "" || f.DestIP != "" || f.DeviceID != 0 || f.ExporterIP != "" || f.Username != "" || f.PortRange != ""
 }
 
 // hotWhere builds the WHERE clause + bound args for the hot flow_logs table.
@@ -283,7 +286,15 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 		add("device_id = ?", f.DeviceID)
 	}
 	if f.ExporterIP != "" {
-		add("exporter_ip = toIPv4(?)", f.ExporterIP)
+		if ip := net.ParseIP(f.ExporterIP); ip != nil && ip.To4() == nil {
+			if f.ipv6Available {
+				add("exporter_ip_v6 = toIPv6(?)", f.ExporterIP)
+			} else {
+				conds = append(conds, "0")
+			}
+		} else {
+			add("exporter_ip = toIPv4(?)", f.ExporterIP)
+		}
 	}
 	if f.Username != "" {
 		add("username = ?", f.Username)
@@ -292,6 +303,9 @@ func hotWhere(f SearchFilter) (string, []any, bool) {
 		cond := "nat_public_ip != toIPv4('0.0.0.0')"
 		if f.destinationNATAvailable {
 			cond = "(" + cond + " OR nat_dest_ip != toIPv4('0.0.0.0'))"
+		}
+		if f.ipv6Available {
+			cond = "(" + cond + " OR nat_public_ip_v6 != toIPv6('::') OR nat_dest_ip_v6 != toIPv6('::'))"
 		}
 		conds = append(conds, cond)
 	}
@@ -339,17 +353,19 @@ const countCap = 100000
 const legacyDedupKey = "isp_id, flow_start, flow_end, src_ip, src_port, dst_ip, dst_port, " +
 	"nat_public_ip, nat_public_port, protocol, bytes, packets, flow_type, nat_event, username"
 
-const dedupKey = legacyDedupKey + ", nat_dest_ip, nat_dest_port"
+const destinationDedupKey = legacyDedupKey + ", nat_dest_ip, nat_dest_port"
+const dedupKey = destinationDedupKey + ", src_ip_v6, dst_ip_v6, nat_public_ip_v6, nat_dest_ip_v6"
 
 // SearchCount returns the number of hot rows matching f, capped at countCap
 // (a returned value == countCap means "countCap or more").
 func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) (uint64, error) {
 	f.destinationNATAvailable = r.hasDestinationNAT(ctx)
+	f.ipv6Available = r.hasIPv6(ctx)
 	where, args, ok := hotWhere(f)
 	if !ok {
 		return 0, fmt.Errorf("no filter")
 	}
-	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT 1 BY %s LIMIT %d)`, r.db, where, hotDedupKey(f.destinationNATAvailable), countCap)
+	q := fmt.Sprintf(`SELECT count() FROM (SELECT 1 FROM %s.flow_logs WHERE %s LIMIT 1 BY %s LIMIT %d)`, r.db, where, hotDedupKey(f.destinationNATAvailable, f.ipv6Available), countCap)
 	var n uint64
 	err := r.conn.QueryRow(ctx, q, args...).Scan(&n)
 	return n, err
@@ -360,17 +376,28 @@ func (r *FlowReader) SearchCount(ctx context.Context, f SearchFilter) (uint64, e
 // the client only ever holds a single page.
 func (r *FlowReader) Search(ctx context.Context, f SearchFilter, limit, offset int) ([]natRecord, error) {
 	f.destinationNATAvailable = r.hasDestinationNAT(ctx)
+	f.ipv6Available = r.hasIPv6(ctx)
 	where, args, ok := hotWhere(f)
 	if !ok {
 		return nil, fmt.Errorf("no filter")
 	}
+	exporter, source, public, destination := "exporter_ip", "src_ip", "nat_public_ip", "dst_ip"
+	if f.ipv6Available {
+		exporter = "if(exporter_ip_v6=toIPv6('::'),toIPv6(exporter_ip),exporter_ip_v6)"
+		source = "if(src_ip_v6=toIPv6('::'),toIPv6(src_ip),src_ip_v6)"
+		public = "if(nat_public_ip_v6=toIPv6('::'),toIPv6(nat_public_ip),nat_public_ip_v6)"
+		destination = "if(dst_ip_v6=toIPv6('::'),toIPv6(dst_ip),dst_ip_v6)"
+	}
 	postDest := "toIPv4('0.0.0.0'), toUInt16(0)"
 	if f.destinationNATAvailable {
 		postDest = "nat_dest_ip, nat_dest_port"
+		if f.ipv6Available {
+			postDest = "if(nat_dest_ip_v6=toIPv6('::'),toIPv6(nat_dest_ip),nat_dest_ip_v6), nat_dest_port"
+		}
 	}
-	q := fmt.Sprintf(`SELECT flow_start, flow_end, isp_id, device_id, exporter_ip, src_ip, src_port, nat_public_ip, nat_public_port,
-		dst_ip, dst_port, %s, protocol, flow_type, username, nat_event
-		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC, %s, exporter_ip, device_id LIMIT 1 BY %s LIMIT %d OFFSET %d`, postDest, r.db, where, hotDedupKey(f.destinationNATAvailable), hotDedupKey(f.destinationNATAvailable), limit, offset)
+	q := fmt.Sprintf(`SELECT flow_start, flow_end, isp_id, device_id, %s, %s, src_port, %s, nat_public_port,
+		%s, dst_port, %s, protocol, flow_type, username, nat_event
+		FROM %s.flow_logs WHERE %s ORDER BY flow_start DESC, %s, exporter_ip, device_id LIMIT 1 BY %s LIMIT %d OFFSET %d`, exporter, source, public, destination, postDest, r.db, where, hotDedupKey(f.destinationNATAvailable, f.ipv6Available), hotDedupKey(f.destinationNATAvailable, f.ipv6Available), limit, offset)
 	rs, err := r.conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -551,24 +578,49 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAPILogin(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
-	var body struct{ Email, Password string }
+	var body struct{ Email, Password, TOTP string }
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 		return
 	}
 	email := strings.TrimSpace(strings.ToLower(body.Email))
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+	throttleKey := clientIP + ":" + email
+	if s.loginThrottle != nil {
+		if locked, remaining := s.loginThrottle.Check(throttleKey); locked {
+			w.Header().Set("Retry-After", fmt.Sprint(int(remaining.Seconds())))
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed login attempts"})
+			return
+		}
+	}
 	u, err := s.store.GetUserByLogin(r.Context(), email)
 	hash := s.dummyHash
 	if err == nil {
 		hash = u.PasswordHash
 	}
 	if !VerifyPassword(hash, body.Password) || err != nil {
+		if s.loginThrottle != nil {
+			s.loginThrottle.RecordFailure(throttleKey)
+		}
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	if u.TOTPEnabled && !s.verifyUserTOTP(u, body.TOTP, time.Now()) {
+		if s.loginThrottle != nil {
+			s.loginThrottle.RecordFailure(throttleKey)
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authenticator code", "totpRequired": "true"})
 		return
 	}
 	if !s.ispLoginAllowed(r.Context(), u) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "this ISP account is disabled"})
 		return
+	}
+	if s.loginThrottle != nil {
+		s.loginThrottle.RecordSuccess(throttleKey)
 	}
 	id := Identity{UserID: u.ID, ISPID: u.ISPID, Role: u.Role, Email: u.Email, Exp: time.Now().Add(sessionTTL).Unix()}
 	s.setSession(w, id)

@@ -32,17 +32,18 @@ type Writer interface {
 // Pipeline processes raw UDP payloads for a single protocol. It implements
 // receiver.Handler and is safe for concurrent use.
 type Pipeline struct {
-	dec       decoder.Decoder
-	norm      *normalizer.Normalizer
-	live      *config.Store
-	devices   *device.Store
-	writer    Writer
-	metrics   *metrics.Metrics
-	log       *slog.Logger
-	kind      string
-	defISPID  uint32
-	defDevice uint32
-	signals   *DeviceSignals // optional; records evidence for flows the rules drop
+	dec        decoder.Decoder
+	norm       *normalizer.Normalizer
+	live       *config.Store
+	devices    *device.Store
+	writer     Writer
+	metrics    *metrics.Metrics
+	log        *slog.Logger
+	kind       string
+	defISPID   uint32
+	defDevice  uint32
+	signals    *DeviceSignals // optional; records evidence for flows the rules drop
+	subscriber func(net.IP) string
 
 	pool sync.Pool
 }
@@ -73,6 +74,11 @@ func New(dec decoder.Decoder, norm *normalizer.Normalizer, live *config.Store, d
 // HandlePacket decodes one UDP payload and pushes the surviving flows to the
 // writer. It is safe to call concurrently from multiple receiver workers.
 func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
+	if p.kind == "netflow5" {
+		// v5 has no post-NAT information. Count every packet so operators get a
+		// durable, alertable misconfiguration signal instead of false confidence.
+		p.metrics.NetFlow5Packets.Inc()
+	}
 	live := p.live.Load()
 	dev, matched := p.devices.Load().Lookup(exporter)
 
@@ -121,6 +127,9 @@ func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
 	}
 
 	for i := range flows {
+		if flows[i].Username == "" && p.subscriber != nil {
+			flows[i].Username = p.subscriber(flows[i].SrcIP)
+		}
 		rec := p.norm.Normalize(flows[i], p.kind, ispID, deviceID)
 		p.metrics.FlowsDecoded.Inc()
 		if !matchedDevice {
@@ -146,6 +155,9 @@ func (p *Pipeline) HandlePacket(payload []byte, exporter net.IP) {
 
 	p.recycle(bufp, flows)
 }
+
+// SetSubscriberResolver enriches flows from a local RADIUS accounting cache.
+func (p *Pipeline) SetSubscriberResolver(f func(net.IP) string) { p.subscriber = f }
 
 func (p *Pipeline) recycle(bufp *[]decoder.Flow, flows []decoder.Flow) {
 	// Don't return a pathologically large scratch buffer to the pool (a hostile

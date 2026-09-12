@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>YesLogs Director</title>
+  <title>ISPmate Director</title>
   <link rel="stylesheet" href="/assets/vendor/fonts/fonts.css">
   <link rel="stylesheet" href="/assets/vendor/toastr/toastr.min.css">
   <link rel="stylesheet" href="/assets/datetimepicker/jquery.datetimepicker.min.css">
@@ -1698,7 +1698,7 @@
             </div>
           </div>
         </div>
-        <div style="font-size:13px;color:rgba(255,255,255,.62);position:relative">YesLogs Director · ISP infrastructure
+        <div style="font-size:13px;color:rgba(255,255,255,.62);position:relative">ISPmate Director · ISP infrastructure
           operations</div>
       </div>
       <div style="flex:1;background:#f4f6f9;display:flex;align-items:center;justify-content:center;padding:24px">
@@ -1725,6 +1725,11 @@
               <i class="fas fa-lock" style="color:var(--mut);font-size:14px"></i>
               <input id="li-pass" type="password" placeholder="••••••••"
                 style="border:none;outline:none;font-size:14px;font-family:inherit;color:var(--ink);width:100%;background:transparent">
+            </div>
+            <label class="lbl">Authenticator code <span style="font-weight:400;color:var(--mut)">(if enabled)</span></label>
+            <div style="display:flex;align-items:center;border:1px solid #ced4da;border-radius:5px;height:42px;padding:0 12px;margin-bottom:22px;gap:10px">
+              <i class="fas fa-mobile-screen" style="color:var(--mut);font-size:14px"></i>
+              <input id="li-totp" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code" pattern="[0-9]{6}" style="border:none;outline:none;font-size:14px;font-family:inherit;color:var(--ink);width:100%;background:transparent">
             </div>
             <button id="li-btn" class="btn"
               style="width:100%;height:44px;justify-content:center;font-size:15px;font-weight:700"><i
@@ -1757,7 +1762,7 @@
       <div class="sbrand">
         <div class="sbrand-mark"><span class="ms">hub</span></div>
         <div class="sbrand-txt">
-          <div class="sbrand-name">Yes<span>Logs</span></div>
+          <div class="sbrand-name">ISP<span>mate</span></div>
           <div class="sbrand-sub">DIRECTOR</div>
         </div>
       </div>
@@ -1836,7 +1841,7 @@
         </div>
         <div id="pageBody"></div>
         <div class="page-foot">
-          <span>YesLogs Director &middot; Sayra Technologies &middot; Director → ISP console · Times shown in IST</span>
+          <span>ISPmate &middot; Powered by YesLogs &middot; Sayra Technologies &middot; Times shown in IST</span>
           <span class="mono" id="footBuild">logs.sayratechnologies.in</span>
         </div>
       </main>
@@ -1860,6 +1865,7 @@
       ['Capture Policies', 'shield', 'Reusable skip-rule presets', 'all', 'GOVERN'],
       ['Retention', 'inventory_2', 'Hot storage window & S3 archive', 'all', 'GOVERN'],
       ['Audit', 'history', 'Search & export audit trail', 'all', 'GOVERN'],
+      ['Cases', 'folder_open', 'FIR and police investigations', 'all', 'GOVERN'],
       ['Users', 'group', 'Operators and access', 'all', 'GOVERN'],
       ['Settings', 'tune', 'Dataplane, skip rules, retention & S3', 'director', 'GOVERN'],
     ];
@@ -1973,7 +1979,7 @@
       $('#login-err').hide();
       lock('Signing in', 'authenticating · logs.sayratechnologies.in');
       try {
-        const r = await api('/api/v1/login', { method: 'POST', body: JSON.stringify({ email: $('#li-email').val(), password: $('#li-pass').val() }) });
+        const r = await api('/api/v1/login', { method: 'POST', body: JSON.stringify({ email: $('#li-email').val(), password: $('#li-pass').val(), totp: $('#li-totp').val() }) });
         if (r.status !== 200) {
           const e = await r.json().catch(() => ({}));
           $('#login-err').text(e.error || 'Sign in failed').show();
@@ -2092,7 +2098,7 @@
       $('#pageTools').prop('hidden', true);
       $('#footBuild').text('v1.14.0-console');
       const b = $('<div class="module-page">').appendTo($('#pageBody').empty());
-      return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
+      return ({ Overview: pgOverview, ISPs: pgISPs, Dataplanes: pgDataplanes, Devices: pgDevices, Compliance: pgCompliance, 'Capture Policies': pgPolicies, Logs: pgLogs, Reports: pgReports, Retention: pgRetention, Audit: pgAudit, Cases: pgCases, Users: pgUsers, Settings: pgSettings }[S.view] || pgOverview)(b);
     }
 
     // ==================== OVERVIEW ====================
@@ -2137,6 +2143,7 @@
     function pgReports(b) { return pgModule(b, "Reports"); }
     function pgCompliance(b) { return pgModule(b, "Compliance"); }
     function pgAudit(b) { return pgModule(b, "Audit"); }
+    function pgCases(b) { return pgModule(b, "Cases"); }
     function pgRetention(b) { return pgModule(b, "Retention"); }
 
     async function pgISPs(b) {

@@ -18,6 +18,7 @@ type FlowReader struct {
 	conn           driver.Conn
 	db             string
 	destinationNAT atomic.Bool
+	ipv6           atomic.Bool
 }
 
 // NewFlowReader connects to ClickHouse for read queries.
@@ -27,6 +28,10 @@ func NewFlowReader(addr, db, user, pass string) (*FlowReader, error) {
 		Auth:         clickhouse.Auth{Database: db, Username: user, Password: pass},
 		DialTimeout:  5 * time.Second,
 		MaxOpenConns: 8, // dashboard fans out ~7 concurrent aggregations per load
+		Settings: clickhouse.Settings{
+			"max_execution_time": 60,
+			"max_memory_usage":   10000000000, // 10GB limit to prevent server OOM
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -41,6 +46,11 @@ func NewFlowReader(addr, db, user, pass string) (*FlowReader, error) {
 }
 
 func (r *FlowReader) Close() error { return r.conn.Close() }
+
+// Ping verifies that ClickHouse is reachable even when no exporters currently
+// send traffic. Ingest counters alone cannot detect a database crash while the
+// receiver is idle.
+func (r *FlowReader) Ping(ctx context.Context) error { return r.conn.Ping(ctx) }
 
 // scope builds the WHERE clause + args. ispID 0 means "all ISPs" (director only).
 func scope(ispID uint32, days int) (string, []any) {
@@ -59,6 +69,23 @@ type Summary struct {
 	Bytes   uint64
 	Packets uint64
 	Devices uint64
+}
+
+// SummaryDay returns totals for one complete ClickHouse storage day. The
+// rollup keeps this bounded even on multi-billion-row installations; raw data
+// is used only on older schemas which do not yet have the rollup.
+func (r *FlowReader) SummaryDay(ctx context.Context, day string) (Summary, error) {
+	table := "flow_logs"
+	rowsExpr := "count()"
+	if r.hasRollup(ctx) {
+		table = "flow_rollup"
+		rowsExpr = "sum(flows)"
+	}
+	q := fmt.Sprintf(`SELECT %s, sum(bytes), sum(packets), uniq(device_id)
+		FROM %s.%s WHERE event_date = toDate(?)`, rowsExpr, r.db, table)
+	var s Summary
+	err := r.conn.QueryRow(ctx, q, day).Scan(&s.Rows, &s.Bytes, &s.Packets, &s.Devices)
+	return s, err
 }
 
 // Summary aggregates totals for the window. It prefers the pre-aggregated

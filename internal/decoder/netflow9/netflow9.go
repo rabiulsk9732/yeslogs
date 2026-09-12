@@ -10,6 +10,7 @@ package netflow9
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net"
 	"sync"
@@ -70,6 +71,8 @@ const (
 	fNAT_DST_IPV4   = 226 // postNATDestinationIPv4Address
 	fNAT_SRC_PORT   = 227 // postNAPTSourceTransportPort
 	fNAT_DST_PORT   = 228 // postNAPTDestinationTransportPort
+	fNAT_SRC_IPV6   = 281 // postNATSourceIPv6Address
+	fNAT_DST_IPV6   = 282 // postNATDestinationIPv6Address
 	fNAT_EVENT      = 230 // natEvent: 1 = allocation, 2 = release
 	fUSERNAME       = 371 // username (IPFIX): the subscriber the BNG already knows
 	// Absolute-time IEs (not sysUptime-relative). iptables/conntrack NAT-event
@@ -277,11 +280,11 @@ func applyField(f *decoder.Flow, typ uint16, v []byte, bootMS int64) {
 		f.FlowStart = msToTime(bootMS + int64(beUint(v)))
 	case fLAST_SWITCHED:
 		f.FlowEnd = msToTime(bootMS + int64(beUint(v)))
-	case fNAT_SRC_IPV4:
+	case fNAT_SRC_IPV4, fNAT_SRC_IPV6:
 		f.NatPublicIP = cloneIP(v)
 	case fNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
-	case fNAT_DST_IPV4:
+	case fNAT_DST_IPV4, fNAT_DST_IPV6:
 		f.NatDestIP = cloneIP(v)
 	case fNAT_DST_PORT:
 		f.NatDestPort = uint16(beUint(v))
@@ -390,4 +393,74 @@ func trimField(v []byte) string {
 		v = v[:i]
 	}
 	return string(bytes.TrimSpace(v))
+}
+
+// SerializableField represents a single template field for serialization.
+type SerializableField struct {
+	Type   uint16 `json:"type"`
+	Length uint16 `json:"length"`
+}
+
+// SerializableTemplate represents a cached NetFlow v9 template for state persistence.
+type SerializableTemplate struct {
+	Exporter  string              `json:"exporter"`
+	SourceID  uint32              `json:"sourceId"`
+	ID        uint16              `json:"id"`
+	Fields    []SerializableField `json:"fields"`
+	RecordLen int                 `json:"recordLen"`
+	IsOptions bool                `json:"isOptions"`
+}
+
+// DumpTemplates serializes cached templates to JSON for persistence across restarts.
+func (d *Decoder) DumpTemplates() ([]byte, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	list := make([]SerializableTemplate, 0, len(d.templates))
+	for k, t := range d.templates {
+		sFields := make([]SerializableField, len(t.fields))
+		for i, f := range t.fields {
+			sFields[i] = SerializableField{Type: f.typ, Length: f.length}
+		}
+		list = append(list, SerializableTemplate{
+			Exporter:  k.exporter,
+			SourceID:  k.sourceID,
+			ID:        k.id,
+			Fields:    sFields,
+			RecordLen: t.recordLen,
+			IsOptions: t.isOptions,
+		})
+	}
+	return json.Marshal(list)
+}
+
+// LoadTemplates restores templates from persistent state, preventing the cold-start gap.
+func (d *Decoder) LoadTemplates(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	var list []SerializableTemplate
+	if err := json.Unmarshal(data, &list); err != nil {
+		return err
+	}
+
+	now := time.Now().UnixNano()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, s := range list {
+		k := templateKey{exporter: s.Exporter, sourceID: s.SourceID, id: s.ID}
+		fields := make([]field, len(s.Fields))
+		for i, sf := range s.Fields {
+			fields[i] = field{typ: sf.Type, length: sf.Length}
+		}
+		t := &template{
+			fields:    fields,
+			recordLen: s.RecordLen,
+			isOptions: s.IsOptions,
+		}
+		t.lastSeen.Store(now)
+		d.templates[k] = t
+	}
+	return nil
 }

@@ -15,7 +15,7 @@ server:
 
 receiver:
   bind_ip: "0.0.0.0"   # receive NetFlow/IPFIX from real exporters
-  ports: {netflow5: 2055, netflow9: 9995, ipfix: 4739}
+  ports: {netflow5: 2055, netflow9: 9995, ipfix: 4739, syslog_udp: 0, syslog_tcp: 0, radius_accounting: 0}
   workers: 4
   udp_read_buffer_mb: 16
 
@@ -47,6 +47,18 @@ security:
 
 metrics:
   bind: "127.0.0.1:9101"
+
+monitoring:
+  ntp_server: "time.cloudflare.com:123"
+  ntp_max_skew_ms: 500
+  interval_s: 300
+  clickhouse_data_path: "/var/lib/clickhouse"
+  disk_alert_percent: 85
+  disk_safety_percent: 90
+
+radius:
+  secret: ""
+  session_ttl_hours: 48
 
 logging:
   level: "info"

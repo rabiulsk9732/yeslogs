@@ -28,6 +28,14 @@ func (s *Server) csrfOK(w http.ResponseWriter, r *http.Request, id Identity) boo
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid CSRF token"})
 		return false
 	}
+	// Analyst and auditor accounts are intentionally unable to mutate tenant
+	// configuration. Search is an audited write, analysts may create export jobs,
+	// and account security is self-service.
+	analystExport := r.URL.Path == "/api/v1/exports" && id.canExport()
+	if !id.canManage() && r.URL.Path != "/api/v1/search" && !analystExport && !strings.HasPrefix(r.URL.Path, "/api/v1/account/") {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "role is read-only for this operation"})
+		return false
+	}
 	return true
 }
 

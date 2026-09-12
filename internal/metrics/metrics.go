@@ -16,24 +16,31 @@ import (
 // Metrics bundles every counter/gauge the collector reports. All fields are
 // safe for concurrent use.
 type Metrics struct {
-	PacketsReceived    prometheus.Counter
-	PacketsDropped     prometheus.Counter
-	PacketsUnsupported prometheus.Counter
-	FlowsDecoded       prometheus.Counter
-	FlowsSkipped       prometheus.Counter
-	SpoolSaved         prometheus.Counter
-	SpoolReplayed      prometheus.Counter
-	SpoolLost          prometheus.Counter
-	SpoolFiles         prometheus.Gauge
-	SpoolBytes         prometheus.Gauge
-	SpoolOldestSeconds prometheus.Gauge
-	FlowsInserted      prometheus.Counter
-	FlowsDropped       prometheus.Counter // dropped without insertion (queue full / shutdown)
-	FlowsRejected      prometheus.Counter // rejected by ClickHouse on append
-	InsertErrors       prometheus.Counter
-	TemplatesReceived  prometheus.Counter // NetFlow v9/IPFIX templates parsed
-	TemplateUnknown    prometheus.Counter // data flowsets referencing an unknown template
-	QueueSize          prometheus.Gauge   // aggregate writer queue depth
+	PacketsReceived        prometheus.Counter
+	PacketsDropped         prometheus.Counter
+	PacketsUnsupported     prometheus.Counter
+	FlowsDecoded           prometheus.Counter
+	FlowsSkipped           prometheus.Counter
+	SpoolSaved             prometheus.Counter
+	SpoolReplayed          prometheus.Counter
+	SpoolLost              prometheus.Counter
+	SpoolFiles             prometheus.Gauge
+	SpoolBytes             prometheus.Gauge
+	SpoolOldestSeconds     prometheus.Gauge
+	FlowsInserted          prometheus.Counter
+	FlowsDropped           prometheus.Counter // dropped without insertion (queue full / shutdown)
+	FlowsRejected          prometheus.Counter // rejected by ClickHouse on append
+	InsertErrors           prometheus.Counter
+	TemplatesReceived      prometheus.Counter // NetFlow v9/IPFIX templates parsed
+	TemplateUnknown        prometheus.Counter // data flowsets referencing an unknown template
+	QueueSize              prometheus.Gauge   // aggregate writer queue depth
+	KernelUDPReceiveErrors prometheus.Counter // Linux Udp:RcvbufErrors observed since process start
+	KernelUDPDropTotal     prometheus.Gauge   // host-wide Linux Udp:RcvbufErrors counter
+	NTPClockOffsetSeconds  prometheus.Gauge   // signed collector offset from configured NTP source
+	NTPClockHealthy        prometheus.Gauge   // 1 when the last clock check is within policy
+	DiskUsedPercent        prometheus.Gauge   // filesystem usage for the ClickHouse data path
+	DiskPressureLevel      prometheus.Gauge   // 0 normal, 1 alert, 2 safety valve
+	NetFlow5Packets        prometheus.Counter // v5 packets incapable of carrying NAT translation fields
 
 	// Runtime config reload.
 	ConfigReloads      prometheus.Counter
@@ -82,23 +89,30 @@ func New() *Metrics {
 		return g
 	}
 	m := &Metrics{
-		PacketsReceived:    counter("packets_received_total", "UDP datagrams received across all listeners."),
-		PacketsDropped:     counter("packets_dropped_total", "UDP datagrams dropped due to decode or validation errors."),
-		PacketsUnsupported: counter("packets_unsupported_total", "UDP datagrams for a recognized but not-yet-decoded protocol (v9/IPFIX in v1)."),
-		FlowsDecoded:       counter("flows_decoded_total", "Flow records successfully decoded."),
-		FlowsSkipped:       counter("flows_skipped_total", "Flow records dropped by skip rules."),
-		SpoolSaved:         counter("spool_records_saved_total", "Records written to the disk spool because ClickHouse would not accept them."),
-		SpoolReplayed:      counter("spool_records_replayed_total", "Records recovered from the disk spool and inserted after ClickHouse returned."),
-		SpoolLost:          counter("spool_records_lost_total", "Records lost outright: the spool was full or unwritable. THIS IS PERMANENT EVIDENCE LOSS."),
-		SpoolFiles:         gauge("spool_files", "Batches currently waiting on disk for ClickHouse to accept them."),
-		SpoolBytes:         gauge("spool_bytes", "Bytes currently held in the disk spool."),
-		SpoolOldestSeconds: gauge("spool_oldest_seconds", "Age of the longest-waiting spooled batch. Growing means replay is not keeping up."),
-		FlowsInserted:      counter("flows_inserted_total", "Flow records inserted into ClickHouse."),
-		FlowsDropped:       counter("flows_dropped_total", "Flow records dropped without insertion (writer queue full or shutdown deadline)."),
-		FlowsRejected:      counter("flows_rejected_total", "Flow records rejected by ClickHouse during row append."),
-		InsertErrors:       counter("insert_errors_total", "ClickHouse batch insert failures after retries."),
-		TemplatesReceived:  counter("templates_received_total", "NetFlow v9/IPFIX templates parsed from exporters."),
-		TemplateUnknown:    counter("template_unknown_total", "Data flowsets dropped because their template was not yet known."),
+		PacketsReceived:        counter("packets_received_total", "UDP datagrams received across all listeners."),
+		PacketsDropped:         counter("packets_dropped_total", "UDP datagrams dropped due to decode or validation errors."),
+		PacketsUnsupported:     counter("packets_unsupported_total", "UDP datagrams for a recognized but not-yet-decoded protocol (v9/IPFIX in v1)."),
+		FlowsDecoded:           counter("flows_decoded_total", "Flow records successfully decoded."),
+		FlowsSkipped:           counter("flows_skipped_total", "Flow records dropped by skip rules."),
+		SpoolSaved:             counter("spool_records_saved_total", "Records written to the disk spool because ClickHouse would not accept them."),
+		SpoolReplayed:          counter("spool_records_replayed_total", "Records recovered from the disk spool and inserted after ClickHouse returned."),
+		SpoolLost:              counter("spool_records_lost_total", "Records lost outright: the spool was full or unwritable. THIS IS PERMANENT EVIDENCE LOSS."),
+		SpoolFiles:             gauge("spool_files", "Batches currently waiting on disk for ClickHouse to accept them."),
+		SpoolBytes:             gauge("spool_bytes", "Bytes currently held in the disk spool."),
+		SpoolOldestSeconds:     gauge("spool_oldest_seconds", "Age of the longest-waiting spooled batch. Growing means replay is not keeping up."),
+		FlowsInserted:          counter("flows_inserted_total", "Flow records inserted into ClickHouse."),
+		FlowsDropped:           counter("flows_dropped_total", "Flow records dropped without insertion (writer queue full or shutdown deadline)."),
+		FlowsRejected:          counter("flows_rejected_total", "Flow records rejected by ClickHouse during row append."),
+		InsertErrors:           counter("insert_errors_total", "ClickHouse batch insert failures after retries."),
+		TemplatesReceived:      counter("templates_received_total", "NetFlow v9/IPFIX templates parsed from exporters."),
+		TemplateUnknown:        counter("template_unknown_total", "Data flowsets dropped because their template was not yet known."),
+		KernelUDPReceiveErrors: counter("kernel_udp_receive_errors_total", "Increase in Linux Udp:RcvbufErrors observed while this process is running."),
+		KernelUDPDropTotal:     gauge("kernel_udp_rcvbuf_errors", "Host-wide Linux Udp:RcvbufErrors value from /proc/net/snmp."),
+		NTPClockOffsetSeconds:  gauge("collector_ntp_offset_seconds", "Signed offset between the collector clock and its configured NTP source."),
+		NTPClockHealthy:        gauge("collector_ntp_healthy", "Whether the latest NTP check succeeded and was within the configured maximum skew."),
+		DiskUsedPercent:        gauge("clickhouse_disk_used_percent", "Used percentage of the filesystem containing the ClickHouse data path."),
+		DiskPressureLevel:      gauge("clickhouse_disk_pressure_level", "Disk protection state: 0 normal, 1 alert threshold, 2 safety-valve threshold."),
+		NetFlow5Packets:        counter("netflow5_misconfiguration_packets_total", "NetFlow v5 packets received; v5 cannot contain NAT translation fields."),
 	}
 	m.QueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "current_queue_size",

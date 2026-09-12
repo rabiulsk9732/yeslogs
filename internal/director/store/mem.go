@@ -9,31 +9,75 @@ import (
 
 // MemStore is an in-memory Store for tests.
 type MemStore struct {
-	mu        sync.Mutex
-	isps      map[uint32]ISP
-	users     map[string]User // by email
-	devices   map[int64]Device
-	agents    map[string]Agent  // by token hash
-	settings  map[string]string // by section
-	queries   []QueryAudit      // newest first
-	policies  map[int64]CapturePolicy
-	archived  map[string]ArchivedDay
-	nextISP   uint32
-	nextUser  int64
-	nextDev   int64
-	nextAgt   int64
-	nextQuery int64
-	nextPol   int64
+	mu                sync.Mutex
+	isps              map[uint32]ISP
+	users             map[string]User // by email
+	devices           map[int64]Device
+	agents            map[string]Agent  // by token hash
+	settings          map[string]string // by section
+	queries           []QueryAudit      // newest first
+	policies          map[int64]CapturePolicy
+	archived          map[string]ArchivedDay
+	nextISP           uint32
+	nextUser          int64
+	nextDev           int64
+	nextAgt           int64
+	nextQuery         int64
+	nextPol           int64
+	investigations    map[int64]Investigation
+	nextInvestigation int64
 }
 
 // NewMem returns an empty in-memory Store.
 func NewMem() *MemStore {
 	return &MemStore{
-		isps:    map[uint32]ISP{},
-		users:   map[string]User{},
-		devices: map[int64]Device{},
-		agents:  map[string]Agent{},
+		isps:           map[uint32]ISP{},
+		users:          map[string]User{},
+		devices:        map[int64]Device{},
+		agents:         map[string]Agent{},
+		investigations: map[int64]Investigation{},
 	}
+}
+
+func (m *MemStore) SaveInvestigation(_ context.Context, c Investigation) (Investigation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, v := range m.investigations {
+		if v.ISPID == c.ISPID && v.Reference == c.Reference && v.ID != c.ID {
+			return c, ErrDuplicate
+		}
+	}
+	now := time.Now().UTC()
+	if c.ID == 0 {
+		m.nextInvestigation++
+		c.ID = m.nextInvestigation
+		c.CreatedAt = now
+	} else if _, ok := m.investigations[c.ID]; !ok {
+		return c, ErrNotFound
+	}
+	c.UpdatedAt = now
+	m.investigations[c.ID] = c
+	return c, nil
+}
+func (m *MemStore) GetInvestigation(_ context.Context, id int64) (Investigation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.investigations[id]
+	if !ok {
+		return c, ErrNotFound
+	}
+	return c, nil
+}
+func (m *MemStore) ListInvestigations(_ context.Context, ispID uint32) ([]Investigation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Investigation{}
+	for _, c := range m.investigations {
+		if ispID == 0 || c.ISPID == ispID {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 func (m *MemStore) Migrate(context.Context) error { return nil }
@@ -146,6 +190,20 @@ func (m *MemStore) UpdateUserPassword(_ context.Context, id int64, hash string) 
 	for k, u := range m.users {
 		if u.ID == id {
 			u.PasswordHash = hash
+			m.users[k] = u
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (m *MemStore) UpdateUserTOTP(_ context.Context, id int64, secret string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, u := range m.users {
+		if u.ID == id {
+			u.TOTPSecret = secret
+			u.TOTPEnabled = enabled
 			m.users[k] = u
 			return nil
 		}
@@ -268,7 +326,11 @@ func (m *MemStore) LogQuery(_ context.Context, q QueryAudit) (int64, error) {
 	defer m.mu.Unlock()
 	m.nextQuery++
 	q.ID = m.nextQuery
-	q.CreatedAt = time.Now().UTC()
+	q.CreatedAt = time.Now().UTC().Truncate(time.Second)
+	if len(m.queries) > 0 {
+		q.PrevHash = m.queries[0].RowHash
+	}
+	q.RowHash = AuditHash(q, q.PrevHash)
 	m.queries = append([]QueryAudit{q}, m.queries...) // newest first
 	return q.ID, nil
 }
@@ -375,4 +437,20 @@ func (m *MemStore) ListQueries(_ context.Context, ispID uint32, limit int) ([]Qu
 		}
 	}
 	return out, nil
+}
+
+func (m *MemStore) VerifyAuditChain(_ context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	previous := ""
+	var checked int64
+	for i := len(m.queries) - 1; i >= 0; i-- {
+		q := m.queries[i]
+		if q.PrevHash != previous || q.RowHash != AuditHash(q, previous) {
+			return checked, ErrConflict
+		}
+		previous = q.RowHash
+		checked++
+	}
+	return checked, nil
 }

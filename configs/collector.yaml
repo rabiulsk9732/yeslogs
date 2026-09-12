@@ -17,6 +17,9 @@ receiver:
     netflow5: 2055
     netflow9: 9995
     ipfix: 4739
+    syslog_udp: 0       # set 514 (or unprivileged 5514) to enable firewall NAT syslog
+    syslog_tcp: 0       # newline-delimited RFC 6587 framing
+    radius_accounting: 0
   udp_read_buffer_mb: 128
   workers: 6
 
@@ -92,6 +95,20 @@ devices: []
 
 metrics:
   bind: "127.0.0.1:9101"
+
+monitoring:
+  ntp_server: "time.cloudflare.com:123"
+  ntp_max_skew_ms: 500
+  interval_s: 300
+  # Set only when this collector owns the ClickHouse filesystem; remote
+  # collectors cannot infer central-server disk pressure from a local path.
+  clickhouse_data_path: ""
+  disk_alert_percent: 85
+  disk_safety_percent: 90
+
+radius:
+  secret: ""              # set a strong shared secret, then radius_accounting: 1813
+  session_ttl_hours: 48
 
 logging:
   level: "info"

@@ -253,19 +253,39 @@ func validateSettingsForm(section string, b map[string]any) map[string]string {
 		}
 	case "notifications":
 		boolean("enabled")
+		if _, ok := b["webhookEnabled"]; ok {
+			boolean("webhookEnabled")
+		}
+		if _, ok := b["dailySummary"]; ok {
+			boolean("dailySummary")
+		}
 		num("smtpPort", 1, 65535)
 		num("silenceMins", 1, 1440)
 		num("remindHours", 0, 168)
+		if _, ok := b["dailyHourIst"]; ok {
+			num("dailyHourIst", 0, 23)
+		}
 		choice("smtpTls", "starttls", "tls", "none")
+		if _, ok := b["webhookType"]; ok {
+			choice("webhookType", "generic", "slack", "discord", "telegram")
+		}
 		for _, k := range []string{"smtpHost", "smtpUser", "smtpPassword", "fromAddr", "recipients"} {
 			str(k)
 		}
-		if b["enabled"] == true {
-			if str("smtpHost") == "" {
-				e["smtpHost"] = "Enter an SMTP host."
+		for _, k := range []string{"webhookUrl", "telegramChatId"} {
+			if _, ok := b[k]; ok {
+				str(k)
 			}
-			if str("recipients") == "" {
+		}
+		if b["enabled"] == true {
+			if str("smtpHost") == "" && b["webhookEnabled"] != true {
+				e["smtpHost"] = "Enter an SMTP host or enable a webhook."
+			}
+			if str("smtpHost") != "" && str("recipients") == "" {
 				e["recipients"] = "Enter at least one recipient."
+			}
+			if b["webhookEnabled"] == true {
+				endpoint("webhookUrl", true, false)
 			}
 		}
 		validEmail := func(v string) bool {
@@ -280,7 +300,7 @@ func validateSettingsForm(section string, b map[string]any) map[string]string {
 				e["recipients"] = "Use valid email addresses separated by commas or newlines."
 			}
 		}
-		if b["enabled"] == true && str("fromAddr") == "" && !validEmail(str("smtpUser")) {
+		if b["enabled"] == true && str("smtpHost") != "" && str("fromAddr") == "" && !validEmail(str("smtpUser")) {
 			e["fromAddr"] = "Enter a sender email address."
 		}
 

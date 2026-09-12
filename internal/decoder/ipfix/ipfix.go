@@ -14,6 +14,7 @@ package ipfix
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net"
 	"sync"
@@ -71,6 +72,8 @@ const (
 	eNAT_DST_IPV4  = 226 // postNATDestinationIPv4Address
 	eNAT_SRC_PORT  = 227 // postNAPTSourceTransportPort
 	eNAT_DST_PORT  = 228 // postNAPTDestinationTransportPort
+	eNAT_SRC_IPV6  = 281 // postNATSourceIPv6Address (NAT64/dual-stack)
+	eNAT_DST_IPV6  = 282 // postNATDestinationIPv6Address
 	eNAT_EVENT     = 230 // natEvent: 1 = allocation, 2 = release
 	eUSERNAME      = 371 // username: the subscriber the BNG already knows
 )
@@ -353,11 +356,11 @@ func applyField(f *decoder.Flow, ie uint16, v []byte, _ time.Time) {
 		f.FlowStart = msToTime(int64(beUint(v)))
 	case eFLOW_END_MS:
 		f.FlowEnd = msToTime(int64(beUint(v)))
-	case eNAT_SRC_IPV4:
+	case eNAT_SRC_IPV4, eNAT_SRC_IPV6:
 		f.NatPublicIP = cloneIP(v)
 	case eNAT_SRC_PORT:
 		f.NatPublicPort = uint16(beUint(v))
-	case eNAT_DST_IPV4:
+	case eNAT_DST_IPV4, eNAT_DST_IPV6:
 		f.NatDestIP = cloneIP(v)
 	case eNAT_DST_PORT:
 		f.NatDestPort = uint16(beUint(v))
@@ -448,4 +451,86 @@ func trimField(v []byte) string {
 		v = v[:i]
 	}
 	return string(bytes.TrimSpace(v))
+}
+
+// SerializableField represents a single IPFIX template field for serialization.
+type SerializableField struct {
+	Type       uint16 `json:"type"`
+	Length     uint16 `json:"length"`
+	Enterprise bool   `json:"enterprise"`
+}
+
+// SerializableTemplate represents a cached IPFIX template for state persistence.
+type SerializableTemplate struct {
+	Exporter  string              `json:"exporter"`
+	ObsDomain uint32              `json:"obsDomain"`
+	ID        uint16              `json:"id"`
+	Fields    []SerializableField `json:"fields"`
+	RecordLen int                 `json:"recordLen"`
+	HasVarlen bool                `json:"hasVarlen"`
+	IsOptions bool                `json:"isOptions"`
+}
+
+// DumpTemplates serializes cached IPFIX templates to JSON for persistence across restarts.
+func (d *Decoder) DumpTemplates() ([]byte, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	list := make([]SerializableTemplate, 0, len(d.templates))
+	for k, t := range d.templates {
+		sFields := make([]SerializableField, len(t.fields))
+		for i, f := range t.fields {
+			sFields[i] = SerializableField{
+				Type:       f.ie,
+				Length:     f.length,
+				Enterprise: f.enterprise,
+			}
+		}
+		list = append(list, SerializableTemplate{
+			Exporter:  k.exporter,
+			ObsDomain: k.obsDomain,
+			ID:        k.id,
+			Fields:    sFields,
+			RecordLen: t.recordLen,
+			HasVarlen: t.hasVarlen,
+			IsOptions: t.isOptions,
+		})
+	}
+	return json.Marshal(list)
+}
+
+// LoadTemplates restores IPFIX templates from persistent state, eliminating the cold-start gap.
+func (d *Decoder) LoadTemplates(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	var list []SerializableTemplate
+	if err := json.Unmarshal(data, &list); err != nil {
+		return err
+	}
+
+	now := time.Now().UnixNano()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, s := range list {
+		k := templateKey{exporter: s.Exporter, obsDomain: s.ObsDomain, id: s.ID}
+		fields := make([]field, len(s.Fields))
+		for i, sf := range s.Fields {
+			fields[i] = field{
+				ie:         sf.Type,
+				length:     sf.Length,
+				enterprise: sf.Enterprise,
+			}
+		}
+		t := &template{
+			fields:    fields,
+			recordLen: s.RecordLen,
+			hasVarlen: s.HasVarlen,
+			isOptions: s.IsOptions,
+		}
+		t.lastSeen.Store(now)
+		d.templates[k] = t
+	}
+	return nil
 }

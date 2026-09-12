@@ -56,6 +56,9 @@ var schema = []string{
 		role VARCHAR(16) NOT NULL,
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE users MODIFY COLUMN totp_secret VARCHAR(255) NOT NULL DEFAULT ''`,
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled TINYINT(1) NOT NULL DEFAULT 0`,
 	`CREATE TABLE IF NOT EXISTS isp_profiles (
         isp_id INT UNSIGNED NOT NULL PRIMARY KEY,
         username VARCHAR(64) NOT NULL UNIQUE,
@@ -98,6 +101,16 @@ var schema = []string{
 		case_ref VARCHAR(190) NOT NULL DEFAULT '',
 		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX idx_qa_isp (isp_id, created_at)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+	`ALTER TABLE query_audit ADD COLUMN IF NOT EXISTS prev_hash CHAR(64) NOT NULL DEFAULT ''`,
+	`ALTER TABLE query_audit ADD COLUMN IF NOT EXISTS row_hash CHAR(64) NOT NULL DEFAULT ''`,
+	`CREATE TABLE IF NOT EXISTS investigations (
+		id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, isp_id INT UNSIGNED NOT NULL,
+		reference VARCHAR(190) NOT NULL, title VARCHAR(255) NOT NULL, notes MEDIUMTEXT NOT NULL,
+		status VARCHAR(16) NOT NULL DEFAULT 'open', created_by VARCHAR(190) NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		UNIQUE KEY uq_case_ref (isp_id, reference), INDEX idx_case_isp (isp_id, updated_at)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 	`CREATE TABLE IF NOT EXISTS settings (
 		section VARCHAR(32) NOT NULL PRIMARY KEY,
@@ -206,8 +219,8 @@ func (s *MySQLStore) GetUserByEmail(ctx context.Context, email string) (User, er
 	var u User
 	var role string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, isp_id, email, password_hash, role, created_at FROM users WHERE email=?`, email).
-		Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &role, &u.CreatedAt)
+		`SELECT id, isp_id, email, password_hash, role, created_at, totp_secret, totp_enabled FROM users WHERE email=?`, email).
+		Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &role, &u.CreatedAt, &u.TOTPSecret, &u.TOTPEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -225,8 +238,8 @@ func (s *MySQLStore) GetUser(ctx context.Context, id int64) (User, error) {
 	var u User
 	var role string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, isp_id, email, password_hash, role, created_at FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &role, &u.CreatedAt)
+		`SELECT id, isp_id, email, password_hash, role, created_at, totp_secret, totp_enabled FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &role, &u.CreatedAt, &u.TOTPSecret, &u.TOTPEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -262,6 +275,14 @@ func (s *MySQLStore) ListUsers(ctx context.Context, ispID uint32) ([]User, error
 
 func (s *MySQLStore) UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, passwordHash, id)
+	if err != nil {
+		return err
+	}
+	return rowsAffectedErr(res)
+}
+
+func (s *MySQLStore) UpdateUserTOTP(ctx context.Context, id int64, secret string, enabled bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret=?, totp_enabled=? WHERE id=?`, secret, enabled, id)
 	if err != nil {
 		return err
 	}
@@ -389,24 +410,34 @@ func (s *MySQLStore) TouchAgent(ctx context.Context, id int64, t time.Time) erro
 func (s *MySQLStore) LogQuery(ctx context.Context, q QueryAudit) (int64, error) {
 	var from, to any
 	if !q.FromTS.IsZero() {
-		from = q.FromTS.UTC()
+		q.FromTS = q.FromTS.UTC().Truncate(time.Second)
+		from = q.FromTS
 	}
 	if !q.ToTS.IsZero() {
-		to = q.ToTS.UTC()
+		q.ToTS = q.ToTS.UTC().Truncate(time.Second)
+		to = q.ToTS
 	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO query_audit (user_email, isp_id, query_ip, query_port, query_proto, from_ts, to_ts, result_count, case_ref)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		q.UserEmail, q.ISPID, q.QueryIP, q.QueryPort, q.QueryProto, from, to, q.ResultCount, q.CaseRef)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	_ = tx.QueryRowContext(ctx, `SELECT row_hash FROM query_audit ORDER BY id DESC LIMIT 1 FOR UPDATE`).Scan(&q.PrevHash)
+	q.CreatedAt = time.Now().UTC().Truncate(time.Second)
+	q.RowHash = AuditHash(q, q.PrevHash)
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO query_audit (user_email, isp_id, query_ip, query_port, query_proto, from_ts, to_ts, result_count, case_ref, created_at, prev_hash, row_hash)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		q.UserEmail, q.ISPID, q.QueryIP, q.QueryPort, q.QueryProto, from, to, q.ResultCount, q.CaseRef, q.CreatedAt, q.PrevHash, q.RowHash)
 	if err != nil {
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
-	return id, nil
+	return id, tx.Commit()
 }
 
 func (s *MySQLStore) ListQueries(ctx context.Context, ispID uint32, limit int) ([]QueryAudit, error) {
-	const cols = `id, user_email, isp_id, query_ip, query_port, query_proto, from_ts, to_ts, result_count, case_ref, created_at`
+	const cols = `id, user_email, isp_id, query_ip, query_port, query_proto, from_ts, to_ts, result_count, case_ref, created_at, prev_hash, row_hash`
 	var (
 		rows *sql.Rows
 		err  error
@@ -424,7 +455,7 @@ func (s *MySQLStore) ListQueries(ctx context.Context, ispID uint32, limit int) (
 	for rows.Next() {
 		var q QueryAudit
 		var from, to sql.NullTime
-		if err := rows.Scan(&q.ID, &q.UserEmail, &q.ISPID, &q.QueryIP, &q.QueryPort, &q.QueryProto, &from, &to, &q.ResultCount, &q.CaseRef, &q.CreatedAt); err != nil {
+		if err := rows.Scan(&q.ID, &q.UserEmail, &q.ISPID, &q.QueryIP, &q.QueryPort, &q.QueryProto, &from, &to, &q.ResultCount, &q.CaseRef, &q.CreatedAt, &q.PrevHash, &q.RowHash); err != nil {
 			return nil, err
 		}
 		if from.Valid {
@@ -434,6 +465,102 @@ func (s *MySQLStore) ListQueries(ctx context.Context, ispID uint32, limit int) (
 			q.ToTS = to.Time
 		}
 		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+func (s *MySQLStore) VerifyAuditChain(ctx context.Context) (int64, error) {
+	const cols = `user_email,isp_id,query_ip,query_port,query_proto,from_ts,to_ts,result_count,case_ref,created_at,prev_hash,row_hash`
+	rows, e := s.db.QueryContext(ctx, `SELECT `+cols+` FROM query_audit ORDER BY id`)
+	if e != nil {
+		return 0, e
+	}
+	defer rows.Close()
+	var previous string
+	var checked int64
+	started := false
+	for rows.Next() {
+		var q QueryAudit
+		var from, to sql.NullTime
+		if e = rows.Scan(&q.UserEmail, &q.ISPID, &q.QueryIP, &q.QueryPort, &q.QueryProto, &from, &to, &q.ResultCount, &q.CaseRef, &q.CreatedAt, &q.PrevHash, &q.RowHash); e != nil {
+			return checked, e
+		}
+		if from.Valid {
+			q.FromTS = from.Time
+		}
+		if to.Valid {
+			q.ToTS = to.Time
+		}
+		if q.RowHash == "" && !started {
+			continue
+		}
+		started = true
+		if q.PrevHash != previous || q.RowHash != AuditHash(q, previous) {
+			return checked, fmt.Errorf("audit chain mismatch after %d verified rows", checked)
+		}
+		previous = q.RowHash
+		checked++
+	}
+	return checked, rows.Err()
+}
+
+const investigationCols = `id,isp_id,reference,title,notes,status,created_by,created_at,updated_at`
+
+func scanInvestigation(sc interface{ Scan(...any) error }) (Investigation, error) {
+	var c Investigation
+	e := sc.Scan(&c.ID, &c.ISPID, &c.Reference, &c.Title, &c.Notes, &c.Status, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(e, sql.ErrNoRows) {
+		e = ErrNotFound
+	}
+	return c, e
+}
+func (s *MySQLStore) SaveInvestigation(ctx context.Context, c Investigation) (Investigation, error) {
+	if c.ID == 0 {
+		res, e := s.db.ExecContext(ctx, `INSERT INTO investigations(isp_id,reference,title,notes,status,created_by) VALUES(?,?,?,?,?,?)`, c.ISPID, c.Reference, c.Title, c.Notes, c.Status, c.CreatedBy)
+		if isDuplicate(e) {
+			return c, ErrDuplicate
+		}
+		if e != nil {
+			return c, e
+		}
+		c.ID, _ = res.LastInsertId()
+	} else {
+		res, e := s.db.ExecContext(ctx, `UPDATE investigations SET reference=?,title=?,notes=?,status=? WHERE id=? AND isp_id=?`, c.Reference, c.Title, c.Notes, c.Status, c.ID, c.ISPID)
+		if isDuplicate(e) {
+			return c, ErrDuplicate
+		}
+		if e != nil {
+			return c, e
+		}
+		if e = rowsAffectedErr(res); e != nil {
+			return c, e
+		}
+	}
+	return s.GetInvestigation(ctx, c.ID)
+}
+func (s *MySQLStore) GetInvestigation(ctx context.Context, id int64) (Investigation, error) {
+	return scanInvestigation(s.db.QueryRowContext(ctx, `SELECT `+investigationCols+` FROM investigations WHERE id=?`, id))
+}
+func (s *MySQLStore) ListInvestigations(ctx context.Context, ispID uint32) ([]Investigation, error) {
+	q := `SELECT ` + investigationCols + ` FROM investigations`
+	var a []any
+	if ispID != 0 {
+		q += ` WHERE isp_id=?`
+		a = append(a, ispID)
+	}
+	q += ` ORDER BY updated_at DESC`
+	rows, e := s.db.QueryContext(ctx, q, a...)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []Investigation{}
+	for rows.Next() {
+		c, e := scanInvestigation(rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

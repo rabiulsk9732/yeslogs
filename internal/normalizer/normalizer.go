@@ -36,6 +36,11 @@ type FlowRecord struct {
 
 	FlowStart time.Time
 	FlowEnd   time.Time
+	// ExporterFlow* preserve the timestamps reported on the wire while
+	// FlowStart/FlowEnd remain the trusted collector timeline for compatibility.
+	ExporterFlowStart time.Time
+	ExporterFlowEnd   time.Time
+	CollectorReceived time.Time
 
 	FlowType   string
 	ExporterIP net.IP
@@ -66,24 +71,27 @@ func (n *Normalizer) Normalize(f decoder.Flow, flowType string, ispID, deviceID 
 	now := time.Now()
 	start, end := now, now
 	return FlowRecord{
-		ISPID:         ispID,
-		DeviceID:      deviceID,
-		SrcIP:         f.SrcIP,
-		SrcPort:       f.SrcPort,
-		DstIP:         f.DstIP,
-		DstPort:       f.DstPort,
-		NatPublicIP:   f.NatPublicIP,
-		NatPublicPort: f.NatPublicPort,
-		NatDestIP:     f.NatDestIP,
-		NatDestPort:   f.NatDestPort,
-		NatEvent:      f.NatEvent,
-		Username:      f.Username,
-		Protocol:      f.Protocol,
-		Bytes:         f.Bytes,
-		Packets:       f.Packets,
-		FlowStart:     start,
-		FlowEnd:       end,
-		FlowType:      flowType,
-		ExporterIP:    f.ExporterIP,
+		ISPID:             ispID,
+		DeviceID:          deviceID,
+		SrcIP:             f.SrcIP,
+		SrcPort:           f.SrcPort,
+		DstIP:             f.DstIP,
+		DstPort:           f.DstPort,
+		NatPublicIP:       f.NatPublicIP,
+		NatPublicPort:     f.NatPublicPort,
+		NatDestIP:         f.NatDestIP,
+		NatDestPort:       f.NatDestPort,
+		NatEvent:          f.NatEvent,
+		Username:          f.Username,
+		Protocol:          f.Protocol,
+		Bytes:             f.Bytes,
+		Packets:           f.Packets,
+		FlowStart:         start,
+		FlowEnd:           end,
+		ExporterFlowStart: f.FlowStart,
+		ExporterFlowEnd:   f.FlowEnd,
+		CollectorReceived: now,
+		FlowType:          flowType,
+		ExporterIP:        f.ExporterIP,
 	}
 }

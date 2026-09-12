@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -61,16 +62,22 @@ type S3Settings struct {
 // healthy→silent transition (and again every RemindHours while still silent),
 // plus a recovery email when flows resume.
 type NotificationSettings struct {
-	Enabled      bool   `json:"enabled"`
-	SMTPHost     string `json:"smtpHost"`
-	SMTPPort     int    `json:"smtpPort"`     // 587 starttls | 465 tls | 25 none
-	SMTPUser     string `json:"smtpUser"`     // empty = no AUTH
-	SMTPPassword string `json:"smtpPassword"` // cleared on read; never returned to the client
-	SMTPTLS      string `json:"smtpTls"`      // starttls | tls | none
-	FromAddr     string `json:"fromAddr"`
-	Recipients   string `json:"recipients"`  // comma/newline separated
-	SilenceMins  int    `json:"silenceMins"` // mark silent after N min no flows
-	RemindHours  int    `json:"remindHours"` // re-remind cadence while down (0 = once)
+	Enabled        bool   `json:"enabled"`
+	SMTPHost       string `json:"smtpHost"`
+	SMTPPort       int    `json:"smtpPort"`     // 587 starttls | 465 tls | 25 none
+	SMTPUser       string `json:"smtpUser"`     // empty = no AUTH
+	SMTPPassword   string `json:"smtpPassword"` // cleared on read; never returned to the client
+	SMTPTLS        string `json:"smtpTls"`      // starttls | tls | none
+	FromAddr       string `json:"fromAddr"`
+	Recipients     string `json:"recipients"` // comma/newline separated
+	WebhookEnabled bool   `json:"webhookEnabled"`
+	WebhookURL     string `json:"webhookUrl"`
+	WebhookType    string `json:"webhookType"` // generic | slack | discord | telegram
+	TelegramChatID string `json:"telegramChatId"`
+	SilenceMins    int    `json:"silenceMins"`  // mark silent after N min no flows
+	RemindHours    int    `json:"remindHours"`  // re-remind cadence while down (0 = once)
+	DailySummary   bool   `json:"dailySummary"` // send the previous storage day's totals
+	DailyHourIST   int    `json:"dailyHourIst"` // delivery hour in IST (0-23)
 }
 
 const secretMask = "••••••••"
@@ -229,12 +236,21 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
 		return
 	}
-	// Fail fast on malformed recipient addresses so the operator finds out at save
-	// time, not when a device-down alert silently fails to deliver.
+	// Fail fast on malformed recipient addresses or invalid webhook URLs so the operator
+	// finds out at save time, not when a device-down alert silently fails to deliver.
 	if section == "notifications" {
-		for _, rc := range notify.SplitRecipients(nf.Recipients) {
-			if _, perr := mail.ParseAddress(rc); perr != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid recipient address: " + rc})
+		if strings.TrimSpace(nf.Recipients) != "" {
+			for _, rc := range notify.SplitRecipients(nf.Recipients) {
+				if _, perr := mail.ParseAddress(rc); perr != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid recipient address: " + rc})
+					return
+				}
+			}
+		}
+		if nf.WebhookEnabled && strings.TrimSpace(nf.WebhookURL) != "" {
+			u, err := url.Parse(strings.TrimSpace(nf.WebhookURL))
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook URL (must start with http:// or https://)"})
 				return
 			}
 		}
@@ -392,6 +408,9 @@ func sanitizeNotifications(n NotificationSettings) NotificationSettings {
 	}
 	if n.RemindHours > 168 {
 		n.RemindHours = 168
+	}
+	if n.DailyHourIST < 0 || n.DailyHourIST > 23 {
+		n.DailyHourIST = 8
 	}
 	return n
 }

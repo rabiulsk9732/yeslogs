@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	universalcrm "github.com/natflow/natflow-dataplane/internal/director/crm"
 )
 
 const (
@@ -39,7 +41,9 @@ const (
 type CRMConnectorSettings struct {
 	ISPID     uint32 `json:"ispId"`
 	Enabled   bool   `json:"enabled"`
+	Type      string `json:"type,omitempty"` // yeslogs_v1 | routeros
 	Endpoint  string `json:"endpoint"`
+	Username  string `json:"username,omitempty"`
 	APIKey    string `json:"apiKey,omitempty"`
 	TimeoutMs int    `json:"timeoutMs"`
 	BatchSize int    `json:"batchSize"`
@@ -97,7 +101,8 @@ type crmSubscriber struct {
 }
 
 type crmSession struct {
-	AcctSessionID string `json:"acctSessionId"`
+	AcctSessionID    string `json:"acctSessionId"`
+	CallingStationID string `json:"callingStationId,omitempty"`
 }
 
 type crmCacheEntry struct {
@@ -121,7 +126,15 @@ type crmDeviceIdentity struct {
 // HTTP is accepted only on loopback, which keeps local contract tests possible
 // without permitting production PII/API keys over clear text.
 func sanitizeCRMConnector(v CRMConnectorSettings) (CRMConnectorSettings, error) {
+	v.Type = strings.ToLower(strings.TrimSpace(v.Type))
+	if v.Type == "" {
+		v.Type = "yeslogs_v1"
+	}
+	if v.Type != "yeslogs_v1" && v.Type != "routeros" {
+		return v, errors.New("unsupported CRM connector type")
+	}
 	v.Endpoint = strings.TrimSpace(v.Endpoint)
+	v.Username = strings.TrimSpace(v.Username)
 	v.APIKey = strings.TrimSpace(v.APIKey)
 	if v.TimeoutMs < 500 || v.TimeoutMs > 30000 {
 		v.TimeoutMs = crmDefaultTimeout
@@ -153,6 +166,14 @@ func sanitizeCRMConnector(v CRMConnectorSettings) (CRMConnectorSettings, error) 
 		ip := net.ParseIP(host)
 		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 			return v, errors.New("CRM endpoint must use HTTPS")
+		}
+	}
+	if v.Type == "routeros" {
+		if u.Scheme != "https" {
+			return v, errors.New("RouterOS endpoint must use HTTPS")
+		}
+		if v.Username == "" {
+			return v, errors.New("RouterOS username is required")
 		}
 	}
 	return v, nil
@@ -299,6 +320,7 @@ func normalizeCRMResult(v crmResult) crmResult {
 	v.Subscriber.Address = trimCRMText(v.Subscriber.Address, 1024)
 	v.Subscriber.Phone = trimCRMText(v.Subscriber.Phone, 64)
 	v.Session.AcctSessionID = trimCRMText(v.Session.AcctSessionID, 190)
+	v.Session.CallingStationID = trimCRMText(v.Session.CallingStationID, 64)
 	return v
 }
 
@@ -310,6 +332,7 @@ func applyCRMResult(r *natRecord, v crmResult) {
 	r.CRMPhone = v.Subscriber.Phone
 	r.CRMAccountID = v.Subscriber.AccountID
 	r.CRMSessionID = v.Session.AcctSessionID
+	r.CRMMAC = v.Session.CallingStationID
 }
 
 func addCRMCount(sum *crmEnrichmentSummary, status string, rows int) {
@@ -483,6 +506,38 @@ enqueue:
 }
 
 func (s *Server) sendCRMBatch(ctx context.Context, cfg CRMConnectorSettings, lookups []crmLookup) (map[string]crmResult, error) {
+	if cfg.Type == "routeros" {
+		callCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutMs)*time.Millisecond)
+		defer cancel()
+		connector, err := universalcrm.NewRouterOSConnector(universalcrm.RouterOSConfig{
+			Endpoint: cfg.Endpoint, Username: cfg.Username, Password: cfg.APIKey,
+			Timeout: time.Duration(cfg.TimeoutMs) * time.Millisecond, HTTPClient: s.crmHTTP,
+		})
+		if err != nil {
+			return nil, err
+		}
+		input := make([]universalcrm.LookupRequest, len(lookups))
+		for i, q := range lookups {
+			at, err := time.Parse(time.RFC3339, q.EventTime)
+			if err != nil {
+				return nil, fmt.Errorf("invalid lookup event time: %w", err)
+			}
+			input[i] = universalcrm.LookupRequest{ReferenceCode: q.ReferenceCode, LocalIP: q.LocalIP, EventTime: at, DeviceID: q.DeviceID, NASIdentifier: q.NASIdentifier, NASIPAddress: q.NASIPAddress}
+		}
+		got, err := connector.Lookup(callCtx, input)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]crmResult, len(got))
+		for _, v := range got {
+			out[v.ReferenceCode] = crmResult{
+				ReferenceCode: v.ReferenceCode, Status: string(v.Status),
+				Subscriber: crmSubscriber{AccountID: v.Subscriber.AccountID, Username: v.Subscriber.Username, Name: v.Subscriber.Name, Address: v.Subscriber.Address, Phone: v.Subscriber.Phone},
+				Session:    crmSession{AcctSessionID: v.Session.AcctSessionID, CallingStationID: v.Session.CallingStationID},
+			}
+		}
+		return out, nil
+	}
 	requestID := newCRMRequestID()
 	payload, err := json.Marshal(crmBatchRequest{
 		SchemaVersion: crmSchemaVersion,
@@ -640,4 +695,68 @@ func (s *Server) unmarshalCRMConnectors(raw string) ([]CRMConnectorSettings, err
 	}
 	sort.Slice(connectors, func(i, j int) bool { return connectors[i].ISPID < connectors[j].ISPID })
 	return connectors, nil
+}
+
+func (s *Server) handleTestCRM(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.authJSON(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		ISPID     uint32 `json:"ispId"`
+		LocalIP   string `json:"localIp"`
+		EventTime string `json:"eventTime"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	scope, err := id.scopeISP(body.ISPID)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	cfg, enabled := s.crmConnector(scope)
+	if !enabled {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "CRM connector not enabled or not configured for this ISP"})
+		return
+	}
+	localIP := strings.TrimSpace(body.LocalIP)
+	if localIP == "" {
+		localIP = "127.0.0.1"
+	}
+	evTime := time.Now().UTC()
+	if body.EventTime != "" {
+		if t := parseTime(body.EventTime); !t.IsZero() {
+			evTime = t.UTC()
+		}
+	}
+	refCode := "YL-TEST-" + newCRMRequestID()
+	lookup := crmLookup{
+		ReferenceCode: refCode,
+		LocalIP:       localIP,
+		EventTime:     evTime.Format(time.RFC3339),
+	}
+	resMap, err := s.sendCRMBatch(r.Context(), cfg, []crmLookup{lookup})
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "error",
+			"error":  err.Error(),
+		})
+		return
+	}
+	res, ok := resMap[lookup.ReferenceCode]
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "not_found",
+			"error":  "No result returned for test lookup",
+		})
+		return
+	}
+	res = normalizeCRMResult(res)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     res.Status,
+		"subscriber": res.Subscriber,
+		"session":    res.Session,
+	})
 }

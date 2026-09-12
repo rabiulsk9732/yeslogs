@@ -168,6 +168,8 @@ func (r *FlowReader) DropDay(ctx context.Context, day string) error {
 // day already recorded as archived is skipped, and a day whose upload fails is
 // left in hot storage to retry on the next sweep. Director/central only.
 func (s *Server) ArchiveSweep(ctx context.Context) (days int, rows, bytes int64, err error) {
+	s.archiveSweepMu.Lock()
+	defer s.archiveSweepMu.Unlock()
 	set := s.CurrentSettings().S3
 	arch, _, format := s.archInfo()
 	if arch == nil || !set.AutoArchive || s.flows == nil {

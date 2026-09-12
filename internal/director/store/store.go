@@ -4,7 +4,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -23,7 +26,9 @@ const (
 	// RoleDirector is the software owner (Sayra) — sees and manages everything.
 	RoleDirector Role = "director"
 	// RoleISP is a tenant user — scoped to a single ISP.
-	RoleISP Role = "isp"
+	RoleISP     Role = "isp"
+	RoleAnalyst Role = "analyst"
+	RoleAuditor Role = "auditor"
 )
 
 // ISP is a tenant (a customer ISP that produces flow logs).
@@ -46,6 +51,8 @@ type User struct {
 	Email        string
 	PasswordHash string `json:"-"`
 	Role         Role
+	TOTPSecret   string `json:"-"`
+	TOTPEnabled  bool   `json:"totpEnabled"`
 	CreatedAt    time.Time
 }
 
@@ -78,6 +85,13 @@ type CapturePolicy struct {
 	CreatedAt   time.Time
 }
 
+// AuditHash is the canonical SHA-256 link for one immutable audit event.
+func AuditHash(q QueryAudit, previous string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "yeslogs-audit-v1|%s|%s|%d|%s|%d|%s|%s|%s|%d|%s|%s", previous, q.UserEmail, q.ISPID, q.QueryIP, q.QueryPort, q.QueryProto, q.FromTS.UTC().Format(time.RFC3339Nano), q.ToTS.UTC().Format(time.RFC3339Nano), q.ResultCount, q.CaseRef, q.CreatedAt.UTC().Format(time.RFC3339Nano))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Agent is a dataplane collector that pulls its config from the Director.
 type Agent struct {
 	ID        int64
@@ -101,6 +115,22 @@ type QueryAudit struct {
 	ResultCount int
 	CaseRef     string
 	CreatedAt   time.Time
+	PrevHash    string
+	RowHash     string
+}
+
+// Investigation groups audited searches/exports and case notes under an
+// official FIR/police reference.
+type Investigation struct {
+	ID        int64     `json:"id"`
+	ISPID     uint32    `json:"ispId"`
+	Reference string    `json:"reference"`
+	Title     string    `json:"title"`
+	Notes     string    `json:"notes"`
+	Status    string    `json:"status"`
+	CreatedBy string    `json:"createdBy"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Store is the Director's persistence interface.
@@ -122,6 +152,7 @@ type Store interface {
 	// ListUsers returns users for ispID, or all users when ispID == 0 (director).
 	ListUsers(ctx context.Context, ispID uint32) ([]User, error)
 	UpdateUserPassword(ctx context.Context, id int64, passwordHash string) error
+	UpdateUserTOTP(ctx context.Context, id int64, secret string, enabled bool) error
 	DeleteUser(ctx context.Context, id int64) error
 	SaveUser(ctx context.Context, expected User, replacement *User) (User, error)
 	CountUsers(ctx context.Context) (int, error)
@@ -141,6 +172,10 @@ type Store interface {
 	// (ispID 0 = all, director only).
 	LogQuery(ctx context.Context, q QueryAudit) (int64, error)
 	ListQueries(ctx context.Context, ispID uint32, limit int) ([]QueryAudit, error)
+	VerifyAuditChain(ctx context.Context) (int64, error)
+	SaveInvestigation(ctx context.Context, c Investigation) (Investigation, error)
+	GetInvestigation(ctx context.Context, id int64) (Investigation, error)
+	ListInvestigations(ctx context.Context, ispID uint32) ([]Investigation, error)
 
 	// Settings are JSON blobs keyed by section (dataplane, skiprules, retention,
 	// s3) — the editable, DB-backed source of truth (YAML is only bootstrap).

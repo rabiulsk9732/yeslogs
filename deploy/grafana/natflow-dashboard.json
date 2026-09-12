@@ -106,6 +106,33 @@
         { "refId": "C", "expr": "rate(device_rejected_packets_total[1m])", "legendFormat": "rejected pkts/s" },
         { "refId": "D", "expr": "rate(unknown_exporter_packets_total[1m])", "legendFormat": "unknown pkts/s" }
       ]
+    },
+    {
+      "id": 7,
+      "title": "Kernel UDP receive-buffer drops",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "cps", "thresholds": { "steps": [{"color":"green","value":null},{"color":"red","value":0.01}] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "rate(kernel_udp_receive_errors_total[1m])", "legendFormat": "kernel drops/s" }]
+    },
+    {
+      "id": 8,
+      "title": "Collector clock offset",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "steps": [{"color":"green","value":null},{"color":"red","value":0.5}] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "collector_ntp_offset_seconds", "legendFormat": "NTP offset" }]
+    },
+    {
+      "id": 9,
+      "title": "ClickHouse disk usage",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{"color":"green","value":null},{"color":"orange","value":85},{"color":"red","value":90}] } }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "clickhouse_disk_used_percent", "legendFormat": "used" }]
     }
   ]
 }

@@ -43,6 +43,8 @@ type ingestMonState struct {
 	lastAlert       time.Time
 	broken          uint64 // last observed broken detached-parts count
 	lastBrokenAlert time.Time
+	dbDown          bool
+	lastDBAlert     time.Time
 }
 
 // RunIngestMonitor watches writer throughput and alerts when flows keep
@@ -63,12 +65,57 @@ func (s *Server) RunIngestMonitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			s.clickHouseHealthCheck(ctx, st)
 			s.ingestTick(ctx, st)
 			if n++; n%brokenCheckEvery == 0 {
 				s.brokenPartsCheck(ctx, st)
 			}
 		}
 	}
+}
+
+// clickHouseHealthCheck catches a database crash even during a quiet period,
+// when the decoded/inserted delta monitor has no traffic signal to compare.
+func (s *Server) clickHouseHealthCheck(ctx context.Context, st *ingestMonState) {
+	if s.flows == nil {
+		return
+	}
+	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err := s.flows.Ping(qctx)
+	cancel()
+	now := time.Now()
+	if err == nil && !st.dbDown {
+		return
+	}
+	notifier := s.getNotifier()
+	enabled := s.CurrentSettings().Notifications.Enabled
+	name := s.stats().Name
+	if err == nil {
+		st.dbDown = false
+		if notifier == nil || !enabled {
+			return
+		}
+		sctx, sc := context.WithTimeout(ctx, 30*time.Second)
+		sendErr := notifier(sctx, fmt.Sprintf("[ISPmate] RECOVERED: ClickHouse is reachable on %s", name), fmt.Sprintf("ClickHouse connectivity has recovered on dataplane %q. Verify the writer spool drains and per-day counts remain continuous.\n\n— ISPmate Operations", name))
+		sc()
+		if sendErr != nil {
+			s.log.Error("ClickHouse recovery alert failed", "error", sendErr)
+		}
+		return
+	}
+	st.dbDown = true
+	if notifier == nil || !enabled || (!st.lastDBAlert.IsZero() && now.Sub(st.lastDBAlert) < s.remindInterval()) {
+		return
+	}
+	sctx, sc := context.WithTimeout(ctx, 30*time.Second)
+	sendErr := notifier(sctx, fmt.Sprintf("[ISPmate] CLICKHOUSE DOWN on %s", name), fmt.Sprintf("ClickHouse health check failed on dataplane %q:\n\n%s\n\nNew batches should remain in the configured local spool until recovery. Check clickhouse-server and disk health immediately.\n\n— ISPmate Operations", name, err))
+	sc()
+	if sendErr != nil {
+		s.log.Error("ClickHouse down alert failed", "error", sendErr)
+		return
+	}
+	st.lastDBAlert = now
+	s.log.Error("ClickHouse down alert sent", "error", err)
 }
 
 func (s *Server) ingestTick(ctx context.Context, st *ingestMonState) {
@@ -85,8 +132,8 @@ func (s *Server) ingestTick(ctx context.Context, st *ingestMonState) {
 	defer cancel()
 	name := s.stats().Name
 	if recovered {
-		subject := fmt.Sprintf("[YesLogs] RECOVERED: ClickHouse inserts resumed on %s", name)
-		body := fmt.Sprintf("Flow inserts to ClickHouse have resumed on dataplane %q.\n\nVerify there is no gap: check Retention → per-day counts around this time.\n\n— YesLogs Operations", name)
+		subject := fmt.Sprintf("[ISPmate] RECOVERED: ClickHouse inserts resumed on %s", name)
+		body := fmt.Sprintf("Flow inserts to ClickHouse have resumed on dataplane %q.\n\nVerify there is no gap: check Retention → per-day counts around this time.\n\n— ISPmate Operations", name)
 		if err := notifier(sctx, subject, body); err != nil {
 			s.log.Error("ingest recovery email failed", "error", err)
 			return
@@ -94,7 +141,7 @@ func (s *Server) ingestTick(ctx context.Context, st *ingestMonState) {
 		s.log.Info("ingest recovery alert sent")
 		return
 	}
-	subject := fmt.Sprintf("[YesLogs] INGEST STALLED on %s — flows arriving but NOT stored", name)
+	subject := fmt.Sprintf("[ISPmate] INGEST STALLED on %s — flows arriving but NOT stored", name)
 	body := ingestAlertBody(name, deltas, cur)
 	if err := notifier(sctx, subject, body); err != nil {
 		s.log.Error("ingest stall email failed", "error", err)
@@ -174,7 +221,7 @@ shutdown/power loss (broken parts). Runbook:
 `)
 		}
 	}
-	b.WriteString("Check: systemctl status natlog clickhouse-server; journalctl -u natlog -n 50\n\n— YesLogs Operations")
+	b.WriteString("Check: systemctl status natlog clickhouse-server; journalctl -u natlog -n 50\n\n— ISPmate Operations")
 	return b.String()
 }
 
@@ -216,7 +263,7 @@ func (s *Server) brokenPartsCheck(ctx context.Context, st *ingestMonState) {
 		return
 	}
 	name := s.stats().Name
-	subject := fmt.Sprintf("[YesLogs] DATA WARNING on %s: %d broken ClickHouse parts detached", name, n)
+	subject := fmt.Sprintf("[ISPmate] DATA WARNING on %s: %d broken ClickHouse parts detached", name, n)
 	body := fmt.Sprintf(`ClickHouse on dataplane %q has detached %d broken data parts (was %d).
 
 These parts were corrupted (typically by an unclean shutdown/power loss) and
@@ -229,7 +276,7 @@ If the affected table is a rollup (flow_rollup*), rebuild it from flow_logs.
 If flow_logs itself is affected, quantify the gap (Retention → per-day counts)
 and check the S3 cold archive for those days.
 
-— YesLogs Operations`, name, n, prev)
+— ISPmate Operations`, name, n, prev)
 	sctx, sc := context.WithTimeout(ctx, 30*time.Second)
 	defer sc()
 	if err := notifier(sctx, subject, body); err != nil {

@@ -87,13 +87,14 @@ func (e *Exporter) exportDay(ctx context.Context, ispID uint32, day time.Time, f
 	start := time.Now()
 	ins := fmt.Sprintf(`INSERT INTO FUNCTION s3('%s','%s','%s','%s')
 		SELECT isp_id, device_id,
-			IPv4NumToString(src_ip) AS src_ip, src_port,
-			IPv4NumToString(dst_ip) AS dst_ip, dst_port,
-			IPv4NumToString(nat_public_ip) AS nat_public_ip, nat_public_port,
-			IPv4NumToString(nat_dest_ip) AS nat_dest_ip, nat_dest_port,
+			toString(if(src_ip_v6=toIPv6('::'),toIPv6(src_ip),src_ip_v6)) AS src_ip, src_port,
+			toString(if(dst_ip_v6=toIPv6('::'),toIPv6(dst_ip),dst_ip_v6)) AS dst_ip, dst_port,
+			toString(if(nat_public_ip_v6=toIPv6('::'),toIPv6(nat_public_ip),nat_public_ip_v6)) AS nat_public_ip, nat_public_port,
+			toString(if(nat_dest_ip_v6=toIPv6('::'),toIPv6(nat_dest_ip),nat_dest_ip_v6)) AS nat_dest_ip, nat_dest_port,
 			nat_event, username,
 			protocol, bytes, packets, flow_start, flow_end, flow_type,
-			IPv4NumToString(exporter_ip) AS exporter_ip
+			toString(if(exporter_ip_v6=toIPv6('::'),toIPv6(exporter_ip),exporter_ip_v6)) AS exporter_ip,
+			exporter_flow_start, exporter_flow_end, collector_received
 		FROM %s.%s WHERE event_date = ? AND isp_id = ?`,
 		chLit(url), chLit(e.s3.AccessKey()), chLit(e.s3.SecretKey()), chFormat, e.db, e.table)
 	if err := e.conn.Exec(ctx, ins, dateStr, ispID); err != nil {

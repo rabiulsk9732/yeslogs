@@ -279,3 +279,49 @@ func TestUsernamePaddingIsStripped(t *testing.T) {
 		}
 	}
 }
+
+func TestDumpAndLoadTemplates(t *testing.T) {
+	d1 := New(nil, nil)
+	exp := net.ParseIP("192.0.2.1")
+
+	// Learn a template in d1
+	pkt := v9Header(1, 1000, 100, 1, 42)
+	pkt = append(pkt, templateFlowSet(256, stdTemplateFields)...)
+	if _, err := d1.Decode(nil, pkt, exp); err != nil {
+		t.Fatalf("decode template: %v", err)
+	}
+
+	// Dump templates
+	dump, err := d1.DumpTemplates()
+	if err != nil {
+		t.Fatalf("dump templates: %v", err)
+	}
+	if len(dump) == 0 {
+		t.Fatal("dump is empty")
+	}
+
+	// Load into a fresh decoder d2
+	d2 := New(nil, nil)
+	if err := d2.LoadTemplates(dump); err != nil {
+		t.Fatalf("load templates: %v", err)
+	}
+
+	// d2 should immediately decode data flowsets for template 256 without having received the template packet
+	dataPkt := v9Header(1, 2000, 101, 2, 42)
+	fs := make([]byte, 4+29)
+	binary.BigEndian.PutUint16(fs[0:2], 256)
+	binary.BigEndian.PutUint16(fs[2:4], uint16(len(fs)))
+	copy(fs[4:], stdRecord(net.ParseIP("10.0.0.1"), net.ParseIP("10.0.0.2"), 1234, 80, 6, 100, 1, 1000, 2000))
+	dataPkt = append(dataPkt, fs...)
+
+	flows, err := d2.Decode(nil, dataPkt, exp)
+	if err != nil {
+		t.Fatalf("d2 failed to decode data: %v", err)
+	}
+	if len(flows) != 1 {
+		t.Fatalf("expected 1 flow decoded in d2, got %d", len(flows))
+	}
+	if flows[0].SrcIP.String() != "10.0.0.1" {
+		t.Errorf("expected 10.0.0.1, got %s", flows[0].SrcIP)
+	}
+}

@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_logs
 
     flow_type LowCardinality(String),
     exporter_ip IPv4,
+    -- Dual-stack shadow columns preserve IPv6 without rewriting the installed
+    -- IPv4 table. IPv4 rows keep ::; readers select by address family.
+    src_ip_v6 IPv6 DEFAULT toIPv6('::'),
+    dst_ip_v6 IPv6 DEFAULT toIPv6('::'),
+    nat_public_ip_v6 IPv6 DEFAULT toIPv6('::'),
+    nat_dest_ip_v6 IPv6 DEFAULT toIPv6('::'),
+    exporter_ip_v6 IPv6 DEFAULT toIPv6('::'),
+    -- Both clocks are retained: collector time remains the canonical query
+    -- timeline; raw exporter time remains available as evidence/diagnostics.
+    exporter_flow_start Nullable(DateTime64(3)),
+    exporter_flow_end Nullable(DateTime64(3)),
+    collector_received DateTime64(3) DEFAULT now64(3),
     created_at DateTime DEFAULT now(),
 
     -- Data-skipping indexes for the reverse-NAT / subscriber lookups. These IPs
@@ -51,7 +63,8 @@ CREATE TABLE IF NOT EXISTS natlogs.flow_logs
     -- scan the tenant's history; the bloom filter lets ClickHouse skip 32k-row
     -- blocks that cannot contain the IP, keeping point lookups fast at TB scale.
     INDEX idx_nat_ip nat_public_ip TYPE bloom_filter(0.01) GRANULARITY 4,
-    INDEX idx_src_ip src_ip TYPE bloom_filter(0.01) GRANULARITY 4
+    INDEX idx_src_ip src_ip TYPE bloom_filter(0.01) GRANULARITY 4,
+    INDEX idx_nat_port nat_public_port TYPE minmax GRANULARITY 4
 )
 ENGINE = MergeTree
 PARTITION BY event_date
@@ -63,6 +76,16 @@ SETTINGS index_granularity = 8192;
 -- remain untouched. The writer also performs these metadata changes at startup.
 ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_ip IPv4 DEFAULT toIPv4('0.0.0.0');
 ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_port UInt16 DEFAULT 0;
+ALTER TABLE natlogs.flow_logs ADD INDEX IF NOT EXISTS idx_nat_port nat_public_port TYPE minmax GRANULARITY 4;
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS exporter_flow_start Nullable(DateTime64(3));
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS exporter_flow_end Nullable(DateTime64(3));
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS collector_received DateTime64(3) DEFAULT now64(3);
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS src_ip_v6 IPv6 DEFAULT toIPv6('::');
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS dst_ip_v6 IPv6 DEFAULT toIPv6('::');
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS nat_public_ip_v6 IPv6 DEFAULT toIPv6('::');
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS nat_dest_ip_v6 IPv6 DEFAULT toIPv6('::');
+ALTER TABLE natlogs.flow_logs ADD COLUMN IF NOT EXISTS exporter_ip_v6 IPv6 DEFAULT toIPv6('::');
+ALTER TABLE natlogs.flow_logs ADD INDEX IF NOT EXISTS idx_nat_ip_v6 nat_public_ip_v6 TYPE bloom_filter(0.01) GRANULARITY 4;
 
 -- Dashboard rollups (also auto-created + maintained by natlog on startup). natlog
 -- runs a PERIODIC BATCH rollup (every ~2 min) into these summary tables — NOT a

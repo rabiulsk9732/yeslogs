@@ -305,3 +305,47 @@ func TestMalformedNoPanic(t *testing.T) {
 		t.Errorf("truncated set should be tolerated: %v", err)
 	}
 }
+
+func TestDumpAndLoadTemplates(t *testing.T) {
+	d1 := New(nil, nil)
+	exporter := net.IPv4(192, 0, 2, 99)
+	specs := []spec{{ie: eSRC_IPV4, length: 4}, {ie: eDST_IPV4, length: 4}, {ie: eOCTETS, length: 4}}
+
+	// Learn template in d1
+	tplMsg := ipfixMsg(exSecs, 1, set(setTemplate, templateRecord(300, specs)))
+	if _, err := d1.Decode(nil, tplMsg, exporter); err != nil {
+		t.Fatalf("decode template in d1: %v", err)
+	}
+
+	dump, err := d1.DumpTemplates()
+	if err != nil {
+		t.Fatalf("dump templates: %v", err)
+	}
+	if len(dump) == 0 {
+		t.Fatal("empty dump")
+	}
+
+	// Load into fresh d2
+	d2 := New(nil, nil)
+	if err := d2.LoadTemplates(dump); err != nil {
+		t.Fatalf("load templates in d2: %v", err)
+	}
+
+	// d2 immediately decodes data records for template 300
+	var rec []byte
+	rec = append(rec, net.IPv4(10, 0, 0, 5).To4()...)
+	rec = append(rec, net.IPv4(1, 1, 1, 1).To4()...)
+	rec = append(rec, u32b(1234)...)
+
+	dataMsg := ipfixMsg(exSecs, 1, set(300, rec))
+	flows, err := d2.Decode(nil, dataMsg, exporter)
+	if err != nil {
+		t.Fatalf("d2 decode data: %v", err)
+	}
+	if len(flows) != 1 {
+		t.Fatalf("expected 1 flow, got %d", len(flows))
+	}
+	if flows[0].SrcIP.String() != "10.0.0.5" {
+		t.Errorf("expected 10.0.0.5, got %s", flows[0].SrcIP)
+	}
+}

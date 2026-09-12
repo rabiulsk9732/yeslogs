@@ -22,12 +22,15 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/decoder/ipfix"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow9"
+	"github.com/natflow/natflow-dataplane/internal/decoder/syslognat"
 	devreg "github.com/natflow/natflow-dataplane/internal/device"
+	"github.com/natflow/natflow-dataplane/internal/hostmon"
 	"github.com/natflow/natflow-dataplane/internal/logger"
 	"github.com/natflow/natflow-dataplane/internal/managed"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
+	"github.com/natflow/natflow-dataplane/internal/radiusacct"
 	"github.com/natflow/natflow-dataplane/internal/receiver"
 	chwriter "github.com/natflow/natflow-dataplane/internal/writer/clickhouse"
 )
@@ -127,10 +130,29 @@ func run() (err error) {
 		{"netflow9", cfg.Receiver.Ports.NetFlow9, netflow9.New(m.TemplatesReceived, m.TemplateUnknown)},
 		{"ipfix", cfg.Receiver.Ports.IPFIX, ipfix.New(m.TemplatesReceived, m.TemplateUnknown)},
 	}
+	if cfg.Receiver.Ports.SyslogUDP > 0 {
+		bindings = append(bindings, struct {
+			name string
+			port int
+			dec  decoder.Decoder
+		}{"syslog", cfg.Receiver.Ports.SyslogUDP, syslognat.New()})
+	}
 
 	var receivers []*receiver.Receiver
+	var radiusServer *radiusacct.Server
+	var radiusCache *radiusacct.Cache
+	if cfg.Receiver.Ports.RADIUSAccounting > 0 {
+		radiusCache = radiusacct.NewCache(time.Duration(cfg.RADIUS.SessionTTLHours) * time.Hour)
+		radiusServer, err = radiusacct.New(cfg.Receiver.BindIP, cfg.Receiver.Ports.RADIUSAccounting, cfg.RADIUS.Secret, radiusCache, log)
+		if err != nil {
+			return err
+		}
+	}
 	for _, b := range bindings {
 		p := pipeline.New(b.dec, norm, live, devices, cfg.Server.ISPID, cfg.Server.DeviceIDDefault, manager, m, log)
+		if radiusCache != nil {
+			p.SetSubscriberResolver(radiusCache.Lookup)
+		}
 		rcv, rerr := receiver.New(b.name, cfg.Receiver.BindIP, b.port,
 			cfg.Receiver.Workers, cfg.Receiver.UDPReadBufferMB, p, m, log)
 		if rerr != nil {
@@ -145,9 +167,25 @@ func run() (err error) {
 	for _, r := range receivers {
 		r.Start()
 	}
+	var tcpSyslog *receiver.TCPReceiver
+	if cfg.Receiver.Ports.SyslogTCP > 0 {
+		p := pipeline.New(syslognat.New(), norm, live, devices, cfg.Server.ISPID, cfg.Server.DeviceIDDefault, manager, m, log)
+		if radiusCache != nil {
+			p.SetSubscriberResolver(radiusCache.Lookup)
+		}
+		tcpSyslog, err = receiver.NewTCP("syslog-tcp", cfg.Receiver.BindIP, cfg.Receiver.Ports.SyslogTCP, p, m, log)
+		if err != nil {
+			return err
+		}
+		tcpSyslog.Start()
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if radiusServer != nil {
+		radiusServer.Start(ctx)
+	}
+	go hostmon.Run(ctx, hostmon.Config{NTPServer: cfg.Monitoring.NTPServer, MaxSkew: time.Duration(cfg.Monitoring.NTPMaxSkewMS) * time.Millisecond, Interval: time.Duration(cfg.Monitoring.IntervalS) * time.Second, DiskPath: cfg.Monitoring.ClickHouseDataPath, AlertPercent: cfg.Monitoring.DiskAlertPercent, SafetyPercent: cfg.Monitoring.DiskSafetyPercent}, m, log, nil)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
@@ -232,6 +270,12 @@ loop:
 
 	for _, r := range receivers {
 		r.Stop()
+	}
+	if tcpSyslog != nil {
+		tcpSyslog.Stop()
+	}
+	if radiusServer != nil {
+		radiusServer.Stop()
 	}
 	manager.Stop()
 	log.Info("writers drained")

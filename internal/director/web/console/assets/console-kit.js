@@ -2,7 +2,7 @@
 (function($){
  'use strict';let dialogSequence=0;
  const esc=v=>$('<span>').text(v??'').html().replace(/"/g,'&quot;').replace(/'/g,'&#39;');
- const iconAliases={sync:'refresh',description:'receipt_long',cloud:'cloud_upload',archive:'storage',contact_page:'person',admin_panel_settings:'verified_user',timer:'schedule',list:'table_rows',queue:'table_rows',sensors:'hub',person_search:'person'};
+ const iconAliases={sync:'refresh',description:'receipt_long',cloud:'cloud_upload',archive:'storage',contact_page:'person',admin_panel_settings:'verified_user',timer:'schedule',list:'table_rows',queue:'table_rows',sensors:'hub',person_search:'person',mail:'send',notes:'edit_note',title:'edit'};
  const icon=v=>v==='mail'?'<span class="ms" aria-hidden="true"><svg width="1em" height="1em" viewBox="0 0 24 24"><path fill="currentColor" d="M2 4h20v16H2V4zm2 2v1l8 5 8-5V6l-8 5-8-5zm0 3.4V18h16V9.4l-8 5-8-5z"/></svg></span>':`<span class="ms" aria-hidden="true">${iconAliases[v]||v}</span>`;
  const badge=(v,tone='mut')=>`<span class="pill ${tone}">${esc(v)}</span>`;
  const num=v=>v==null||!Number.isFinite(+v)?'—':Number(v).toLocaleString('en-IN');

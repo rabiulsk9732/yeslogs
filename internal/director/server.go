@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -57,6 +58,7 @@ type Server struct {
 	// retention / archive (optional; set via SetArchive / SetRetentionDays).
 	// Guarded by archMu — written by the applier goroutine, read by handlers.
 	archMu        sync.Mutex
+	archiveSweepMu sync.Mutex // prevents scheduled, pressure, and manual sweeps from racing
 	arch          *archive.Exporter
 	archBucket    string
 	archFormat    string
@@ -90,9 +92,12 @@ type Server struct {
 	// CRM/RADIUS enrichment is deliberately outside the ingest path. Search and
 	// report handlers use this bounded cache + shared HTTP pool only when the
 	// selected ISP has explicitly enabled a connector.
-	crmHTTP  *http.Client
-	crmMu    sync.Mutex
-	crmCache map[string]crmCacheEntry
+	crmHTTP       *http.Client
+	crmMu         sync.Mutex
+	crmCache      map[string]crmCacheEntry
+	loginThrottle *LoginThrottle
+	exportMu      sync.Mutex
+	exportJobs    map[string]*exportJob
 }
 
 // SetArchive enables the S3 cold-archive feature in the console.
@@ -171,6 +176,8 @@ func New(cfg Config, st store.Store, fr *FlowReader, log *slog.Logger) (*Server,
 		store: st, revalidateSessions: cfg.RevalidateSessions, flows: fr, tmpl: t, sessionKey: cfg.SessionKey, secure: cfg.CookieSecure,
 		flowDays: days, dummyHash: dummy, startedAt: time.Now(), log: log,
 		crmHTTP: crmHTTP, crmCache: map[string]crmCacheEntry{},
+		loginThrottle: NewLoginThrottle(5, 10*time.Minute, 15*time.Minute),
+		exportJobs:    map[string]*exportJob{},
 	}, nil
 }
 
@@ -200,7 +207,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/devices/{id}", s.apiDeleteDevice)
 	mux.HandleFunc("POST /api/v1/search", s.handleSearch)
 	mux.HandleFunc("GET /api/v1/report", s.handleReport)
+	mux.HandleFunc("POST /api/v1/exports", s.handleExportCreate)
+	mux.HandleFunc("GET /api/v1/exports/{id}", s.handleExportStatus)
+	mux.HandleFunc("GET /api/v1/exports/{id}/download", s.handleExportDownload)
 	mux.HandleFunc("GET /api/v1/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/v1/audit/verify", s.handleAuditVerify)
+	mux.HandleFunc("GET /api/v1/cases", s.handleCases)
+	mux.HandleFunc("POST /api/v1/cases", s.handleCaseSave)
+	mux.HandleFunc("GET /api/v1/cases/{id}", s.handleCaseGet)
+	mux.HandleFunc("PUT /api/v1/cases/{id}", s.handleCaseSave)
 	mux.HandleFunc("GET /api/v1/retention", s.handleRetention)
 	mux.HandleFunc("GET /api/v1/compliance", s.handleCompliance)
 	mux.HandleFunc("POST /api/v1/archive/sweep", s.handleArchiveSweep) // literal beats {date}
@@ -208,6 +223,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/devices/{id}", s.apiUpdateDevice)
 	mux.HandleFunc("GET /api/v1/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/v1/settings/{section}", s.handlePutSettings)
+	mux.HandleFunc("POST /api/v1/settings/crm/test", s.handleTestCRM)
 	mux.HandleFunc("POST /api/v1/notifications/test", s.handleTestNotification)
 	mux.HandleFunc("GET /api/v1/system", s.handleSystem)
 	mux.HandleFunc("GET /api/v1/overview", s.handleOverview)
@@ -219,6 +235,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/users/{id}", s.apiDeleteUser)
 	mux.HandleFunc("POST /api/v1/users/{id}/reset", s.apiResetPassword)
 	mux.HandleFunc("POST /api/v1/account/password", s.apiChangeOwnPassword)
+	mux.HandleFunc("POST /api/v1/account/totp/setup", s.handleTOTPSetup)
+	mux.HandleFunc("POST /api/v1/account/totp/confirm", s.handleTOTPConfirm)
+	mux.HandleFunc("POST /api/v1/account/totp/disable", s.handleTOTPDisable)
 	mux.HandleFunc("GET /api/v1/policies", s.apiListPolicies)
 	mux.HandleFunc("POST /api/v1/policies", s.apiCreatePolicy)
 	mux.HandleFunc("GET /api/v1/policies/{id}", s.apiGetPolicy)
@@ -258,6 +277,10 @@ func (s *Server) auth(h func(http.ResponseWriter, *http.Request, Identity)) http
 		// CSRF: state-changing requests must carry the session-bound token.
 		if r.Method == http.MethodPost && !s.validCSRF(id, r.FormValue("csrf")) {
 			s.render(w, r, "error", id, http.StatusForbidden, "invalid or missing CSRF token", nil)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path != "/logout" && !id.canManage() {
+			s.render(w, r, "error", id, http.StatusForbidden, "role is read-only for this operation", nil)
 			return
 		}
 		h(w, r, id)
@@ -311,7 +334,21 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
 	email := strings.TrimSpace(strings.ToLower(r.FormValue("email")))
+	throttleKey := clientIP + ":" + email
+
+	if s.loginThrottle != nil {
+		if locked, remaining := s.loginThrottle.Check(throttleKey); locked {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(remaining.Seconds())))
+			s.render(w, r, "login", Identity{}, http.StatusTooManyRequests, fmt.Sprintf("Too many failed login attempts. Please try again in %d minutes.", int(remaining.Minutes())+1), nil)
+			return
+		}
+	}
+
 	pw := r.FormValue("password")
 	u, err := s.store.GetUserByLogin(r.Context(), email)
 	// Always run bcrypt (against a dummy hash for unknown users) so the response
@@ -321,13 +358,28 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		hash = u.PasswordHash
 	}
 	if !VerifyPassword(hash, pw) || err != nil {
+		if s.loginThrottle != nil {
+			s.loginThrottle.RecordFailure(throttleKey)
+		}
 		s.render(w, r, "login", Identity{}, http.StatusUnauthorized, "invalid credentials", nil)
+		return
+	}
+	if u.TOTPEnabled && !s.verifyUserTOTP(u, r.FormValue("totp"), time.Now()) {
+		if s.loginThrottle != nil {
+			s.loginThrottle.RecordFailure(throttleKey)
+		}
+		s.render(w, r, "login", Identity{}, http.StatusUnauthorized, "invalid authenticator code", nil)
 		return
 	}
 	if !s.ispLoginAllowed(r.Context(), u) {
 		s.render(w, r, "login", Identity{}, http.StatusForbidden, "this ISP account is disabled", nil)
 		return
 	}
+
+	if s.loginThrottle != nil {
+		s.loginThrottle.RecordSuccess(throttleKey)
+	}
+
 	id := Identity{UserID: u.ID, ISPID: u.ISPID, Role: u.Role, Email: u.Email, Exp: time.Now().Add(sessionTTL).Unix()}
 	s.setSession(w, id)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -340,7 +392,7 @@ func (s *Server) ispLoginAllowed(ctx context.Context, u store.User) bool {
 	if u.Role == store.RoleDirector {
 		return u.ISPID == 0
 	}
-	if u.Role != store.RoleISP || u.ISPID == 0 {
+	if (u.Role != store.RoleISP && u.Role != store.RoleAnalyst && u.Role != store.RoleAuditor) || u.ISPID == 0 {
 		return false
 	}
 	isp, err := s.store.GetISP(ctx, u.ISPID)

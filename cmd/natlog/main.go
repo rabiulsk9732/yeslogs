@@ -34,15 +34,18 @@ import (
 	"github.com/natflow/natflow-dataplane/internal/decoder/ipfix"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow5"
 	"github.com/natflow/natflow-dataplane/internal/decoder/netflow9"
+	"github.com/natflow/natflow-dataplane/internal/decoder/syslognat"
 	devreg "github.com/natflow/natflow-dataplane/internal/device"
 	"github.com/natflow/natflow-dataplane/internal/director"
 	"github.com/natflow/natflow-dataplane/internal/director/store"
+	"github.com/natflow/natflow-dataplane/internal/hostmon"
 	"github.com/natflow/natflow-dataplane/internal/logger"
 	"github.com/natflow/natflow-dataplane/internal/managed"
 	"github.com/natflow/natflow-dataplane/internal/metrics"
 	"github.com/natflow/natflow-dataplane/internal/normalizer"
 	"github.com/natflow/natflow-dataplane/internal/notify"
 	"github.com/natflow/natflow-dataplane/internal/pipeline"
+	"github.com/natflow/natflow-dataplane/internal/radiusacct"
 	"github.com/natflow/natflow-dataplane/internal/receiver"
 	"github.com/natflow/natflow-dataplane/internal/rules"
 	chwriter "github.com/natflow/natflow-dataplane/internal/writer/clickhouse"
@@ -203,27 +206,48 @@ func run() (err error) {
 			Enabled: cfg.S3.Bucket != "", Endpoint: cfg.S3.Endpoint, Region: cfg.S3.Region, Bucket: cfg.S3.Bucket,
 			AccessKey: cfg.S3.AccessKey, SecretKey: cfg.S3.SecretKey, PathPrefix: cfg.S3.PathPrefix, ExportFormat: fmtOr(cfg.S3.ExportFormat),
 		},
-		Notifications: director.NotificationSettings{SMTPPort: 587, SMTPTLS: "starttls", SilenceMins: 15, RemindHours: 6},
+		Notifications: director.NotificationSettings{SMTPPort: 587, SMTPTLS: "starttls", SilenceMins: 15, RemindHours: 6, DailyHourIST: 8},
 	}
 	dirSrv.InitSettings(ctxBg, defaults)
 
-	// Device-liveness SMTP alerting: the notifier reads live settings each call,
+	// Device-liveness alerting: the notifier reads live settings each call,
 	// so credential/recipient changes apply without restart. No-op until enabled.
 	dirSrv.SetNotifier(func(ctx context.Context, subject, body string) error {
 		n := dirSrv.CurrentSettings().Notifications
-		if !n.Enabled || strings.TrimSpace(n.SMTPHost) == "" {
+		if !n.Enabled {
 			return nil
 		}
-		rcpts := notify.SplitRecipients(n.Recipients)
-		if len(rcpts) == 0 {
-			return nil
+		var errs []string
+		// 1. SMTP relay dispatch (if configured)
+		if strings.TrimSpace(n.SMTPHost) != "" {
+			rcpts := notify.SplitRecipients(n.Recipients)
+			if len(rcpts) > 0 {
+				from := n.FromAddr
+				if strings.TrimSpace(from) == "" {
+					from = n.SMTPUser
+				}
+				sm := notify.SMTP{Host: n.SMTPHost, Port: n.SMTPPort, User: n.SMTPUser, Pass: n.SMTPPassword, TLS: n.SMTPTLS, From: from, Org: "ISPmate Operations"}
+				if err := sm.Send(ctx, rcpts, subject, body); err != nil {
+					errs = append(errs, "smtp: "+err.Error())
+				}
+			}
 		}
-		from := n.FromAddr
-		if strings.TrimSpace(from) == "" {
-			from = n.SMTPUser
+		// 2. Webhook dispatch (Telegram, Slack, Discord, Generic)
+		if n.WebhookEnabled && strings.TrimSpace(n.WebhookURL) != "" {
+			wh := notify.WebhookConfig{
+				Enabled:        true,
+				Type:           notify.WebhookType(n.WebhookType),
+				URL:            n.WebhookURL,
+				TelegramChatID: n.TelegramChatID,
+			}
+			if err := wh.Send(ctx, subject, body); err != nil {
+				errs = append(errs, "webhook: "+err.Error())
+			}
 		}
-		sm := notify.SMTP{Host: n.SMTPHost, Port: n.SMTPPort, User: n.SMTPUser, Pass: n.SMTPPassword, TLS: n.SMTPTLS, From: from, Org: "YesLogs Operations"}
-		return sm.Send(ctx, rcpts, subject, body)
+		if len(errs) > 0 {
+			return fmt.Errorf("notification failures: %s", strings.Join(errs, "; "))
+		}
+		return nil
 	})
 
 	var lastS3 director.S3Settings
@@ -313,14 +337,18 @@ func run() (err error) {
 		// QueueSize is the AGGREGATE depth across all writer shards, so the
 		// capacity must also be aggregate (per-worker × workers).
 		return director.DPStats{
-			Ingested:     uint64(testutil.ToFloat64(m.FlowsDecoded)),
-			Skipped:      uint64(testutil.ToFloat64(m.FlowsSkipped)),
-			Inserted:     uint64(testutil.ToFloat64(m.FlowsInserted)),
-			ArchiveBytes: uint64(testutil.ToFloat64(m.ArchiveBytes)),
-			QueueSize:    int(testutil.ToFloat64(m.QueueSize)),
-			QueueMax:     dp.MaxQueueRows * dp.WriterWorkers,
-			Collectors:   1,
-			Name:         cfg.Server.Name,
+			Ingested:        uint64(testutil.ToFloat64(m.FlowsDecoded)),
+			Skipped:         uint64(testutil.ToFloat64(m.FlowsSkipped)),
+			Inserted:        uint64(testutil.ToFloat64(m.FlowsInserted)),
+			ArchiveBytes:    uint64(testutil.ToFloat64(m.ArchiveBytes)),
+			QueueSize:       int(testutil.ToFloat64(m.QueueSize)),
+			QueueMax:        dp.MaxQueueRows * dp.WriterWorkers,
+			Collectors:      1,
+			Name:            cfg.Server.Name,
+			KernelUDPDrops:  uint64(testutil.ToFloat64(m.KernelUDPDropTotal)),
+			NTPHealthy:      testutil.ToFloat64(m.NTPClockHealthy) == 1,
+			NTPConfigured:   cfg.Monitoring.NTPServer != "",
+			DiskUsedPercent: testutil.ToFloat64(m.DiskUsedPercent),
 		}
 	})
 
@@ -342,6 +370,21 @@ func run() (err error) {
 	// the Director store (no HTTP/token), applying via the managed hot-reload.
 	managedCtx, managedCancel := context.WithCancel(context.Background())
 	defer managedCancel()
+	go hostmon.Run(managedCtx, hostmon.Config{NTPServer: cfg.Monitoring.NTPServer, MaxSkew: time.Duration(cfg.Monitoring.NTPMaxSkewMS) * time.Millisecond, Interval: time.Duration(cfg.Monitoring.IntervalS) * time.Second, DiskPath: cfg.Monitoring.ClickHouseDataPath, AlertPercent: cfg.Monitoring.DiskAlertPercent, SafetyPercent: cfg.Monitoring.DiskSafetyPercent}, m, log, func(snap hostmon.Snapshot) {
+		if snap.DiskLevel < 2 {
+			return
+		}
+		go func() {
+			cctx, cancel := context.WithTimeout(managedCtx, 30*time.Minute)
+			defer cancel()
+			days, rows, _, e := dirSrv.ArchiveSweep(cctx)
+			if e != nil {
+				log.Error("disk safety-valve archive failed", "error", e)
+			} else {
+				log.Warn("disk safety-valve archive completed", "days", days, "rows", rows)
+			}
+		}()
+	})
 	mc := managed.NewWithSource(managed.SourceFunc(dirSrv.Bundle), devices, live, cfg.Live().Rules, m, log)
 	pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if perr := mc.PollOnce(pctx); perr != nil {
@@ -360,7 +403,24 @@ func run() (err error) {
 		{"netflow9", cfg.Receiver.Ports.NetFlow9, netflow9.New(m.TemplatesReceived, m.TemplateUnknown)},
 		{"ipfix", cfg.Receiver.Ports.IPFIX, ipfix.New(m.TemplatesReceived, m.TemplateUnknown)},
 	}
+	if cfg.Receiver.Ports.SyslogUDP > 0 {
+		bindings = append(bindings, struct {
+			name string
+			port int
+			dec  decoder.Decoder
+		}{"syslog", cfg.Receiver.Ports.SyslogUDP, syslognat.New()})
+	}
 	var receivers []*receiver.Receiver
+	var radiusServer *radiusacct.Server
+	var radiusCache *radiusacct.Cache
+	if cfg.Receiver.Ports.RADIUSAccounting > 0 {
+		radiusCache = radiusacct.NewCache(time.Duration(cfg.RADIUS.SessionTTLHours) * time.Hour)
+		radiusServer, err = radiusacct.New(cfg.Receiver.BindIP, cfg.Receiver.Ports.RADIUSAccounting, cfg.RADIUS.Secret, radiusCache, log)
+		if err != nil {
+			return err
+		}
+		radiusServer.Start(managedCtx)
+	}
 	// Shared across every protocol pipeline: a device is one device regardless
 	// of which listener its packets arrive on.
 	devSignals := pipeline.NewDeviceSignals()
@@ -373,6 +433,9 @@ func run() (err error) {
 	})
 	for _, b := range bindings {
 		p := pipeline.New(b.dec, norm, live, devices, cfg.Server.ISPID, cfg.Server.DeviceIDDefault, manager, m, log)
+		if radiusCache != nil {
+			p.SetSubscriberResolver(radiusCache.Lookup)
+		}
 		p.SetDeviceSignals(devSignals)
 		rcv, rerr := receiver.New(b.name, cfg.Receiver.BindIP, b.port, cfg.Receiver.Workers, cfg.Receiver.UDPReadBufferMB, p, m, log)
 		if rerr != nil {
@@ -386,6 +449,19 @@ func run() (err error) {
 	}
 	for _, r := range receivers {
 		r.Start()
+	}
+	var tcpSyslog *receiver.TCPReceiver
+	if cfg.Receiver.Ports.SyslogTCP > 0 {
+		p := pipeline.New(syslognat.New(), norm, live, devices, cfg.Server.ISPID, cfg.Server.DeviceIDDefault, manager, m, log)
+		p.SetDeviceSignals(devSignals)
+		if radiusCache != nil {
+			p.SetSubscriberResolver(radiusCache.Lookup)
+		}
+		tcpSyslog, err = receiver.NewTCP("syslog-tcp", cfg.Receiver.BindIP, cfg.Receiver.Ports.SyslogTCP, p, m, log)
+		if err != nil {
+			return err
+		}
+		tcpSyslog.Start()
 	}
 
 	// ---- control-plane HTTP server ----
@@ -434,6 +510,7 @@ func run() (err error) {
 	// silent/recovered transitions. No-op unless notifications are enabled.
 	go dirSrv.RunDeviceMonitor(managedCtx)
 	go dirSrv.RunIngestMonitor(managedCtx)
+	go dirSrv.RunDailySummary(managedCtx)
 	// IPDR compliance: grades every exporter on whether the records it produces
 	// can actually answer a lawful request, and alerts when one cannot.
 	go dirSrv.RunComplianceMonitor(managedCtx)
@@ -459,6 +536,12 @@ func run() (err error) {
 	managedCancel()
 	for _, r := range receivers {
 		r.Stop()
+	}
+	if tcpSyslog != nil {
+		tcpSyslog.Stop()
+	}
+	if radiusServer != nil {
+		radiusServer.Stop()
 	}
 	manager.Stop()
 	log.Info("dataplane drained")

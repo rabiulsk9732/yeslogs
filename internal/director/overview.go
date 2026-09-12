@@ -9,14 +9,18 @@ import (
 
 // DPStats is a dataplane snapshot supplied by the host (natlog) for the Overview.
 type DPStats struct {
-	Ingested     uint64 // flows decoded since start
-	Skipped      uint64 // flows dropped by skip rules since start
-	Inserted     uint64 // flows written to hot storage since start
-	ArchiveBytes uint64 // bytes uploaded to S3 archive
-	QueueSize    int    // current writer queue depth
-	QueueMax     int    // configured queue capacity
-	Collectors   int    // connected dataplanes/collectors
-	Name         string // local dataplane name
+	Ingested        uint64 // flows decoded since start
+	Skipped         uint64 // flows dropped by skip rules since start
+	Inserted        uint64 // flows written to hot storage since start
+	ArchiveBytes    uint64 // bytes uploaded to S3 archive
+	QueueSize       int    // current writer queue depth
+	QueueMax        int    // configured queue capacity
+	Collectors      int    // connected dataplanes/collectors
+	Name            string // local dataplane name
+	KernelUDPDrops  uint64
+	NTPHealthy      bool
+	NTPConfigured   bool
+	DiskUsedPercent float64
 }
 
 // SetStats registers the dataplane stats provider.
@@ -87,6 +91,26 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 			ovCard{"Hot Storage Used", humanBytes(hotBytes), "ClickHouse on disk", "fa-hard-drive", tileWarn, 0},
 			ovCard{"Archive Uploaded", humanBytes(st.ArchiveBytes), "to S3 cold storage", "fa-box-archive", tileGood, 0},
 			ovCard{"Queue Pressure", fmt.Sprintf("%d%%", qpct), fmt.Sprintf("%s / %s rows", group(uint64(st.QueueSize)), group(uint64(st.QueueMax))), "fa-gauge-high", queueColor(qpct), qpct},
+			ovCard{"Kernel UDP Drops", group(st.KernelUDPDrops), "receive-buffer overflow · since host boot", "fa-triangle-exclamation", queueColor(func() int {
+				if st.KernelUDPDrops > 0 {
+					return 100
+				}
+				return 0
+			}()), 0},
+			ovCard{"Clock / Disk Guard", func() string {
+				if st.NTPConfigured && !st.NTPHealthy {
+					return "CLOCK ALERT"
+				}
+				return fmt.Sprintf("%.1f%% disk", st.DiskUsedPercent)
+			}(), "NTP ≤500 ms · disk safety monitored", "fa-shield-halved", func() string {
+				if st.NTPConfigured && !st.NTPHealthy || st.DiskUsedPercent >= 90 {
+					return tileBad
+				}
+				if st.DiskUsedPercent >= 85 {
+					return tileWarn
+				}
+				return tileGood
+			}(), int(st.DiskUsedPercent)},
 		)
 	} else {
 		cards = append(cards,

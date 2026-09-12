@@ -94,8 +94,8 @@ async function main() {
       assert.equal(await page.locator('#s-msg').innerText(), '');
       assert.match(await page.locator('#logs-evidence-note').innerText(), /1 displayed record has no confirmed source translation/);
       assert.equal(await page.locator('.index-stats .v').first().innerText(), '72,932');
-      assert.equal(await page.locator('#s-results a[href^="/api/v1/report"]').count(), 3);
-      assert.deepEqual(await page.locator('#logs-exports a').evaluateAll(nodes => nodes.map(n=>new URL(n.href).searchParams.get('format'))), ['csv','xlsx','pdf']);
+      assert.equal(await page.locator('#s-results a[href^="/api/v1/report"]').count(), 4);
+      assert.deepEqual(await page.locator('#logs-exports a').evaluateAll(nodes => nodes.map(n=>[new URL(n.href).searchParams.get('format'),new URL(n.href).searchParams.get('schema')])), [['csv','dot16'],['xlsx','dot16'],['pdf','dot16'],['csv','raw8']]);
       await shot('rows');
       const appliedChips = await page.locator('#logs-chips').innerText(), exportsBefore = await page.locator('#logs-exports').innerHTML();
       await page.locator('#logs-open-filters').click();
@@ -199,7 +199,8 @@ async function main() {
       assert.equal(await page.locator('#s-priv').getAttribute('aria-invalid'),'true');
       await page.locator('#s-priv').fill('');await page.locator('[data-minutes="15"]').click();
       const from=await page.locator('#s-from').inputValue(),to=await page.locator('#s-to').inputValue();
-      assert.equal(Date.parse(to.replace(' ','T')+':00+05:30')-Date.parse(from.replace(' ','T')+':00+05:30'),15*60000);
+      assert.match(from,/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,'Quick ranges expose second-level precision');
+      assert.equal(Date.parse(to.replace(' ','T')+'+05:30')-Date.parse(from.replace(' ','T')+'+05:30'),15*60000);
       await page.locator('[data-filter-close]').last().click();
       await page.setViewportSize({width:390,height:844});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);

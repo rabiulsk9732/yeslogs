@@ -106,6 +106,11 @@ func (s *Server) validCSRF(id Identity, submitted string) bool {
 }
 
 func (id Identity) isDirector() bool { return id.Role == store.RoleDirector }
+func (id Identity) canManage() bool  { return id.Role == store.RoleDirector || id.Role == store.RoleISP }
+func (id Identity) canSearch() bool {
+	return id.canManage() || id.Role == store.RoleAnalyst || id.Role == store.RoleAuditor
+}
+func (id Identity) canExport() bool { return id.canManage() || id.Role == store.RoleAnalyst }
 
 // IsDirector is the exported form used by templates.
 func (id Identity) IsDirector() bool { return id.isDirector() }

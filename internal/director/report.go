@@ -26,6 +26,7 @@ type reportMeta struct {
 	NATOnly     bool
 	MissingNAT  int
 	CRM         crmEnrichmentSummary
+	Format      string // "raw8" or "dot16"
 }
 
 // The exported evidence table has the operator-requested eight columns.
@@ -36,6 +37,13 @@ var baseReportCols = []string{
 }
 var baseReportHeads = append([]string(nil), baseReportCols...)
 
+var dotReportCols = []string{
+	"Start Date(mm:dd:yyyy) & Time(hh:mm:ss)", "End Date(mm:dd:yyyy) & Time(hh:mm:ss)",
+	"Source IP Address", "Source Port", "Translated IP address", "Translated Port", "Destination IP Address", "Destination Port",
+	"Protocol", "NAS IP", "Username", "CallingStationId (MAC)", "Customer Name", "Phone", "Address", "Account ID",
+}
+var dotReportHeads = append([]string(nil), dotReportCols...)
+
 func port(n int) string {
 	if n < 0 {
 		return ""
@@ -43,7 +51,10 @@ func port(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func reportColumns(_ reportMeta) (cols, heads []string) {
+func reportColumns(m reportMeta) (cols, heads []string) {
+	if m.Format == "dot16" {
+		return append([]string(nil), dotReportCols...), append([]string(nil), dotReportHeads...)
+	}
 	return append([]string(nil), baseReportCols...), append([]string(nil), baseReportHeads...)
 }
 
@@ -57,7 +68,7 @@ func reportTimestamp(at time.Time, value string) string {
 	return at.In(istLoc).Format("01:02:2006 & 15:04:05")
 }
 
-func rowCells(_ reportMeta, r natRecord) []string {
+func rowCells(m reportMeta, r natRecord) []string {
 	r.setNATTranslation()
 	ipPort := func(ip string, n int) string {
 		if ip == "" {
@@ -65,10 +76,25 @@ func rowCells(_ reportMeta, r natRecord) []string {
 		}
 		return port(n)
 	}
-	return []string{
+	base := []string{
 		reportTimestamp(r.At, firstNonEmpty(r.StartTime, r.Time)), reportTimestamp(r.EndAt, r.EndTime),
 		r.PrivIP, ipPort(r.PrivIP, r.PrivPort), r.NatIP, ipPort(r.NatIP, r.NatPort), r.DstIP, ipPort(r.DstIP, r.DstPort),
 	}
+	if m.Format == "dot16" {
+		username := firstNonEmpty(r.CRMUsername, r.Username)
+		nasIP := firstNonEmpty(r.ExporterIP)
+		return append(base,
+			r.Proto,
+			nasIP,
+			username,
+			r.CRMMAC,
+			r.CRMName,
+			r.CRMPhone,
+			r.CRMAddress,
+			r.CRMAccountID,
+		)
+	}
+	return base
 }
 
 func metaLines(m reportMeta) [][2]string {
@@ -152,9 +178,14 @@ func writeCSV(w io.Writer, m reportMeta, rows []natRecord) error {
 // --- PDF (landscape A4) ---
 
 func writePDF(w io.Writer, m reportMeta, rows []natRecord) error {
-	const lm = 8 // left margin
+	lm := 8.0 // left margin
 	widths := []float64{43, 43, 37, 14, 37, 14, 37, 14}
 	paper, pageW, rowFont := "A4", 297.0, 7.5
+	if m.Format == "dot16" {
+		lm = 5.0
+		widths = []float64{24, 24, 20, 11, 20, 11, 20, 11, 12, 19, 18, 22, 20, 18, 22, 15}
+		rowFont = 5.5
+	}
 	_, heads := reportColumns(m)
 	tableW := 0.0
 	for _, x := range widths {
@@ -168,7 +199,13 @@ func writePDF(w io.Writer, m reportMeta, rows []natRecord) error {
 
 	drawColHeaders := func() {
 		pdf.SetX(lm)
-		pdf.SetFont("Helvetica", "B", 8)
+		headFont := 8.0
+		cellH := 4.5
+		if m.Format == "dot16" {
+			headFont = 6.0
+			cellH = 3.6
+		}
+		pdf.SetFont("Helvetica", "B", headFont)
 		pdf.SetFillColor(19, 102, 214)
 		pdf.SetTextColor(255, 255, 255)
 		y := pdf.GetY()
@@ -176,7 +213,7 @@ func writePDF(w io.Writer, m reportMeta, rows []natRecord) error {
 		for i, h := range heads {
 			pdf.SetXY(x, y)
 			pdf.Rect(x, y, widths[i], 18, "F")
-			pdf.MultiCell(widths[i], 4.5, h, "", "L", false)
+			pdf.MultiCell(widths[i], cellH, h, "", "L", false)
 			x += widths[i]
 		}
 		pdf.SetXY(lm, y+18)

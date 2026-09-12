@@ -14,14 +14,15 @@ import (
 )
 
 type userView struct {
-	ID        int64  `json:"id"`
-	ISPID     uint32 `json:"ispId"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	CreatedAt string `json:"createdAt"`
-	Self      bool   `json:"self"`
-	Primary   bool   `json:"primary"`
-	Version   string `json:"version"`
+	ID          int64  `json:"id"`
+	ISPID       uint32 `json:"ispId"`
+	Email       string `json:"email"`
+	Role        string `json:"role"`
+	CreatedAt   string `json:"createdAt"`
+	Self        bool   `json:"self"`
+	Primary     bool   `json:"primary"`
+	Version     string `json:"version"`
+	TOTPEnabled bool   `json:"totpEnabled"`
 }
 
 func userVersion(u store.User) string {
@@ -34,7 +35,7 @@ func (s *Server) userView(r *http.Request, u store.User, id Identity) userView {
 			primary = i.AdminUserID == u.ID
 		}
 	}
-	return userView{u.ID, u.ISPID, u.Email, string(u.Role), u.CreatedAt.In(istLoc).Format("2006-01-02 15:04"), u.ID == id.UserID, primary, userVersion(u)}
+	return userView{ID: u.ID, ISPID: u.ISPID, Email: u.Email, Role: string(u.Role), CreatedAt: u.CreatedAt.In(istLoc).Format("2006-01-02 15:04"), Self: u.ID == id.UserID, Primary: primary, Version: userVersion(u), TOTPEnabled: u.TOTPEnabled}
 }
 func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.authJSON(w, r)
@@ -59,7 +60,7 @@ func (s *Server) apiListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, s.userView(r, full, id))
 	}
-	res := map[string]any{"users": out, "isDirector": id.isDirector(), "editableUsers": true}
+	res := map[string]any{"users": out, "isDirector": id.isDirector(), "editableUsers": id.canManage()}
 	if id.isDirector() {
 		isps, e := s.store.ListISPs(r.Context())
 		if e != nil {
@@ -188,15 +189,15 @@ func (s *Server) userSave(w http.ResponseWriter, r *http.Request, update bool) {
 			return
 		}
 	}
-	if role != store.RoleDirector && role != store.RoleISP {
-		fields["Role"] = "Choose Director or ISP."
+	if role != store.RoleDirector && role != store.RoleISP && role != store.RoleAnalyst && role != store.RoleAuditor {
+		fields["Role"] = "Choose Director, ISP Admin, Analyst, or Auditor."
 	}
 	if !id.isDirector() {
-		if role != store.RoleISP || scope != 0 && scope != id.ISPID {
+		if !id.canManage() || role == store.RoleDirector || scope != 0 && scope != id.ISPID {
 			writeJSON(w, 403, map[string]string{"error": "Cannot manage users outside your ISP."})
 			return
 		}
-		role, scope = store.RoleISP, id.ISPID
+		scope = id.ISPID
 	}
 	if role == store.RoleDirector {
 		scope = 0
@@ -336,5 +337,5 @@ func (s *Server) apiChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (s *Server) canManageUser(id Identity, target store.User) bool {
-	return id.isDirector() || target.ISPID == id.ISPID && target.Role == store.RoleISP
+	return id.isDirector() || id.Role == store.RoleISP && target.ISPID == id.ISPID && target.Role != store.RoleDirector
 }

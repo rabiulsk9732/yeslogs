@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,41 @@ func firstNonEmpty(ss ...string) string {
 	return ""
 }
 
+func validateSearchIPs(f SearchFilter) error {
+	valid := func(raw string) bool {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return true
+		}
+		if strings.Contains(raw, "/") {
+			_, _, err := net.ParseCIDR(raw)
+			return err == nil
+		}
+		family := 0
+		for _, part := range strings.Split(raw, ",") {
+			ip := net.ParseIP(strings.TrimSpace(part))
+			if ip == nil {
+				return false
+			}
+			current := 6
+			if ip.To4() != nil {
+				current = 4
+			}
+			if family != 0 && family != current {
+				return false
+			}
+			family = current
+		}
+		return family != 0
+	}
+	for _, raw := range []string{f.PublicIP, f.PrivateIP, f.DestIP} {
+		if !valid(raw) {
+			return errors.New("IP filters must be a valid address, CIDR, or same-family comma-separated list")
+		}
+	}
+	return nil
+}
+
 // handleSearch runs a flow-log search (public/private/destination IP + device +
 // time) and records it in the query audit.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -64,12 +100,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PublicIP, PrivateIP, DestIP string
 		PublicPort                  int
+		PortRange                   string `json:"portRange,omitempty"`
 		Proto, From, To, Reason     string
 		DeviceID                    uint32
 		ExporterIP                  string
 		ISPID                       uint32
 		Limit, Offset               int
 		Username                    string `json:"username"`
+		CaseID                      int64  `json:"caseId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
@@ -92,15 +130,28 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
+	caseRef := strings.TrimSpace(body.Reason)
+	if body.CaseID > 0 {
+		c, e := s.store.GetInvestigation(r.Context(), body.CaseID)
+		if e != nil || c.ISPID != scope {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "case is outside the permitted ISP scope"})
+			return
+		}
+		caseRef = c.Reference
+	}
 	f := SearchFilter{
 		ISPID: scope, PublicIP: strings.TrimSpace(body.PublicIP), PrivateIP: strings.TrimSpace(body.PrivateIP),
-		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, Proto: body.Proto,
+		DestIP: strings.TrimSpace(body.DestIP), PublicPort: body.PublicPort, PortRange: strings.TrimSpace(body.PortRange), Proto: body.Proto,
 		DeviceID: body.DeviceID, ExporterIP: strings.TrimSpace(body.ExporterIP), From: parseTime(body.From), To: parseTime(body.To),
 		Username: strings.TrimSpace(body.Username),
 		// Include every stored row matching the explicit filters. Missing NAT
 		// fields stay unknown in the row instead of silently excluding evidence.
 	}
-	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP).To4() == nil {
+	if err := validateSearchIPs(f); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP) == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid exporter IP"})
 		return
 	}
@@ -128,7 +179,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.store.LogQuery(ctx, store.QueryAudit{
 			UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
 			QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
-			ResultCount: int(total), CaseRef: strings.TrimSpace(body.Reason),
+			ResultCount: int(total), CaseRef: caseRef,
 		})
 	}
 	missingNAT := 0
@@ -152,6 +203,10 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
 		return
 	}
+	if !id.canExport() {
+		http.Error(w, "role cannot export", http.StatusForbidden)
+		return
+	}
 	// CSRF: this is a state-recording GET (writes an audit row) reached by a direct
 	// link, so it carries the session-bound token as a query param instead of a header.
 	if !s.validCSRF(id, r.URL.Query().Get("csrf")) {
@@ -170,11 +225,24 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	f := SearchFilter{
 		ISPID: scope, PublicIP: strings.TrimSpace(q.Get("ip")), PrivateIP: strings.TrimSpace(q.Get("priv")),
-		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), Proto: q.Get("proto"),
+		DestIP: strings.TrimSpace(q.Get("dst")), PublicPort: int(parseUint32(q.Get("port"))), PortRange: strings.TrimSpace(q.Get("port_range")), Proto: q.Get("proto"),
 		DeviceID: parseUint32(q.Get("device")), ExporterIP: strings.TrimSpace(q.Get("exporter")), From: parseTime(q.Get("from")), To: parseTime(q.Get("to")),
 		Username: strings.TrimSpace(q.Get("user")),
 	}
-	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP).To4() == nil {
+	if err := validateSearchIPs(f); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	caseRef := strings.TrimSpace(q.Get("reason"))
+	if cid, _ := strconv.ParseInt(q.Get("case_id"), 10, 64); cid > 0 {
+		c, e := s.store.GetInvestigation(r.Context(), cid)
+		if e != nil || c.ISPID != scope {
+			http.Error(w, "case is outside the permitted ISP scope", http.StatusBadRequest)
+			return
+		}
+		caseRef = c.Reference
+	}
+	if f.ExporterIP != "" && net.ParseIP(f.ExporterIP) == nil {
 		http.Error(w, "invalid exporter IP", http.StatusBadRequest)
 		return
 	}
@@ -209,14 +277,19 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.store.LogQuery(ctx, store.QueryAudit{
 		UserEmail: id.Email, ISPID: scope, QueryIP: firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP),
 		QueryPort: f.PublicPort, QueryProto: f.Proto, FromTS: f.From, ToTS: f.To,
-		ResultCount: len(rows), CaseRef: strings.TrimSpace(q.Get("reason")) + " [export:" + format + "]",
+		ResultCount: len(rows), CaseRef: caseRef + " [export:" + format + "]",
 	})
+	reportSchema := strings.ToLower(q.Get("schema"))
+	if reportSchema != "dot16" && (q.Get("dot") == "true" || q.Get("profile") == "dot16") {
+		reportSchema = "dot16"
+	}
 	meta := reportMeta{
-		CaseRef: q.Get("reason"), GeneratedBy: id.Email,
+		CaseRef: caseRef, GeneratedBy: id.Email,
 		GeneratedAt: time.Now().In(istLoc).Format("2006-01-02 15:04:05 IST"),
 		QueryIP:     firstNonEmpty(f.PublicIP, f.PrivateIP, f.DestIP), QueryPort: f.PublicPort, QueryProto: f.Proto,
 		From: tdisp(f.From), To: tdisp(f.To), Count: len(rows), Truncated: false, NATOnly: false,
-		CRM: crm,
+		CRM:    crm,
+		Format: reportSchema,
 	}
 	for _, row := range rows {
 		if row.NatIP == "" {
@@ -229,8 +302,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if subject == "" && f.DeviceID > 0 {
 		subject = fmt.Sprintf("device-%d", f.DeviceID)
 	}
-	base := fmt.Sprintf("iplog-report-%s-%s_%s_IST_0530",
-		firstNonEmpty(subject, "filtered"), now.Format("150405"), now.Format("02.01.2006"))
+	tag := ""
+	if reportSchema == "dot16" {
+		tag = "-dot16"
+	}
+	base := fmt.Sprintf("iplog-report-%s%s-%s_%s_IST_0530",
+		firstNonEmpty(subject, "filtered"), tag, now.Format("150405"), now.Format("02.01.2006"))
 
 	var werr error
 	switch format {
@@ -274,4 +351,21 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"queries": nz(q)})
+}
+
+func (s *Server) handleAuditVerify(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.authJSON(w, r)
+	if !ok {
+		return
+	}
+	if !id.isDirector() {
+		writeJSON(w, 403, map[string]string{"error": "forbidden"})
+		return
+	}
+	n, e := s.store.VerifyAuditChain(r.Context())
+	if e != nil {
+		writeJSON(w, 409, map[string]any{"valid": false, "checked": n, "error": e.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"valid": true, "checked": n})
 }

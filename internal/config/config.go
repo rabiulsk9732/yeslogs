@@ -30,6 +30,8 @@ type Config struct {
 	Director   DirectorConfig   `yaml:"director"`
 	CP         CPConfig         `yaml:"cp"`
 	Metrics    MetricsConfig    `yaml:"metrics"`
+	Monitoring MonitoringConfig `yaml:"monitoring"`
+	RADIUS     RADIUSConfig     `yaml:"radius"`
 	Logging    LoggingConfig    `yaml:"logging"`
 }
 
@@ -70,9 +72,12 @@ type ServerConfig struct {
 
 // PortsConfig is the per-protocol UDP listen ports.
 type PortsConfig struct {
-	NetFlow5 int `yaml:"netflow5"`
-	NetFlow9 int `yaml:"netflow9"`
-	IPFIX    int `yaml:"ipfix"`
+	NetFlow5         int `yaml:"netflow5"`
+	NetFlow9         int `yaml:"netflow9"`
+	IPFIX            int `yaml:"ipfix"`
+	SyslogUDP        int `yaml:"syslog_udp"`        // 0 disables RFC3164/5424 NAT syslog
+	SyslogTCP        int `yaml:"syslog_tcp"`        // 0 disables newline-delimited syslog
+	RADIUSAccounting int `yaml:"radius_accounting"` // 0 disables UDP accounting listener
 }
 
 // ReceiverConfig configures the UDP listeners.
@@ -150,6 +155,21 @@ type S3Config struct {
 // MetricsConfig configures the Prometheus endpoint.
 type MetricsConfig struct {
 	Bind string `yaml:"bind"`
+}
+
+// MonitoringConfig controls host safeguards that protect evidence ingestion.
+type MonitoringConfig struct {
+	NTPServer          string  `yaml:"ntp_server"`
+	NTPMaxSkewMS       int     `yaml:"ntp_max_skew_ms"`
+	IntervalS          int     `yaml:"interval_s"`
+	ClickHouseDataPath string  `yaml:"clickhouse_data_path"`
+	DiskAlertPercent   float64 `yaml:"disk_alert_percent"`
+	DiskSafetyPercent  float64 `yaml:"disk_safety_percent"`
+}
+
+type RADIUSConfig struct {
+	Secret          string `yaml:"secret"`
+	SessionTTLHours int    `yaml:"session_ttl_hours"`
 }
 
 // LoggingConfig configures logging.
@@ -290,6 +310,8 @@ func NonReloadableChanges(old, next *Config) []string {
 	add("clickhouse.compression", old.ClickHouse.Compression != next.ClickHouse.Compression)
 	add("clickhouse.max_open_conns", old.ClickHouse.MaxOpenConns != next.ClickHouse.MaxOpenConns)
 	add("metrics.bind", old.Metrics.Bind != next.Metrics.Bind)
+	add("monitoring", old.Monitoring != next.Monitoring)
+	add("radius", old.RADIUS != next.RADIUS)
 	return changed
 }
 
@@ -389,6 +411,18 @@ func (c *Config) applyDefaults() {
 	if c.Metrics.Bind == "" {
 		c.Metrics.Bind = "127.0.0.1:9101"
 	}
+	if c.Monitoring.NTPMaxSkewMS <= 0 {
+		c.Monitoring.NTPMaxSkewMS = 500
+	}
+	if c.Monitoring.IntervalS <= 0 {
+		c.Monitoring.IntervalS = 300
+	}
+	if c.Monitoring.DiskAlertPercent <= 0 {
+		c.Monitoring.DiskAlertPercent = 85
+	}
+	if c.Monitoring.DiskSafetyPercent <= 0 {
+		c.Monitoring.DiskSafetyPercent = 90
+	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
@@ -412,6 +446,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("receiver.ports.%s and receiver.ports.%s both use port %d", name, other, p)
 		}
 		seen[p] = name
+	}
+	for name, p := range map[string]int{"syslog_udp": c.Receiver.Ports.SyslogUDP, "syslog_tcp": c.Receiver.Ports.SyslogTCP, "radius_accounting": c.Receiver.Ports.RADIUSAccounting} {
+		if p < 0 || p > 65535 {
+			return fmt.Errorf("receiver.ports.%s (%d) out of range 0-65535", name, p)
+		}
 	}
 	if c.ClickHouse.WriterWorkers < 1 || c.ClickHouse.WriterWorkers > 256 {
 		return fmt.Errorf("clickhouse.writer_workers (%d) out of range 1-256", c.ClickHouse.WriterWorkers)
@@ -447,6 +486,12 @@ func (c *Config) validate() error {
 		if c.S3.Endpoint == "" {
 			return fmt.Errorf("s3.enabled but s3.endpoint is empty")
 		}
+	}
+	if c.Monitoring.DiskSafetyPercent <= c.Monitoring.DiskAlertPercent || c.Monitoring.DiskSafetyPercent > 100 {
+		return fmt.Errorf("monitoring disk thresholds must satisfy alert < safety <= 100")
+	}
+	if c.Receiver.Ports.RADIUSAccounting > 0 && len(c.RADIUS.Secret) < 8 {
+		return fmt.Errorf("radius.secret must be at least 8 characters when accounting listener is enabled")
 	}
 	return nil
 }

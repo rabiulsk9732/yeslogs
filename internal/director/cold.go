@@ -39,7 +39,8 @@ const coldSchema = "isp_id UInt32, device_id UInt32, src_ip String, src_port UIn
 	"dst_ip String, dst_port UInt16, nat_public_ip String, nat_public_port UInt16, " +
 	"nat_event UInt8, username String, " +
 	"protocol UInt8, bytes UInt64, packets UInt64, flow_start String, flow_end String, " +
-	"flow_type String, exporter_ip String, nat_dest_ip String, nat_dest_port UInt16"
+	"flow_type String, exporter_ip String, nat_dest_ip String, nat_dest_port UInt16, " +
+	"exporter_flow_start Nullable(DateTime64(3)), exporter_flow_end Nullable(DateTime64(3)), collector_received Nullable(DateTime64(3))"
 
 // The explicit schema below supplies defaults for columns absent from older
 // archives. Keep all available evidence in the key, including both NAT sides.

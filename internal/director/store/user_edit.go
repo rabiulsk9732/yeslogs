@@ -9,7 +9,7 @@ import (
 var ErrPrimaryUser = errors.New("primary ISP login must be managed through ISPs")
 
 func sameUser(a, b User) bool {
-	return a.ID == b.ID && a.ISPID == b.ISPID && a.Email == b.Email && a.Role == b.Role && a.PasswordHash == b.PasswordHash
+	return a.ID == b.ID && a.ISPID == b.ISPID && a.Email == b.Email && a.Role == b.Role && a.PasswordHash == b.PasswordHash && a.TOTPSecret == b.TOTPSecret && a.TOTPEnabled == b.TOTPEnabled
 }
 func (m *MemStore) SaveUser(ctx context.Context, old User, next *User) (User, error) {
 	m.mu.Lock()
@@ -51,6 +51,7 @@ func (m *MemStore) SaveUser(ctx context.Context, old User, next *User) (User, er
 	n.ISPID = found.ISPID
 	n.Role = found.Role
 	n.CreatedAt = found.CreatedAt
+	n.TOTPSecret, n.TOTPEnabled = found.TOTPSecret, found.TOTPEnabled
 	if u, ok := m.users[n.Email]; ok && u.ID != n.ID {
 		return n, ErrDuplicate
 	}
@@ -65,7 +66,7 @@ func (s *MySQLStore) SaveUser(ctx context.Context, old User, next *User) (User, 
 	}
 	defer tx.Rollback()
 	var u User
-	e = tx.QueryRowContext(ctx, `SELECT id,isp_id,email,password_hash,role,created_at FROM users WHERE id=? FOR UPDATE`, old.ID).Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	e = tx.QueryRowContext(ctx, `SELECT id,isp_id,email,password_hash,role,created_at,totp_secret,totp_enabled FROM users WHERE id=? FOR UPDATE`, old.ID).Scan(&u.ID, &u.ISPID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt, &u.TOTPSecret, &u.TOTPEnabled)
 	if errors.Is(e, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}

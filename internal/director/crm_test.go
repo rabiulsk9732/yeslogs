@@ -272,3 +272,112 @@ func TestCRMEndpointRequiresHTTPSOutsideLoopback(t *testing.T) {
 		t.Fatal("non-loopback clear-text CRM endpoint must be rejected")
 	}
 }
+
+func TestCRMTestEndpoint(t *testing.T) {
+	crm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req crmBatchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp := crmBatchResponse{
+			SchemaVersion: crmSchemaVersion,
+			RequestID:     req.RequestID,
+			Results: []crmResult{
+				{
+					ReferenceCode: req.Lookups[0].ReferenceCode,
+					Status:        "matched",
+					Subscriber: crmSubscriber{
+						AccountID: "ACC-55",
+						Name:      "Test Subscriber",
+						Phone:     "9876543210",
+					},
+					Session: crmSession{
+						CallingStationID: "AA:BB:CC:11:22:33",
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer crm.Close()
+
+	s, st := testServer(t)
+	isp, _ := seedCRMISP(t, st)
+	id := dirIdentity()
+
+	// Configure connector
+	payload, _ := json.Marshal(CRMConnectorSettings{
+		ISPID: isp.ID, Enabled: true, Endpoint: crm.URL,
+		APIKey: "secret", TimeoutMs: 5000, BatchSize: 500,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/crm", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", s.csrfToken(id))
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.signSession(id)})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("configure crm failed: %s", w.Body.String())
+	}
+
+	// Call test endpoint
+	testBody, _ := json.Marshal(map[string]any{
+		"ispId":   isp.ID,
+		"localIp": "172.16.1.100",
+	})
+	testReq := httptest.NewRequest(http.MethodPost, "/api/v1/settings/crm/test", bytes.NewReader(testBody))
+	testReq.Header.Set("Content-Type", "application/json")
+	testReq.Header.Set("X-CSRF-Token", s.csrfToken(id))
+	testReq.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.signSession(id)})
+	testW := httptest.NewRecorder()
+	s.Handler().ServeHTTP(testW, testReq)
+	if testW.Code != http.StatusOK {
+		t.Fatalf("test endpoint failed: %s", testW.Body.String())
+	}
+
+	var result struct {
+		Status     string        `json:"status"`
+		Subscriber crmSubscriber `json:"subscriber"`
+		Session    crmSession    `json:"session"`
+	}
+	if err := json.Unmarshal(testW.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal test response: %v", err)
+	}
+
+	if result.Status != "matched" {
+		t.Errorf("expected matched, got %s", result.Status)
+	}
+	if result.Subscriber.Name != "Test Subscriber" {
+		t.Errorf("expected Test Subscriber, got %s", result.Subscriber.Name)
+	}
+	if result.Session.CallingStationID != "AA:BB:CC:11:22:33" {
+		t.Errorf("expected CallingStationID AA:BB:CC:11:22:33, got %s", result.Session.CallingStationID)
+	}
+}
+
+func TestDirectorRouterOSConnectorUsesConfiguredCredentials(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "api-user" || password != "api-password" {
+			t.Errorf("unexpected RouterOS credentials: %q %q %v", user, password, ok)
+		}
+		if r.URL.Path != "/rest/user-manager/session" || r.URL.Query().Get("address") != "10.0.0.8" {
+			t.Errorf("unexpected RouterOS request: %s", r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"user":"alice","address":"10.0.0.8","calling-station-id":"AA:BB","session-id":"s1"}]`))
+	}))
+	defer ts.Close()
+	s, _ := testServer(t)
+	s.crmHTTP = ts.Client()
+	got, err := s.sendCRMBatch(context.Background(), CRMConnectorSettings{
+		Type: "routeros", Endpoint: ts.URL, Username: "api-user", APIKey: "api-password", TimeoutMs: 2000,
+	}, []crmLookup{{ReferenceCode: "ref-1", LocalIP: "10.0.0.8", EventTime: time.Now().UTC().Format(time.RFC3339)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["ref-1"].Status != "matched" || got["ref-1"].Subscriber.Username != "alice" || got["ref-1"].Session.CallingStationID != "AA:BB" {
+		t.Fatalf("unexpected RouterOS result: %+v", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/natflow/natflow-dataplane/internal/director/store"
@@ -117,6 +118,59 @@ func (s *Server) RunDeviceMonitor(ctx context.Context) {
 	}
 }
 
+// RunDailySummary sends one idempotent previous-day traffic summary at the
+// configured IST hour. The sent day is persisted so a service restart cannot
+// duplicate an email. Failed queries/sends are retried on subsequent ticks.
+func (s *Server) RunDailySummary(ctx context.Context) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			s.runDailySummary(ctx, now.In(istLoc))
+		}
+	}
+}
+
+func (s *Server) runDailySummary(ctx context.Context, now time.Time) {
+	n := s.CurrentSettings().Notifications
+	if !n.Enabled || !n.DailySummary || now.Hour() != n.DailyHourIST || s.flows == nil {
+		return
+	}
+	notifier := s.getNotifier()
+	if notifier == nil {
+		return
+	}
+	day := now.AddDate(0, 0, -1).Format("2006-01-02")
+	if saved, err := s.store.GetSettings(ctx); err == nil && saved["daily_summary_last"] == day {
+		return
+	}
+	qctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	sum, err := s.flows.SummaryDay(qctx, day)
+	cancel()
+	if err != nil {
+		s.log.Error("daily summary query failed", "day", day, "error", err)
+		return
+	}
+	name := s.stats().Name
+	subject := fmt.Sprintf("[ISPmate] Daily log summary for %s — %s", name, day)
+	body := fmt.Sprintf("Previous-day log summary for dataplane %q (%s):\n\nFlows: %d\nPackets: %d\nBytes: %d\nActive devices: %d\n\nThis is a bounded ClickHouse storage-day summary.\n\n— ISPmate Operations", name, day, sum.Rows, sum.Packets, sum.Bytes, sum.Devices)
+	sctx, scancel := context.WithTimeout(ctx, 30*time.Second)
+	err = notifier(sctx, subject, body)
+	scancel()
+	if err != nil {
+		s.log.Error("daily summary send failed", "day", day, "error", err)
+		return
+	}
+	if err := s.store.PutSetting(ctx, "daily_summary_last", day); err != nil {
+		s.log.Error("daily summary sent but marker save failed", "day", day, "error", err)
+		return
+	}
+	s.log.Info("daily summary sent", "day", day, "flows", sum.Rows)
+}
+
 type pendingAlert struct {
 	d         store.Device
 	st        devHealthState
@@ -220,12 +274,12 @@ func (s *Server) sendDeviceAlert(ctx context.Context, notifier Notifier, d store
 	}
 	var subject, body string
 	if recovered {
-		subject = fmt.Sprintf("[YesLogs] RECOVERED: %s (%s) is sending flows again", d.Name, d.ExporterIP)
-		body = fmt.Sprintf("Device %q (exporter %s) has resumed sending NetFlow/IPFIX.\n\nLast flow: %s\n\n— YesLogs Operations", d.Name, d.ExporterIP, last)
+		subject = fmt.Sprintf("[ISPmate] RECOVERED: %s (%s) is sending flows again", d.Name, d.ExporterIP)
+		body = fmt.Sprintf("Device %q (exporter %s) has resumed sending NetFlow/IPFIX.\n\nLast flow: %s\n\n— ISPmate Operations", d.Name, d.ExporterIP, last)
 	} else {
 		mins := int(time.Since(st.lastFlow).Minutes())
-		subject = fmt.Sprintf("[YesLogs] DEVICE DOWN: %s (%s) — no flows for %dm", d.Name, d.ExporterIP, mins)
-		body = fmt.Sprintf("Device %q (exporter %s) has stopped sending NetFlow/IPFIX.\n\nLast flow seen: %s (%d minutes ago)\n\nCheck the exporter's traffic-flow/export config and the link to the collector.\n\n— YesLogs Operations", d.Name, d.ExporterIP, last, mins)
+		subject = fmt.Sprintf("[ISPmate] DEVICE DOWN: %s (%s) — no flows for %dm", d.Name, d.ExporterIP, mins)
+		body = fmt.Sprintf("Device %q (exporter %s) has stopped sending NetFlow/IPFIX.\n\nLast flow seen: %s (%d minutes ago)\n\nCheck the exporter's traffic-flow/export config and the link to the collector.\n\n— ISPmate Operations", d.Name, d.ExporterIP, last, mins)
 	}
 	if err := notifier(ctx, subject, body); err != nil {
 		s.log.Error("device alert email failed", "device", d.Name, "recovered", recovered, "error", err)
@@ -254,18 +308,16 @@ func (s *Server) handleTestNotification(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	n := s.CurrentSettings().Notifications
-	if n.SMTPHost == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "set the SMTP host and save before testing"})
-		return
-	}
-	if n.Recipients == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "add at least one recipient and save before testing"})
+	hasSMTP := strings.TrimSpace(n.SMTPHost) != "" && strings.TrimSpace(n.Recipients) != ""
+	hasWebhook := n.WebhookEnabled && strings.TrimSpace(n.WebhookURL) != ""
+	if !hasSMTP && !hasWebhook {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "configure and save either SMTP or Webhook before testing"})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	body := fmt.Sprintf("This is a test alert from YesLogs Operations, requested by %s.\n\nIf you received this, SMTP alerting is configured correctly.\n\n— YesLogs Operations", id.Email)
-	if err := notifier(ctx, "[YesLogs] Test alert", body); err != nil {
+	body := fmt.Sprintf("This is a test alert from ISPmate Operations, requested by %s.\n\nIf you received this, alerting (SMTP/Webhook) is configured correctly.\n\n— ISPmate Operations", id.Email)
+	if err := notifier(ctx, "[ISPmate] Test alert", body); err != nil {
 		s.log.Error("test notification failed", "error", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "send failed: " + err.Error()})
 		return
